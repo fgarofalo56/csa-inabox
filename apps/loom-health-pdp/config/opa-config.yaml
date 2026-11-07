@@ -1,0 +1,32 @@
+# OPA config template for the per-stamp PDP Deployment. The deployed copy is rendered
+# by platform/fiab/bicep/modules/health/engines.bicep (keep the two in step).
+# Placeholders in <angle brackets> are filled by the deployment, never committed.
+persistence_directory: /var/opa
+services:
+  health-cp:
+    url: https://<control-plane-host>/api/health/pdp
+    credentials:
+      oauth2:
+        grant_type: client_credentials
+        token_url: https://<authority-host>/<entra-tenant>/oauth2/v2.0/token
+        # AKS workload identity: AZURE_CLIENT_ID / AZURE_FEDERATED_TOKEN_FILE are injected
+        # by the webhook. No secret exists.
+        client_id: "${AZURE_CLIENT_ID}"
+        client_assertion_path: "${AZURE_FEDERATED_TOKEN_FILE}"
+        scopes: ["<control-plane-audience>/.default"]
+bundles:
+  lhds:
+    service: health-cp
+    resource: stamps/<stamp-id>/bundle.tar.gz
+    persist: true            # last-known-good survives a control-plane outage (needs persistence_directory)
+    signing:
+      keyid: global
+    polling:
+      min_delay_seconds: 30
+      max_delay_seconds: 60
+keys:
+  global:
+    algorithm: ES256
+    key: <PEM public key, from Key Vault / ConfigMap>
+decision_logs:
+  console: true              # W8 replaces with the audit chain

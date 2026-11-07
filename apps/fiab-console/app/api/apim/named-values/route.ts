@@ -26,6 +26,7 @@ import {
   apimConfigGate, listNamedValues, upsertNamedValue, deleteNamedValue, ApimError,
 } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +59,7 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
+async function GET_h() {
   const session = getSession();
   const forbidden = requireTenantAdmin(session); if (forbidden) return forbidden;
   const g = gate(); if (g) return g;
@@ -67,7 +68,7 @@ export async function GET() {
   } catch (e: any) { return fail(e); }
 }
 
-export async function POST(req: NextRequest) {
+async function POST_h(req: NextRequest) {
   const session = getSession();
   const forbidden = requireTenantAdmin(session); if (forbidden) return forbidden;
   const g = gate(); if (g) return g;
@@ -119,7 +120,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) { return fail(e); }
 }
 
-export async function DELETE(req: NextRequest) {
+async function DELETE_h(req: NextRequest) {
   const session = getSession();
   const forbidden = requireTenantAdmin(session); if (forbidden) return forbidden;
   const g = gate(); if (g) return g;
@@ -130,3 +131,8 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (e: any) { return fail(e); }
 }
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const GET = scopeRoute(GET_h);
+export const POST = scopeRoute(POST_h);
+export const DELETE = scopeRoute(DELETE_h);

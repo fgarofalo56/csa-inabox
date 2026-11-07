@@ -44,10 +44,15 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   }
 }
 
+// Estate Power (#5099 phase B): this is the ONLY Microsoft.Web/sites in the Loom tree on a
+// dedicated (non-Consumption) plan, so it is the only site Estate Power would actually stop.
+// The Console's identity manages it (Website Contributor, below) as the deploy-planner App
+// Service target, so stopping it takes that target away, and a stopped site on a dedicated
+// plan saves nothing (the plan keeps billing). Exempt. Tag only; no behavioural change to the deployment.
 resource site 'Microsoft.Web/sites@2024-04-01' = {
   name: siteName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause': 'exempt' })
   identity: { type: 'SystemAssigned' }
   properties: {
     serverFarmId: plan.id

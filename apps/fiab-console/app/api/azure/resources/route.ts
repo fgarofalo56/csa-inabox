@@ -79,7 +79,7 @@ import { apiOk, apiError } from '@/lib/api/respond';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 
 export const runtime = 'nodejs';
@@ -337,7 +337,7 @@ async function runArg(
     });
     try {
       res = await budget.runPage(async (timeoutMs) =>
-        fetchWithTimeout(
+        armCountedFetch(
           ARG_URL,
           {
             method: 'POST',

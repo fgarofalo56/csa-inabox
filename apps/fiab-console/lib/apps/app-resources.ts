@@ -21,7 +21,7 @@
 
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { deterministicAssignmentGuid } from '@/lib/azure/role-grant-client';
 import type { LoomAppEnvVar } from '@/lib/azure/loom-apps-runtime-templates';
@@ -316,7 +316,7 @@ let cachedPrincipal: { rid: string; principalId: string } | null = null;
 async function armFetch(url: string, init?: RequestInit): Promise<Response> {
   const tok = await uamiArmCredential().getToken(armScope());
   if (!tok?.token) throw new Error('Failed to acquire an ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init?.headers || {}), authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
     cache: 'no-store',

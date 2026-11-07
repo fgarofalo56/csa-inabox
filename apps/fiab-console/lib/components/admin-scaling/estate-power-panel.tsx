@@ -28,6 +28,9 @@ import { clientFetch } from '@/lib/client-fetch';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { jsonGet } from '@/lib/components/admin-scaling/json-get';
+import { autoRestartCaption } from '@/lib/estate/pause-autorestart';
+import { EstateContainerAppsSection } from '@/lib/components/admin-scaling/estate-container-apps-section';
+import { EstateAlwaysOnSection } from '@/lib/components/admin-scaling/estate-always-on-section';
 import { isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
 // ===========================================================================
@@ -177,7 +180,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
   const parsed = parseIdleHours(hours);
   const hoursInvalid = dirty && parsed === null;
 
-  async function save(next: { enabled: boolean; idleHours: number }) {
+  async function save(next: { enabled: boolean; idleHours: number; containerApps?: { enabled: boolean; exempt: string[] } }) {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -243,7 +246,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
           </MessageBarBody>
           <MessageBarActions>
             <Button size="small" disabled={saving}
-              onClick={() => { void save({ enabled: true, idleHours: 2 }); }}>
+              onClick={() => { void save({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } }); }}>
               Reset to defaults (on, 2 hours)
             </Button>
           </MessageBarActions>
@@ -455,7 +458,14 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
     },
     {
       key: 'mechanism', label: 'How it stops', width: 160, sortable: false, filterable: false,
-      render: (r) => <Caption1 className={styles.subtle}>{r.mechanism}</Caption1>,
+      render: (r) => (
+        <div className={styles.progressLabel}>
+          <Caption1 className={styles.subtle}>{r.mechanism}</Caption1>
+          {autoRestartCaption(r.resourceType) && (
+            <Caption1 className={styles.progressDetail}>{autoRestartCaption(r.resourceType)}</Caption1>
+          )}
+        </div>
+      ),
     },
     {
       key: 'risk', label: 'Resume risk', width: 240, sortable: false, filterable: false,
@@ -499,7 +509,8 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
                 title="Pausing the estate"
                 content={
                   'Pause issues each backing service’s NATIVE pause verb — Synapse pause, ADX stop, '
-                  + 'Analysis Services suspend, scale-set capacity 0. Nothing is deleted and no data is '
+                  + 'Analysis Services suspend, scale-set capacity 0, Container Apps scaled to zero replicas '
+                  + '(the console and a short never-pause list excepted). Nothing is deleted and no data is '
                   + 'touched; only compute stops billing. Resume restores each resource to exactly the '
                   + 'state and SKU recorded in a snapshot taken at pause time.'
                 }
@@ -624,6 +635,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
       {!loading && data?.power && (
         <EstateAutoPauseSection power={data.power} styles={styles} onChanged={refresh} />
       )}
+      {!loading && data?.power && (
+        <EstateContainerAppsSection
+          power={data.power} containerApps={data.containerApps} styles={styles} onChanged={refresh}
+        />
+      )}
 
       {/* RESUME_FAILED — loud, terminal, and per-resource. Never a spinner. */}
       {state === 'RESUME_FAILED' && data?.summary && (
@@ -640,6 +656,23 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
             </div>
           </MessageBarBody>
         </MessageBar>
+      )}
+
+      {/* TAG DISCOVERY (#5099). A Resource Graph failure, or a subscription the console cannot
+          read, makes the list PARTIAL. Say so in words: it is never "nothing to pause". */}
+      {!loading && state === 'RUNNING' && data?.discovery?.incomplete && (
+        <MessageBar intent="warning" data-testid="estate-discovery-incomplete">
+          <MessageBarBody>
+            <MessageBarTitle>Discovery incomplete — this preview may be missing resources</MessageBarTitle>
+            {data.discovery.note}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!loading && state === 'RUNNING' && (data?.discovery?.heldOut?.length ?? 0) > 0 && (
+        <Caption1 className={styles.powerSub} data-testid="estate-discovery-heldout">
+          Tagged for this estate but deliberately left running:{' '}
+          {data.discovery.heldOut.map((h: any) => `${h.name} (${h.reason})`).join(' · ')}
+        </Caption1>
       )}
 
       {/* THE POPULATION. Always stated; when it is zero, that is the headline. */}
@@ -677,7 +710,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         ) : population.empty ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Nothing is in scope to pause — and that is the safe answer</MessageBarTitle>
+              <MessageBarTitle>
+                {data?.discovery?.incomplete
+                  ? 'Nothing was found in scope to pause — but discovery is incomplete'
+                  : 'Nothing is in scope to pause — and that is the safe answer'}
+              </MessageBarTitle>
               {population.statement}
               {/*
                 Every signal counted SEPARATELY. Never one summed "tagged"
@@ -753,16 +790,28 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         operator who needs to know why their ACA spend is untouched.
       */}
       {!loading && state === 'RUNNING' && outOfTier.length > 0 && (
-        <div className={styles.powerSection}>
+        <div className={styles.powerSection} id="estate-held-out">
           <Caption1 className={styles.fieldLabel}>
             Loom-owned, but deliberately NOT paused ({outOfTier.length})
           </Caption1>
           {outOfTier.map((r) => (
             <div key={r.resourceId} className={styles.remediationNeutral}>
               <Caption1><strong>{r.name}</strong> · {r.resourceType}</Caption1>
+              {r.pinnedBy && (
+                <div className={styles.badgeRow}>
+                  <Badge appearance="tint" color="warning">pinned by {r.pinnedBy}</Badge>
+                </div>
+              )}
               <Caption1 className={styles.progressDetail}>{r.reason}</Caption1>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* #5099 phase C: what keeps billing while the estate is paused, and why. */}
+      {!loading && (
+        <div className={`${styles.powerSection} ${styles.powerDivider}`}>
+          <EstateAlwaysOnSection />
         </div>
       )}
 
@@ -816,6 +865,9 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
                   {p.probed === false && <Badge appearance="tint" color="warning">no probe wired</Badge>}
                 </div>
                 <Caption1 className={styles.subtle}>{p.resourceType}</Caption1>
+                {autoRestartCaption(p.resourceType) && (
+                  <Caption1 className={styles.subtle}>{autoRestartCaption(p.resourceType)}</Caption1>
+                )}
               </div>
               <div className={styles.progressLabel}>
                 {p.phase === 'done'

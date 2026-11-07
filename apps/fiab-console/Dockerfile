@@ -104,6 +104,18 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Runtime V8 heap ceiling. NODE_OPTIONS above is set only in the BUILDER stage,
+# so the runner used Node's default old-space limit (~1048 MB, measured from
+# the GC traces of 10 crashes in 26 h on 2026-10-20/21: "FATAL ERROR: Reached
+# heap limit ... JavaScript heap out of memory", exit 139, NOT an OOMKill; the
+# live set after a full GC was ~990-1000 MB against that ~1048 MB limit).
+# 1536 MiB is ~75% of the 2Gi container and leaves ~512 MiB for native memory,
+# buffers and the off-heap working set. Raising container memory to 4Gi was
+# considered and NOT chosen, to avoid doubling cost on min 2 replicas. This buys
+# headroom only; it does not find what retains the ~1 GB (see lib/perf/mem-log.ts).
+# Pinned by scripts/ci/__tests__/console-runner-heap.test.mjs.
+ENV NODE_OPTIONS=--max-old-space-size=1536
+
 # AAS XMLA probe: same libraries and files as the aas-probe-runtime smoke
 # stage above. The runner keeps its own node:22-alpine FROM (the
 # preflight/Trivy regression tests pin `FROM node:... AS runner`).

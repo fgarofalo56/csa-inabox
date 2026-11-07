@@ -14,7 +14,7 @@
  * on the subscription; 401/403 → honest infra-gate.
  *   https://learn.microsoft.com/rest/api/defenderforcloud/
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -39,7 +39,7 @@ const credential = uamiClientId
 async function armGet(path: string): Promise<any> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Defender', 401);
-  const res = await fetchWithTimeout(`${ARM}${path}`, {
+  const res = await armCountedFetch(`${ARM}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
   });
   const text = await res.text();
@@ -169,7 +169,7 @@ const POLICY_ASSIGN_API = '2022-06-01';
 async function armReq(method: string, path: string, body?: unknown): Promise<any> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Defender', 401);
-  const res = await fetchWithTimeout(`${ARM}${path}`, {
+  const res = await armCountedFetch(`${ARM}${path}`, {
     method,
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json', 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,

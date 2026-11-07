@@ -1,0 +1,155 @@
+{
+  "version": "lhds-scope-map/1",
+  "status": "design - W1-4 L2 pass 2026-10-25; no code reads this file yet. Normative text: docs/fiab/health/security.md section A4.",
+  "ceilingSemantics": "A role grants a CEILING, never a scope by itself. Granted = requested INTERSECT union(ceilings of the caller's roles for the grant type) INTERSECT the client registration's allowed scopes. An empty intersection drops the scope; nothing is ever widened.",
+  "contextScopes": {
+    "authorization_code": ["openid", "fhirUser", "launch", "launch/patient", "offline_access"],
+    "client_credentials": []
+  },
+  "notAdvertisedInV1": ["launch/encounter", "online_access", "profile"],
+  "supportedScopeConstraints": {
+    "category": ["Observation", "Condition", "DocumentReference"]
+  },
+  "roles": [
+    {
+      "id": "fhir-data-reader",
+      "displayName": "FHIR Data Reader",
+      "ceiling": {
+        "authorization_code": ["user/*.rs", "patient/*.rs"],
+        "client_credentials": ["system/*.rs"]
+      },
+      "operations": [],
+      "wave": "W1"
+    },
+    {
+      "id": "fhir-data-writer",
+      "displayName": "FHIR Data Writer",
+      "ceiling": {
+        "authorization_code": ["user/*.cruds", "patient/*.cruds"],
+        "client_credentials": ["system/*.cruds"]
+      },
+      "operations": [],
+      "wave": "W1"
+    },
+    {
+      "id": "fhir-data-contributor",
+      "displayName": "FHIR Data Contributor",
+      "ceiling": {
+        "authorization_code": ["user/*.cruds", "patient/*.cruds"],
+        "client_credentials": ["system/*.cruds"]
+      },
+      "operations": ["$purge-history"],
+      "wave": "W1 (scopes); W7 (operations)"
+    },
+    {
+      "id": "fhir-smart-user",
+      "displayName": "FHIR SMART User",
+      "ceiling": {
+        "authorization_code": ["user/*.rs", "patient/*.rs"],
+        "client_credentials": []
+      },
+      "operations": [],
+      "wave": "W1"
+    },
+    {
+      "id": "fhir-data-exporter",
+      "displayName": "FHIR Data Exporter",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": ["system/*.rs"]
+      },
+      "operations": ["$export"],
+      "wave": "W1 (scopes); W6 (operations)"
+    },
+    {
+      "id": "fhir-data-importer",
+      "displayName": "FHIR Data Importer",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": ["system/*.cu"]
+      },
+      "operations": ["$import"],
+      "wave": "W6"
+    },
+    {
+      "id": "fhir-data-converter",
+      "displayName": "FHIR Data Converter",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": ["$convert-data"],
+      "wave": "W5"
+    },
+    {
+      "id": "fhir-bulk-operator",
+      "displayName": "FHIR Bulk Operator",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": ["$bulk-delete", "$bulk-update"],
+      "wave": "W7"
+    },
+    {
+      "id": "fhir-search-parameter-manager",
+      "displayName": "FHIR Search Parameter Manager",
+      "ceiling": {
+        "authorization_code": ["user/SearchParameter.cruds"],
+        "client_credentials": ["system/SearchParameter.cruds"]
+      },
+      "operations": ["$reindex"],
+      "wave": "W1 (scopes); W7 (operations)"
+    },
+    {
+      "id": "dicom-data-reader",
+      "displayName": "DICOM Data Reader",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": ["dicom:read"],
+      "wave": "W3"
+    },
+    {
+      "id": "dicom-data-owner",
+      "displayName": "DICOM Data Owner",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": ["dicom:read", "dicom:write", "dicom:delete"],
+      "wave": "W3"
+    },
+    {
+      "id": "mpi",
+      "displayName": "MPI",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": ["mpi:$match", "mpi:$everything"],
+      "wave": "W11"
+    },
+    {
+      "id": "health-tenant-admin",
+      "displayName": "Health Tenant Admin",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": [],
+      "wave": "W1 (control plane only; D12)"
+    },
+    {
+      "id": "break-glass",
+      "displayName": "Break-glass",
+      "ceiling": {
+        "authorization_code": [],
+        "client_credentials": []
+      },
+      "operations": [],
+      "wave": "W8 (elevation flow; no scopes in W1)"
+    }
+  ]
+}

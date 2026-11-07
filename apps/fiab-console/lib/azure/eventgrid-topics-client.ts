@@ -36,7 +36,7 @@
  *   https://learn.microsoft.com/rest/api/eventgrid/controlplane/topics
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -142,7 +142,7 @@ async function armToken(): Promise<string> {
  */
 async function arm<T = any>(url: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
+  const res = await armCountedFetch(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -261,7 +261,7 @@ export async function deleteEventGridTopic(topic: string): Promise<{ deleted: bo
   const name = (topic || '').trim();
   if (!name) throw new EventGridTopicsError(400, undefined, 'topic name is required');
   const token = await armToken();
-  const res = await fetchWithTimeout(`${topicUrl(cfg, name)}?api-version=${EG_ARM_API}`, {
+  const res = await armCountedFetch(`${topicUrl(cfg, name)}?api-version=${EG_ARM_API}`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
   });
@@ -645,7 +645,7 @@ export async function publishBusinessEvents(
     headers['authorization'] = `Bearer ${await dataToken()}`;
   }
 
-  const res = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: payload });
+  const res = await armCountedFetch(endpoint, { method: 'POST', headers, body: payload });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new EventGridTopicsError(

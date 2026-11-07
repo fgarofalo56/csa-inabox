@@ -9,6 +9,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ export const GET = withSession(async () => {
   for (const rg of rgs) {
     try {
       const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service?api-version=2024-05-01`;
-      const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+      const r = await armCountedRawFetch(url, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) {
         const t = await r.text();
         errors.push(`${rg}: ${r.status} ${t.slice(0, 100)}`);

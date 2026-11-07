@@ -19,7 +19,7 @@
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 import { BROWSER_TOOL_ENV, BROWSER_TOOL_GATE_HINT } from './agent-tool-kinds';
 
 const ACA_JOB_API = '2024-03-01';
@@ -79,7 +79,7 @@ export interface BrowserRunResult {
 async function armFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await credential.getToken(armScope());
   if (!token?.token) throw new Error('Failed to acquire ARM token for the browser-tool job');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init?.headers || {}), authorization: `Bearer ${token.token}`, 'content-type': 'application/json' },
   });
@@ -94,7 +94,7 @@ export async function runBrowserTask(task: BrowserTask): Promise<BrowserRunResul
 
   const endpoint = endpointRunner();
   if (endpoint) {
-    const res = await fetchWithTimeout(`${endpoint}/run`, {
+    const res = await armCountedFetch(`${endpoint}/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url: task.url, actions: task.actions || [] }),

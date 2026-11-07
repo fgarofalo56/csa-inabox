@@ -1492,6 +1492,12 @@ nav:
           - Multi-Subscription Multi-Tenant: fiab/deployment/multi-sub-multi-tenant.md
           - Upgrade Lifecycle: fiab/deployment/upgrade.md
           - Marketplace (deferred to backlog): fiab/deployment/marketplace.md
+          - "Health Data Services (LHDS, merged not deployed)":
+              - Overview and per-cloud status: fiab/health/index.md
+              - Greenfield: fiab/health/greenfield.md
+              - Brownfield: fiab/health/brownfield.md
+              - Runbook stubs: fiab/health/runbooks.md
+              - Security: fiab/health/security.md
 
       # ------------------------------------------------------------
       # 4. Workloads (Fabric workload parity)
@@ -1848,6 +1854,7 @@ nav:
               - "How to: Create OneLake shortcut": fiab/catalog/how-to-shortcut.md
           - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
           - Scale by SKU: fiab/admin/scaling.md
+          - Idle auto-pause for Container Apps: fiab/admin/estate-idle-auto-pause.md
           - Admin console pages:
               - Health & self-audit: fiab/admin/health.md
               - Capacity & compute: fiab/admin/capacity.md
@@ -1906,6 +1913,7 @@ nav:
               - Activator Rules Not Firing: fiab/runbooks/activator-rules-not-firing.md
               - Mirroring CDC Lag: fiab/runbooks/mirroring-cdc-lag.md
               - Loom Copilot Throttling: fiab/runbooks/loom-copilot-throttling.md
+              - ARM Read Quota: fiab/runbooks/arm-read-quota.md
               - Capacity Overrun: fiab/runbooks/capacity-overrun.md
               - DLZ Onboard New Domain: fiab/runbooks/dlz-onboard-new-domain.md
               - Forward Migrate to Fabric: fiab/runbooks/forward-migrate-to-fabric.md

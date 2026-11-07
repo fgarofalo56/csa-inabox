@@ -56,13 +56,31 @@ export interface PipelineOutputDockProps {
   onOpenFullTab: () => void;
   /** Close the dock. */
   onClose: () => void;
+  /**
+   * 'standalone' (default): self-sized ResizableCanvasRegion with its own head.
+   * 'dock': rendered INSIDE a StackedSplit pane that owns sizing, the title and
+   * the collapse / open-full-tab controls (#3699) — just the OutputPane.
+   */
+  layout?: 'standalone' | 'dock';
 }
 
 export function PipelineOutputDock({
   workspaceId, pipelineId, pipelineParams, paramNames, variableNames, activityNames,
-  onOpenFullTab, onClose,
+  onOpenFullTab, onClose, layout = 'standalone',
 }: PipelineOutputDockProps) {
   const s = useStyles();
+  if (layout === 'dock') {
+    return (
+      <OutputPane
+        workspaceId={workspaceId}
+        pipelineId={pipelineId}
+        pipelineParams={pipelineParams}
+        paramNames={paramNames}
+        variableNames={variableNames}
+        activityNames={activityNames}
+      />
+    );
+  }
   return (
     <ResizableCanvasRegion
       storageKey="data-pipeline-output-dock"

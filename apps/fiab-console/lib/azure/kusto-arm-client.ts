@@ -30,8 +30,9 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { assertEstateAllowsWake } from '@/lib/estate/estate-wake-guard';
 
 const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
@@ -104,7 +105,7 @@ function clusterUrl(cfg: KustoClusterArmConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new KustoArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -283,6 +284,8 @@ export async function stopKustoCluster(): Promise<{ provisioningState: string }>
 }
 
 export async function startKustoCluster(): Promise<{ provisioningState: string }> {
+  // #5111: refuse while the estate is paused (the estate's own resume posts to ARM directly).
+  await assertEstateAllowsWake('the Azure Data Explorer cluster');
   const cfg = readKustoArmConfig();
   const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}/start?api-version=${KUSTO_API}`, { method: 'POST' });
   if (!r.ok && r.status !== 202 && r.status !== 204) {
@@ -752,4 +755,3 @@ export async function updateKustoStreamingIngest(
   }
   return shape(await r.json());
 }
-

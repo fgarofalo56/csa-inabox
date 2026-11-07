@@ -13,7 +13,7 @@
  * No mocks. Real ARM REST only (sovereign-cloud aware via cloud-endpoints).
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -161,7 +161,7 @@ export async function getDefaultFactory(): Promise<{
 async function callRaw(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -504,7 +504,7 @@ async function laQuery(workspaceGuid: string, kql: string): Promise<LaQueryRespo
   const tok = await credential.getToken(LA_SCOPE_ADF);
   if (!tok?.token) throw new Error('Failed to acquire Log Analytics token');
   const url = `${LA_ENDPOINT_ADF}/v1/workspaces/${encodeURIComponent(workspaceGuid)}/query`;
-  const r = await fetchWithTimeout(url, {
+  const r = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tok.token}`,

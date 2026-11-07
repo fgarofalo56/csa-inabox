@@ -113,10 +113,18 @@ param privateEndpointsEnabled bool = true
 
 var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
 
+// Estate Power (#5099 phase B): the Container Apps that connect to this server. Estate
+// Power stops a flexible server ONLY when every app named here is itself being paused.
+// loom-airflow is on the never-pause list (LocalExecutor scheduler is a minReplicas-1
+// singleton; pausing it silently stops every cron DAG), so this server is never stopped.
+// Tag only; no behavioural change to the deployment.
+@description('Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means "consumers unknown" and the server is never stopped; the literal value none certifies no running app uses it.')
+param estatePauseConsumers string = 'loom-airflow'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: pgServerName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause-consumers': estatePauseConsumers })
   sku: {
     name: pgSkuName
     tier: pgTier

@@ -93,6 +93,10 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed IL5 hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: deploy-fiab-commercial.yml has had this since audit-t157; the Gov lanes did not, so once a Gov hub existed this workflow could never succeed again.)'
         type: boolean
         default: false
+      override_estate_pause:
+        description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED a run_mode=full dispatch STANDS DOWN (nothing deployed, no approval requested) because the apply would wake paused resources (#5111). true = you accept that.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -148,11 +152,32 @@ jobs:
       boundary: IL5
       image_tag: v0.1
 
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111). Supported-in-code, never exercised
+  # (no IL5 run on record - cloud-parity.md). The IL5 console variables
+  # (CSA_LOOM_IL5_CONSOLE_*) do not exist yet, so today the state reads UNKNOWN
+  # and the lane proceeds with a ::warning::. Stands down before the il5-deploy
+  # approval is requested.
+  estate-gate:
+    name: Estate pause gate
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true'
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: IL5
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
   deploy-validate:
     name: Deploy + validate CSA Loom in IL5
     needs: [precheck, build-gov-images]
     if: always() && needs.precheck.outputs.configured == 'true'
     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    needs: [precheck, build-gov-images, estate-gate]
+    # No schedule trigger exists, so the fail-open `!= 'true'` branch is the live
+    # one; the schedule branch keeps the expression identical in every lane.
+    # whatif-only applies nothing so it still runs.
+    if: always() && needs.precheck.outputs.configured == 'true' && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || inputs.run_mode != 'full')
+    runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: il5-deploy   # requires manual approval
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).
@@ -617,7 +642,7 @@ jobs:
             --out "$RUNNER_TEMP/gov-verify-receipt-il5-${{ github.run_id }}.txt" || true
 
       - name: Upload IL5 verification receipt
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-il5-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-il5-${{ github.run_id }}.txt

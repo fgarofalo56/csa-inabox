@@ -413,8 +413,9 @@ jobs:
             exit 1
           fi
           echo "::notice::loom-console:$SHA verified present on $ACR -> $DIGEST"
-          q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
+          # Pool scale-down: see the verified, if: always() step "Release the ACR
+          # build pool" at the end of this job (the inline `--no-wait || true` it
+          # replaces never ran on a cancelled run and discarded every failure).
           # Re-locks only if this run still holds the lease; re-locks
           # unconditionally when nobody does (fail closed).
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
@@ -739,3 +740,18 @@ jobs:
             echo "::warning::rollback 2/2 SKIPPED — no blue revision was recorded (blue='$BLUE'), so there is nothing to re-pin. The traffic weights are whatever ACA already had; this step is not claiming they are correct."
           fi
           exit 1
+
+      # Verified pool release. Runs on success, failure, cancel and timeout, keyed
+      # on the build step having executed. Waits up to 5 min for the queue to
+      # drain, scales to 0, READS THE COUNT BACK, exit 1 if not 0 (no `|| true`,
+      # no `--no-wait`). Leaves a pool another run is using and says so;
+      # acr-agentpool-reaper.yml collects it once idle.
+      - name: Release the ACR build pool (verified)
+        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
+        env:
+          POOL_INPUT: ${{ inputs.agent_pool_name }}
+          ACR_NAME: ${{ steps.resolve.outputs.acr }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR_NAME" \
+            --pool "${POOL_INPUT:-loombuild2}" --wait-seconds 300

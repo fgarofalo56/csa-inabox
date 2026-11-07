@@ -24,7 +24,7 @@
  *   https://learn.microsoft.com/rest/api/cost-management/query/usage
  *   GET  .../providers/Microsoft.Consumption/budgets?api-version=2023-05-01
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -271,7 +271,7 @@ async function costQueryInner(subscriptionId: string, body: unknown, deadline?: 
     return Math.max(1_000, Math.min(COST_QUERY_TIMEOUT_MS, remaining));
   };
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
@@ -484,7 +484,7 @@ async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<s
 async function listBudgets(sub: string): Promise<CostBudget[]> {
   try {
     const t = await credential.getToken(ARM_SCOPE);
-    const res = await fetchWithTimeout(`${ARM}/subscriptions/${sub}/providers/Microsoft.Consumption/budgets?api-version=${BUDGETS_API}`, {
+    const res = await armCountedFetch(`${ARM}/subscriptions/${sub}/providers/Microsoft.Consumption/budgets?api-version=${BUDGETS_API}`, {
       headers: { authorization: `Bearer ${t?.token}`, accept: 'application/json' }, cache: 'no-store',
     });
     if (!res.ok) return [];
@@ -521,7 +521,7 @@ async function resolveSubscriptionNames(subs: string[]): Promise<Record<string, 
     try {
       const t = await credential.getToken(ARM_SCOPE);
       if (!t?.token) return;
-      const res = await fetchWithTimeout(`${ARM}/subscriptions/${sub}?api-version=${SUB_API}`, {
+      const res = await armCountedFetch(`${ARM}/subscriptions/${sub}?api-version=${SUB_API}`, {
         headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
       });
       if (!res.ok) return;

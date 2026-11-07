@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using CsaLoom.DirectLakeShim;
 using CsaLoom.DirectLakeShim.Config;
 using CsaLoom.DirectLakeShim.EventGrid;
 using CsaLoom.DirectLakeShim.Tom;
@@ -15,12 +16,14 @@ builder.Services.AddSingleton(_ =>
     return new CosmosClient(endpoint, new DefaultAzureCredential());
 });
 
-builder.Services.AddSingleton(_ =>
+// Throws (fail fast, one named-variable error) only when enabled but misconfigured.
+var settings = ShimSettings.Resolve(k => builder.Configuration[k]);
+builder.Services.AddSingleton(settings);
+if (settings.Enabled)
 {
-    var ns = builder.Configuration["SERVICEBUS_NAMESPACE"]
-        ?? "placeholder.servicebus.windows.net";
-    return new ServiceBusClient(ns, new DefaultAzureCredential());
-});
+    builder.Services.AddSingleton(_ =>
+        new ServiceBusClient(settings.ServiceBusNamespace!, new DefaultAzureCredential()));
+}
 
 builder.Services.AddSingleton<TomRefreshClient>();
 builder.Services.AddSingleton<SemanticModelConfigStore>();

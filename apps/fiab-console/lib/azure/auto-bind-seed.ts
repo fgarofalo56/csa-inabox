@@ -314,7 +314,14 @@ export async function seedEventstreamFromContent(
           + 'idempotent and adds only what is missing.',
       };
     }
-    return { seeded: true, detail };
+    // Record the Stream Analytics job the stand-up created. Discarding it left
+    // `state.asaJobName` unset for every seeded eventstream, so delete could only
+    // guess the name (#5046). Only a job that was really created is recorded.
+    return {
+      seeded: true,
+      detail,
+      ...(result.asaJobName ? { statePatch: { asaJobName: result.asaJobName } } : {}),
+    };
   } catch (e) {
     return { seeded: false, error: errText(e) };
   }

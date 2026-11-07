@@ -21,6 +21,7 @@ import {
 } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,7 +49,7 @@ function fail(e: any) {
 }
 
 // WS-D1: session-only routes adopted onto `withSession`.
-export const GET = withSession(async () => {
+const GET_h = withSession(async () => {
   const g = gate(); if (g) return g;
   try {
     const service = await getApimService();
@@ -62,7 +63,7 @@ export const GET = withSession(async () => {
   } catch (e: any) { return fail(e); }
 });
 
-export const PATCH = withSession(async (req: NextRequest) => {
+const PATCH_h = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const sku = body?.sku ? String(body.sku) : '';
@@ -80,3 +81,7 @@ export const PATCH = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: true, service });
   } catch (e: any) { return fail(e); }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const GET = scopeRoute(GET_h);
+export const PATCH = scopeRoute(PATCH_h);

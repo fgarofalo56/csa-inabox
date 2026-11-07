@@ -106,7 +106,7 @@ export function opsTools(): ToolSpec[] {
       inputSchema: {
         id: z.string().describe('Item id (GUID) of the schedulable item to run.'),
         type: z.string().optional().describe('Item type route (default adf-pipeline; also data-pipeline, copy-job, dbt-job, …).'),
-        params: z.record(z.unknown()).optional().describe('Optional run parameters passed to the backend pipeline/job.'),
+        params: z.record(z.string(), z.unknown()).optional().describe('Optional run parameters passed to the backend pipeline/job.'),
       },
       readOnly: false,
       minScope: 'read-write',

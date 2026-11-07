@@ -57,6 +57,8 @@ const reg = (loader: () => Promise<Record<string, unknown>>, name: string): Edit
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Loom Apps (Azure-native app building — Fabric Apps parity)
+  // LHDS (Health Data Services) - tenant on a stamp, provisioned via the health control plane.
+  'health-tenant':        reg(() => import('./health/tenant-editor'),    'HealthTenantEditor'),
   'loom-app':             reg(() => import('./loom-app-editor'),         'LoomAppEditor'),
   // Loom App Runtime (DBX-1) — Databricks-Apps-class hosted apps on ACA.
   'loom-app-runtime':     reg(() => import('./loom-app-runtime-editor'), 'LoomAppRuntimeEditor'),

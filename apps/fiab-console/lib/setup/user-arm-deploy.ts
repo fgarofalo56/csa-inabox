@@ -50,7 +50,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 
 /** Ceiling on the status GET round-trip (a single ARM read — never an LRO). */
 const STATUS_FETCH_TIMEOUT_MS = 20_000;
@@ -563,7 +563,7 @@ export async function readDlzDeploymentStatus(opts: {
   }
   // Injected fetchImpl (tests) is used as-is; the default live path is bounded
   // so a hung ARM read surfaces as an honest error inside the poll interval.
-  const doFetch: typeof fetch = opts.fetchImpl ?? ((input, init) => fetchWithTimeout(input as any, init, STATUS_FETCH_TIMEOUT_MS));
+  const doFetch: typeof fetch = opts.fetchImpl ?? ((input, init) => armCountedFetch(input as any, init, STATUS_FETCH_TIMEOUT_MS));
   const url = `${armBase()}/subscriptions/${subscriptionId}/providers/Microsoft.Resources/deployments/${encodeURIComponent(
     deploymentName,
   )}?api-version=${DEPLOYMENTS_API}`;

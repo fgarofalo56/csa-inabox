@@ -27,7 +27,7 @@
  */
 
 import { gzipSync } from 'node:zlib';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -189,7 +189,7 @@ async function armFetch(
   // token is attached below. Pin the target to `armBase()` (boundary-correct in
   // every sovereign cloud) and fail closed instead of fetching.
   const url = resolveSameOriginUrl(path, ARM, 'the ARM token');
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method,
     headers: {
       authorization: `Bearer ${tk}`,
@@ -365,7 +365,7 @@ export async function resolveRemoteHeadSha(gitSource: string, token?: string): P
   assertAllowedGitSource(base);
   const url = `${token ? tokenizedGitUrl(base, token) : base}.git/info/refs?service=git-upload-pack`;
   try {
-    const res = await fetchWithTimeout(url, { headers: { 'user-agent': 'git/2.40' } });
+    const res = await armCountedFetch(url, { headers: { 'user-agent': 'git/2.40' } });
     if (!res.ok) return null;
     return parseInfoRefs(await res.text(), branch || undefined);
   } catch {
@@ -413,7 +413,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuildAppResult> {
       throw new LoomAppsError('ACR did not return a source-upload URL', 502, up.json);
     }
     // 2) PUT the gzipped context to the blob SAS URL.
-    const putRes = await fetchWithTimeout(upload.uploadUrl, {
+    const putRes = await armCountedFetch(upload.uploadUrl, {
       method: 'PUT',
       headers: { 'x-ms-blob-type': 'BlockBlob', 'content-type': 'application/gzip' },
       body: gz,

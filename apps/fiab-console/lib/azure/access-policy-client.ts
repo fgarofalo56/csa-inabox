@@ -27,6 +27,7 @@
 import { grantContainerRole, listContainerRoleAssignments, revokeContainerRoleAssignment } from './adls-client';
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
 import { getPoolState, resumePool } from './synapse-pool-arm';
+import { isEstatePausedError } from '@/lib/estate/estate-wake-guard';
 import {
   kustoConfigGate,
   addDatabasePrincipal,
@@ -182,7 +183,15 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       try {
         const { state } = await getPoolState();
         if (state === 'Paused') {
-          await resumePool().catch(() => { /* best-effort; operator retries below */ });
+          const hold: { message?: string } = {};
+          await resumePool().catch((e) => {
+            // Best-effort; operator retries below. #5111: an estate-pause refusal is not a
+            // failure to swallow silently - it changes what we may truthfully say.
+            if (isEstatePausedError(e)) hold.message = e.message;
+          });
+          if (hold.message) {
+            return { status: 'pending', detail: `Dedicated SQL pool ${target.database} is paused and NO resume was started. ${hold.message} Re-run this grant once the estate is resumed.` };
+          }
           return { status: 'pending', detail: `Dedicated SQL pool ${target.database} is paused — a resume was started. Re-run this grant once the pool is Online (~1-2 min).` };
         }
         if (state === 'Pausing' || state === 'Resuming' || state === 'Scaling') {

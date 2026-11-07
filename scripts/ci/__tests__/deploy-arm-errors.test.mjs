@@ -687,3 +687,26 @@ test('ACCEPTANCE — a usage refusal redacts the argv it echoes back', () => {
   assert.match(badFlag.stderr, /unknown argument/, 'the refusal did not run');
   assert.doesNotMatch(badFlag.stderr, GUID_RE, 'an unknown-argument refusal published argv unredacted (#3829 round 5)');
 });
+
+test('VIA: every leaf names the nested-deployment chain from the root, on the captured run', () => {
+  // Breaks if: `via` records the PARENT chain instead of the chain including the failing deployment (last
+  // segment missing), or the recursion stops passing the chain down (every via collapses to the root name).
+  // Expected values are the tree documented in this script's own header for run 31069329802, not read back
+  // from the code under test.
+  const r = collectArmLeafErrors({ name: ROOT_DEPLOYMENT, scope: 'sub', run: fixtureRunner() });
+  const dns = r.leaves.find((l) => l.code === 'BadRequest');
+  const ra = r.leaves.find((l) => l.code === 'RoleAssignmentExists');
+  assert.equal(dns.via, `${ROOT_DEPLOYMENT} > admin-plane > network`);
+  assert.equal(ra.via, `${ROOT_DEPLOYMENT} > admin-plane > swa-publish-rbac`);
+  assert.notEqual(dns.via, ra.via, 'two leaves under different modules must not share a chain');
+});
+
+test('VIA: the rendered leaf prints the chain, and a leaf with no chain prints exactly what it did before', () => {
+  // Breaks if: renderLeaves drops `via`, or starts appending " via undefined" to a leaf that has none.
+  const r = collectArmLeafErrors({ name: ROOT_DEPLOYMENT, scope: 'sub', run: fixtureRunner() });
+  const out = renderLeaves(r);
+  assert.ok(out.includes(` via ${ROOT_DEPLOYMENT} > admin-plane > swa-publish-rbac`), out);
+  const bare = renderLeaves({ status: STATUS.FOUND, warnings: [], leaves: [{ code: 'X', message: 'm', resourceType: 'T', resourceName: 'n' }] });
+  assert.ok(!bare.includes(' via '), bare);
+  assert.ok(bare.includes("X: m [T 'n']"), bare);
+});

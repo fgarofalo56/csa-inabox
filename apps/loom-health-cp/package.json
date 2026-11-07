@@ -1,0 +1,33 @@
+{
+  "name": "@csa-loom/health-cp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom Health Data Services control plane: stamp + tenant registries (Cosmos), lifecycle-job framework, routing-map publisher, SLO aggregation API. Holds identities, pointers, policy and telemetry only - never clinical data. Azure-native; no Microsoft Fabric dependency.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-health-cp"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.10.1",
+    "@azure/identity": "^4.14.0",
+    "jose": "^6.2.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

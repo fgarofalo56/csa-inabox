@@ -41,7 +41,7 @@
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 
 const RESOURCE_GRAPH_API = '2022-10-01';
 const PURVIEW_ARM_API = '2021-12-01';
@@ -248,7 +248,7 @@ async function lookupViaArm(account: string): Promise<ResolvedPurviewEndpoints |
     '| limit 1',
   ].join('\n');
 
-  const argRes = await fetchWithTimeout(
+  const argRes = await armCountedFetch(
     `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
     {
       method: 'POST',
@@ -270,7 +270,7 @@ async function lookupViaArm(account: string): Promise<ResolvedPurviewEndpoints |
   const sub = row.subscriptionId ? String(row.subscriptionId) : '';
   const rg = row.resourceGroup ? String(row.resourceGroup) : '';
   if (!sub || !rg) return null;
-  const armRes = await fetchWithTimeout(
+  const armRes = await armCountedFetch(
     `${base}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Purview/accounts/${encodeURIComponent(account)}?api-version=${PURVIEW_ARM_API}`,
     { headers: auth },
   );

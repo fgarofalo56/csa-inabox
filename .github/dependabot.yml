@@ -36,11 +36,16 @@
 # which also treats a group with NO `patterns` key as a catch-all — GitHub does,
 # and a checker that only knows `["*"]` reports green while a group sits dead.
 version: 2
+# CADENCE (2026-10-21): every ecosystem is MONTHLY. Weekly grouped version PRs cost a
+# ~45-minute CI suite each and produced 11 new PRs in one afternoon after config edits.
+# SECURITY updates are NOT governed by `schedule` (GitHub raises them as soon as an
+# advisory matches), so the vulnerable-package PRs (certifi, next, vitest ...) still
+# arrive at once; only routine version bumps are batched.
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 10
     # pydantic-ai 1.107.x (#4974/#4977, combined attempt #4984, 2026-10-14) cannot be
@@ -55,6 +60,7 @@ updates:
       - dependency-name: "pydantic-ai-slim"
       - dependency-name: "pydantic-graph"
       - dependency-name: "pydantic-evals"
+      # aiohttp hold lifted (#5035): the copilot lock now resolves yarl 1.25.1 + aiohttp 3.14.5.
     groups:
       azure-sdk:
         patterns:
@@ -74,7 +80,7 @@ updates:
   - package-ecosystem: "pip"
     directory: "/apps/loom-duckdb"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
     # pyarrow 26.0.0 requires Python >=3.11 but the Test Suite matrix runs 3.10 (#4988:
@@ -93,9 +99,18 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "ci"]
     open-pull-requests-limit: 5
+    # Azure/login 2 -> 3 (#5059, 2026-10-21) fails the Copilot quality evals login:
+    # "Login failed ... Not all parameters are provided in 'creds'". About 126 workflow
+    # sites pass a `creds:` JSON (Gov ones with extra endpoint fields), so v3 is a
+    # migration across every deploy lane, not a bump. Hold the major; minor/patch of
+    # v2 still arrive. Lift with a migration PR that moves every lane and proves a
+    # Commercial and a GCC-High login.
+    ignore:
+      - dependency-name: "Azure/login"
+        update-types: ["version-update:semver-major"]
     # github/codeql-action/{init,autobuild,analyze} are three actions from ONE
     # repo that MUST run the same release. Bumping them separately is not a
     # partial upgrade, it is an outage: on 2026-08-09 `init` sat at v4.37.6
@@ -120,7 +135,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
     # The largest single cluster in the 2026-09-20 backlog: 10 of the 22 open
@@ -185,7 +200,7 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/apps/loom-directlake"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     # `dependencies` only: there is no `rust` label in this repo (measured
     # 2026-09-18 — `gh label list` returns `dependencies`, `javascript`,
     # `security`, `sp:*`, `lane:*` and no `rust`), and naming one that does not
@@ -210,12 +225,28 @@ updates:
     # plus the release profile on every PR touching this crate. That lane is the
     # backstop; this group only ensures the four crates are judged together
     # instead of one at a time.
-    # DO NOT CLOSE the grouped arrow-stack PR. Closing a Dependabot PR without
-    # merging is a signal to Dependabot that the version is unwanted, and it
-    # will not raise that version again — so closing this one silently destroys
-    # the exact notification this entry exists to produce, and #3982 goes back
-    # to having no watcher at all. If the bump is not takeable yet (it will not
-    # be until delta-rs ships on arrow 59), LEAVE IT OPEN, or reopen it.
+    # The `ignore` below REPLACES the old "leave the grouped PR open as a
+    # watcher" mechanism. That mechanism left PR #4982 permanently red: it
+    # bundled arrow/parquet 60 with datafusion 55.2.0 and deltalake 1.1.1, and
+    # the 60 half can never build. Measured on crates.io 2026-10-21:
+    #   * datafusion 55.2.0 (newest) depends on `arrow ^59.2.0`
+    #   * deltalake-core 1.1.1 (newest) depends on `arrow ^59`, `parquet ^59`
+    # so arrow/parquet 60 splits the graph (`arrow::datatypes::Schema` !=
+    # `datafusion::arrow::datatypes::Schema`; 5x E0308 in src/scan.rs).
+    # Major bumps of arrow/parquet are therefore ignored; minor/patch of the
+    # whole stack (arrow 59.x, datafusion 55.x, deltalake 1.x) still arrive as
+    # the grouped PR. LIFT the ignore when a datafusion release admits arrow 60
+    # AND delta-rs follows. Do not close a grouped PR to dismiss a major: this
+    # ignore, not a closed PR, is the supported way to decline it.
+    ignore:
+      - dependency-name: "arrow"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet-*"
+        update-types: ["version-update:semver-major"]
     groups:
       arrow-stack:
         patterns:
@@ -259,7 +290,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/fiab-console"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
     # MAJOR bumps held back, each measured to break CI in dependabot PR #4941
@@ -331,7 +362,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-sdk"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
@@ -355,7 +386,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-embed"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     groups:
@@ -369,7 +400,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-cli"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
@@ -393,7 +424,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/fiab-label-propagation"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
@@ -417,7 +448,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/azure-functions/secret-expiry-monitor"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these

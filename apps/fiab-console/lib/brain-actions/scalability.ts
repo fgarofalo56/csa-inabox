@@ -74,18 +74,20 @@
  *                  by #2642. It is derived as pinned with no change to this
  *                  module: the bicep declares min=max=1, and a cache zeroed is a
  *                  cache emptied, which is the #4257 shape exactly.
- *   21 ELASTIC     loom-duckdb (0/3), loom-directlake (1/2), loom-console (2/6),
+ *   20 ELASTIC     loom-duckdb (0/3), loom-directlake (1/2), loom-console (2/6),
  *                  loom-presidio-*, loom-s3-gateway, loom-migrate, script-runner,
  *                  loom-mcp, loom-activator, loom-mirroring, …
- *   2  SHAPE       loom-unity (a conditional scale object) and loom-trino (its
- *      UNRESOLVED  minReplicas is a computed expression the PARENT passes) — in
+ *   3  SHAPE       loom-unity (a conditional scale object), loom-trino (its
+ *      UNRESOLVED  minReplicas is a computed expression the PARENT passes) and
+ *                  loom-direct-lake-shim (minReplicas is
+ *                  `loomDirectLakeShimEnabled ? 1 : 0`, #5068) — in
  *                  the map, with the durability verdict withheld
  *   1  UNNAMED     the dlz-attach s3-gateway, whose name is
  *                  `[take(format('loom-s3-gateway-{0}', …), 32)]`. NOT in the map,
  *                  and recorded as {@link UnnamedDeclaration} so its absence
  *                  cannot be read as "undeclared" — see {@link refuseScaleToZero}.
  *
- * Of the 27 keyed apps, 7 remain performable (the five generic-loop apps that
+ * Of the 27 keyed apps, 6 remain performable (the four generic-loop apps that
  * carry no declared consumer, plus `loom-presidio-analyzer` and
  * `loom-presidio-anonymizer`); the availability arm refuses the rest because the
  * deploy wires a consumer to them, and `loom-console` is refused as self. That

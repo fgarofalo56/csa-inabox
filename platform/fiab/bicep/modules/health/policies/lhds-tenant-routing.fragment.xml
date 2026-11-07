@@ -1,0 +1,111 @@
+<fragment>
+  <!-- LHDS tenant routing + edge isolation (W1-6). Classic APIM policy fragment: uses only
+       validate-jwt, cache-*-value, send-request, rate-limit-by-key and set-backend-service,
+       all available in every classic tier (Developer..Premium) in Commercial and Azure
+       Government. The upper-case double-underscore tokens are replaced by ingress.bicep. Include with
+       <include-fragment fragment-id="lhds-tenant-routing" /> in the inbound section.
+       Contract: tenant = first path segment (/{tenant}/fhir, /{tenant}/dicomweb); the
+       map is GET /api/health/routing-map (envelope {ok,data:{entries[]}}). -->
+  <!-- 1. Tenant from the URL; anything that is not a tenant slug is a 404 before any lookup. -->
+  <set-variable name="lhdsTenant" value="@{
+      var segs = context.Request.OriginalUrl.Path.Split('/');
+      return segs.Length > 1 ? segs[1] : &quot;&quot;;
+    }" />
+  <choose>
+    <when condition="@(!System.Text.RegularExpressions.Regex.IsMatch((string)context.Variables[&quot;lhdsTenant&quot;], &quot;^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$&quot;))">
+      <return-response>
+        <set-status code="404" reason="Not Found" />
+        <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+        <set-body>{"ok":false,"error":{"code":"not_found","message":"unknown route"}}</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <!-- 2. Token must be a valid LHDS access token (signature, issuer, expiry). 401 on failure. -->
+  <validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="invalid or missing access token" require-expiration-time="true" require-scheme="Bearer" require-signed-tokens="true" output-token-variable-name="lhdsJwt">
+    <openid-config url="__AS_OPENID_CONFIG_URL__" />
+    <issuers><issuer>__AS_ISSUER__</issuer></issuers>
+    <required-claims><claim name="tenant" match="any" /></required-claims>
+  </validate-jwt>
+  <!-- 3. Edge isolation: the token's tenant claim must equal the URL tenant. Tenant A's path
+       with tenant B's token is 403 here, before the map lookup, so the answer does not
+       reveal whether tenant A exists. -->
+  <set-variable name="lhdsTokenTenant" value="@{
+      var jwt = (Jwt)context.Variables[&quot;lhdsJwt&quot;];
+      var v = jwt.Claims.GetValueOrDefault(&quot;tenant&quot;, new string[0]);
+      return v.Length == 1 ? v[0] : &quot;&quot;;
+    }" />
+  <choose>
+    <when condition="@((string)context.Variables[&quot;lhdsTokenTenant&quot;] != (string)context.Variables[&quot;lhdsTenant&quot;])">
+      <return-response>
+        <set-status code="403" reason="Forbidden" />
+        <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+        <set-body>{"ok":false,"error":{"code":"tenant_mismatch","message":"token is not valid for this tenant"}}</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <!-- 4. Routing map: 60 s cache, plus a last-known-good copy that survives a control-plane outage. -->
+  <cache-lookup-value key="lhds-routing-map" variable-name="lhdsMap" />
+  <choose>
+    <when condition="@(!context.Variables.ContainsKey(&quot;lhdsMap&quot;))">
+      <send-request mode="new" response-variable-name="lhdsMapResp" timeout="5" ignore-error="true">
+        <set-url>__CP_BASE_URL__/api/health/routing-map</set-url>
+        <set-method>GET</set-method>
+        <authentication-managed-identity resource="__CP_AUDIENCE__" />
+      </send-request>
+      <choose>
+        <when condition="@(context.Variables.ContainsKey(&quot;lhdsMapResp&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;lhdsMapResp&quot;]).StatusCode == 200)">
+          <set-variable name="lhdsMap" value="@(((IResponse)context.Variables[&quot;lhdsMapResp&quot;]).Body.As&lt;string&gt;())" />
+          <cache-store-value key="lhds-routing-map" value="@((string)context.Variables[&quot;lhdsMap&quot;])" duration="60" />
+          <cache-store-value key="lhds-routing-map-lkg" value="@((string)context.Variables[&quot;lhdsMap&quot;])" duration="86400" />
+        </when>
+        <otherwise>
+          <cache-lookup-value key="lhds-routing-map-lkg" variable-name="lhdsMap" />
+        </otherwise>
+      </choose>
+    </when>
+  </choose>
+  <choose>
+    <when condition="@(!context.Variables.ContainsKey(&quot;lhdsMap&quot;))">
+      <return-response>
+        <set-status code="503" reason="Service Unavailable" />
+        <set-header name="Retry-After" exists-action="override"><value>30</value></set-header>
+        <set-body>{"ok":false,"error":{"code":"routing_map_unavailable","message":"the routing map could not be read and no last-known-good copy exists"}}</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <set-variable name="lhdsRoute" value="@{
+      var entries = JObject.Parse((string)context.Variables[&quot;lhdsMap&quot;])[&quot;data&quot;][&quot;entries&quot;] as JArray;
+      var t = (string)context.Variables[&quot;lhdsTenant&quot;];
+      foreach (var e in entries) { if ((string)e[&quot;tenantSlug&quot;] == t) { return (JObject)e; } }
+      return (JObject)null;
+    }" />
+  <choose>
+    <when condition="@(context.Variables[&quot;lhdsRoute&quot;] == null)">
+      <return-response>
+        <set-status code="404" reason="Not Found" />
+        <set-body>{"ok":false,"error":{"code":"not_found","message":"unknown route"}}</set-body>
+      </return-response>
+    </when>
+    <when condition="@(((JObject)context.Variables[&quot;lhdsRoute&quot;])[&quot;status&quot;].ToString() != &quot;active&quot;)">
+      <return-response>
+        <set-status code="503" reason="Service Unavailable" />
+        <set-header name="Retry-After" exists-action="override"><value>@{
+            var r = (JObject)context.Variables[&quot;lhdsRoute&quot;];
+            return r[&quot;retryAfterSeconds&quot;] != null ? r[&quot;retryAfterSeconds&quot;].ToString() : &quot;60&quot;;
+          }</value></set-header>
+        <set-body>@{
+            var r = (JObject)context.Variables[&quot;lhdsRoute&quot;];
+            return new JObject(new JProperty(&quot;ok&quot;, false), new JProperty(&quot;error&quot;, new JObject(new JProperty(&quot;code&quot;, &quot;tenant_&quot; + r[&quot;status&quot;].ToString()), new JProperty(&quot;message&quot;, r[&quot;reason&quot;] != null ? r[&quot;reason&quot;].ToString() : &quot;tenant is not serving&quot;)))).ToString();
+          }</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <!-- 5. Per-tenant quota from the registry (tenant.quotas.maxRequestsPerMinute). Over quota APIM
+       answers 429 and sets Retry-After itself. The counter key is the tenant, never the caller IP. -->
+  <rate-limit-by-key calls="@{
+      var r = (JObject)context.Variables[&quot;lhdsRoute&quot;];
+      return r[&quot;maxRequestsPerMinute&quot;] != null ? (int)r[&quot;maxRequestsPerMinute&quot;] : __DEFAULT_RPM__;
+    }" renewal-period="60" counter-key="@(&quot;lhds-tenant-&quot; + (string)context.Variables[&quot;lhdsTenant&quot;])" />
+  <!-- 6. Forward to the tenant's stamp; the /{tenant} prefix stays in the path. -->
+  <set-backend-service base-url="@((string)((JObject)context.Variables[&quot;lhdsRoute&quot;])[&quot;stampBaseUrl&quot;])" />
+</fragment>

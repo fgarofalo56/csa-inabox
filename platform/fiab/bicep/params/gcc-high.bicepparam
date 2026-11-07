@@ -385,11 +385,32 @@ param hubFirewallEnabled = true
 // call fails honestly (not vaporware) — flip back to false or set the EXISTING_*
 // AI Search vars to reuse a tenant service.
 param aiSearchEnabled = true
+// usgovvirginia has no standard-tier AI Search capacity (Gov run 42106150785, ResourcesForSkuUnavailable);
+// usgovarizona is where this estate already places its OpenAI embeddings. Capacity THERE is not measured:
+// only a live create proves it. IL5/DoD share usgovvirginia and are unprobed, so they are left unchanged.
+param aiSearchLocation = 'usgovarizona'
 // Azure Analysis Services is NOT available in GCC-High — pin OFF (main.bicep now
 // defaults aasEnabled=true for Commercial day-one). The semantic-model surfaces
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
 param aasEnabled = false
-param adxEnabled = true
+// ADX is OFF in GCC-High for now: a CAPACITY gap, not a design choice. Measured 2026-11-06 with
+// gov-adx-capacity-probe (a real create): all five candidate SKUs in usgovarizona (E8as_v5+1TB_PS, E8a_v4, E4a_v4,
+// E16a_v4, L8as_v3) were refused 'Currently there are no available resources for the cluster' (run 42314565395);
+// usgovvirginia refused L8as_v3 earlier (run 42157975744); usgovtexas does not offer any of them (run 42320095670).
+// Re-enable (true) once the probe shows an accepted SKU; adxConfig below is kept so that flip is one line. Until then
+// the Gov Eventhouse / KQL surfaces are unavailable: a tracked cloud-parity defect (cloud-parity.md), not done.
+param adxEnabled = false
+// ADX placement. usgovvirginia offers only 5 ADX SKUs (gov-adx-sku-probe run 41880903882, 2026-11-04), not the
+// admin-plane GCC-High default Standard_E8as_v5+1TB_PS, and a fresh Standard_L8as_v3 there was refused for capacity
+// (Gov run 42157975744). usgovarizona offers 24 SKUs including that default, so the SKU override is dropped and the
+// default applies. Capacity in usgovarizona is NOT measured: only a live create shows it.
+// adxClusterName: the deleted cluster's name (adx-csa-loom-fmezxj) stayed 'already taken' for 20+ hours (run 42106150785).
+// Any landing zone attaching to this cluster needs the same name AND its region (adxLocation); the DLZ attach path
+// does not take a cluster region yet (tracked, untested).
+param adxConfig = {
+  adxClusterName: 'adx-csa-loom-gcch1'
+  adxLocation: 'usgovarizona'
+}
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
 // only auth (the only IL5/GCC-High-allowed posture). Set the env var to 'false'
 // to skip, or reuse an existing namespace/job via the EXISTING_* vars above.
@@ -468,5 +489,7 @@ param loomIqMcpEnabled = true
 // and because the deployment is incremental a live budget is left untouched and
 // still alerting. Without this line that export is INERT.
 param observabilityConfig = {
+  // API Gateway Plane W1-2 - GatewayLlmLogs. W0-9: GCC-High lacks the category; IL5 / GCC / DoD are unmeasured, so false.
+  apiplaneLlmLogs: false
   programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
 }

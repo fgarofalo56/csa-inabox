@@ -58,8 +58,8 @@ async function resolvePrincipalId(): Promise<string> {
     const cred = getManagedIdentityCredential?.() ?? new DefaultAzureCredential();
     const tok = await cred.getToken(armScope());
     if (!tok?.token) return '';
-    const { fetchWithTimeout } = await import('./fetch-with-timeout');
-    const r = await fetchWithTimeout(`${armBase()}${rid}?api-version=2023-01-31`, {
+    const { armCountedFetch } = await import('./arm-counted-fetch');
+    const r = await armCountedFetch(`${armBase()}${rid}?api-version=2023-01-31`, {
       headers: { authorization: `Bearer ${tok.token}` },
     });
     if (!r.ok) return '';

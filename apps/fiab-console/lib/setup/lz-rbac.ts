@@ -30,6 +30,7 @@
 
 import { armBase, armScope, detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 /**
  * The role set auto-granted to the Console UAMI when a DLZ is attached/repaired.
@@ -199,7 +200,7 @@ export async function grantRgScopedRoles(opts: {
     const roleDefinitionId = `/subscriptions/${opts.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${role.guid}`;
     const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${newRoleAssignmentGuid()}?api-version=2022-04-01`;
     try {
-      const res = await fetch(url, {
+      const res = await armCountedRawFetch(url, {
         method: 'PUT',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         cache: 'no-store',

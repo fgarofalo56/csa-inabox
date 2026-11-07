@@ -21,7 +21,7 @@
  * naming the exact env var. Azure-native — no Microsoft Fabric required.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -80,7 +80,7 @@ async function token(): Promise<string> {
 
 async function armReq(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ status: number; json: any; operationLocation?: string }> {
   const tk = await token();
-  const res = await fetchWithTimeout(`${ARM}${path}`, {
+  const res = await armCountedFetch(`${ARM}${path}`, {
     method,
     headers: {
       authorization: `Bearer ${tk}`,

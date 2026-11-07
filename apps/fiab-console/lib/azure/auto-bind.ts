@@ -84,6 +84,8 @@
  * component.
  */
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import type { SessionPayload } from '@/lib/auth/session';
+import type { EnsureDeps, EnsureOutcome } from '@/lib/install/provisioners/health-tenant';
 import { withoutLakehouseCreateState } from './backing-name';
 
 /** The item facts a provider needs. Deliberately not the whole `WorkspaceItem`. */
@@ -123,6 +125,14 @@ export interface AutoBindSeedResult {
   detail?: string;
   /** Set when content EXISTED but could not be authored. */
   error?: string;
+  /**
+   * Item `state` keys for backing objects the seed CREATED, merged into the
+   * persisted state (e.g. `asaJobName` for an eventstream's Stream Analytics
+   * job). Without this a seed that creates a backing resource discards its ref
+   * and teardown can only guess the name (#5046 finding 4). Provider and
+   * `autoBind` keys always win over these on a collision.
+   */
+  statePatch?: Record<string, unknown>;
 }
 
 /** The inspectable mapping record written to `state.autoBind`. */
@@ -567,11 +577,13 @@ export async function ensureAutoBinding(
       (record.seeded === true) !== (next.seeded === true) ||
       (record.seedError || '') !== (next.seedError || '') ||
       (record.seedDetail || '') !== (next.seedDetail || '') ||
+      Object.entries(seed?.statePatch ?? {}).some(([k, v]) => ctx.state?.[k] !== v) ||
       via !== 'existing';
     return {
       status: 'bound',
       record: next,
       statePatch: {
+        ...(seed?.statePatch ?? {}),
         ...keys,
         [AUTO_BIND_STATE_KEY]: next,
       },
@@ -778,12 +790,28 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
  */
 export async function autoBindOnCreate(
   item: WorkspaceItem,
-  opts: EnsureAutoBindingOptions & { timeoutMs?: number } = {},
+  opts: EnsureAutoBindingOptions & {
+    timeoutMs?: number;
+    /** The creating caller. Required for `health-tenant` (D12: tenant creation is capability-gated). */
+    session?: SessionPayload;
+    /** Test seam: control-plane dependencies for the `health-tenant` arm. */
+    healthDeps?: EnsureDeps;
+  } = {},
 ): Promise<AutoBindOutcome | null> {
   const timeoutMs = opts.timeoutMs ?? 8000;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await clearServerOwnedKeysOnCreate(item);
+    if (item?.itemType === 'health-tenant') {
+      // Not an engine provider: provisioning is a control-plane JOB, not a probe/create of one
+      // Azure object, and it carries its own binding (`state.healthTenant`). The outcome is not
+      // an AutoBindOutcome, so the caller gets null; the editor reads `state.healthTenant`.
+      const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      });
+      await Promise.race([healthTenantAutoBindOnCreate(item, opts.session, opts.healthDeps), deadline]);
+      return null;
+    }
     const work = autoBindOnOpen(item, undefined, opts).then((r) => r.outcome);
     const deadline = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -793,6 +821,63 @@ export async function autoBindOnCreate(
     return null;
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * One redacted line for a failed create-time bind (#5177). Logs item id, a phase/error class
+ * and a short code only. The message is deliberately NOT logged: it can carry an upstream
+ * response body or URL. Creation is never failed by this; first open re-binds.
+ */
+function logCreateBindFailure(itemId: string | undefined, kind: string, code: unknown): void {
+  console.warn(
+    '[auto-bind] health-tenant create-time bind failed; first open will retry',
+    JSON.stringify({
+      itemId,
+      kind,
+      code: typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : undefined,
+    }),
+  );
+}
+
+/**
+ * The `health-tenant` create-time arm (#5161). Provisions and binds the item's backing tenant
+ * through the SAME `ensureHealthTenant` the editor's first open uses, so the two paths cannot
+ * diverge and first-open remains the self-heal path (idempotent: N calls, ONE tenant, ONE job).
+ *
+ * AUTHORIZATION (D12): creating a tenant deploys real resources, and `health.tenant-admin` is
+ * not inherited from Loom Admin. With no session, or a session lacking an explicit Contributor
+ * grant, this does NOTHING and the item is created unbound; the first open binds it for an
+ * authorized caller. It never throws and never fails item creation.
+ *
+ * Passes `state: undefined` deliberately: a create body or copied state must not name another
+ * item's tenant. The tenant is derived from this item's display name (adopting an existing
+ * tenant only when its display name matches).
+ */
+export async function healthTenantAutoBindOnCreate(
+  item: WorkspaceItem,
+  session: SessionPayload | undefined,
+  deps?: EnsureDeps,
+): Promise<EnsureOutcome | null> {
+  try {
+    if (item?.itemType !== 'health-tenant' || !session) return null;
+    const { enforceHealthTenantAdmin } = await import('@/app/api/health/tenants/_lib/tenant-admin-gate');
+    if (await enforceHealthTenantAdmin(session, 'Contributor')) return null;
+    const { ensureHealthTenant, realDeps } = await import('@/lib/install/provisioners/health-tenant');
+    const outcome = await ensureHealthTenant(
+      { itemId: item.id, displayName: item.displayName, state: undefined },
+      deps ?? realDeps(item.id, item.workspaceId),
+    );
+    // ensureHealthTenant reports most failures as an OUTCOME, not a throw (#5177).
+    if (outcome.phase === 'cp-error' || outcome.phase === 'failed') {
+      logCreateBindFailure(item.id, outcome.phase, outcome.code);
+    } else if (outcome.phase === 'unconfigured' || outcome.phase === 'no-stamp') {
+      logCreateBindFailure(item.id, outcome.phase, outcome.gateId);
+    }
+    return outcome;
+  } catch (e) {
+    logCreateBindFailure(item?.id, e instanceof Error ? e.name : typeof e, (e as { code?: unknown } | null)?.code);
+    return null;
   }
 }
 

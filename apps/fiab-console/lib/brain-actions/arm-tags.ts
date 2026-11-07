@@ -47,7 +47,7 @@
  * does not even reach here in that case (`already-tagged` is not a candidate).
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { BrainActionArmError } from './arm';
@@ -113,7 +113,7 @@ export async function armMergeTag(
       'Failed to acquire an ARM token for the ownership backfill. NOTHING was tagged.',
     );
   }
-  const r = await fetchWithTimeout(url, {
+  const r = await armCountedFetch(url, {
     // `Merge` is the whole safety argument — see the module doc-block. Never
     // `Replace`: it would drop every tag not named in this body.
     method: 'PATCH',

@@ -28,6 +28,7 @@ import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { subscriptionFromResourceId, parseResourceCost } from '@/lib/clients/cost-parse';
 import { costKey, COST_CACHE_OPTS } from '@/lib/azure/cost-client';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -114,7 +115,7 @@ async function computeResourceMonthlyCost(
   const maxAttempts = 4;
   let lastErr: MonitorError | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const res = await fetch(url, {
+    const res = await armCountedRawFetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),

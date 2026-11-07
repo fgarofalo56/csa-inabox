@@ -37,7 +37,7 @@ import {
 } from '@azure/identity';
 import { withSession } from '@/lib/api/route-toolkit';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
@@ -121,7 +121,7 @@ export const POST = withSession(async (req: NextRequest) => {
       );
     }
 
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${tok.token}`,

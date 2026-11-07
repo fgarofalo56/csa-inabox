@@ -2006,6 +2006,10 @@ const CROSS_SUB_CALLSITE_REGISTER = {
     'Subscription-scoped RBAC for the setup orchestrator in each spoke subscription.',
   [`${PLATFORM_PREFIX}modules/landing-zone/adx.bicep inner -> ${PLATFORM_PREFIX}modules/landing-zone/adx-db-inner.bicep`]:
     'ADX database creation against a cluster an estate may host in another subscription. Kusto, not storage.',
+  [`${PLATFORM_PREFIX}health.bicep healthApimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
+    'Same fragment as the ingress.bicep entry below, published from the subscription-level health.bicep once the control plane URL is known (the stamp deploys before the control plane, so the stamp ingress cannot hold it). One Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake. The Reader grant is a separate module (apim-access.bicep) scoped to the stamp resource group.',
+  [`${PLATFORM_PREFIX}modules/health/ingress.bicep apimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
+    'LHDS tenant-routing policy fragment published into an EXISTING API Management service that a brownfield estate may host in another subscription (apimSubscriptionId). Writes one Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake (verified by grep, 0 matches).',
 };
 
 /** Cross-subscription call sites nobody has registered. */
@@ -2827,4 +2831,70 @@ test('blankComments preserves length and does not blank a `//` inside a string l
   assert.equal(out.includes('but this is'), false);
   assert.match(out, /'it\\'s \/\/ not a comment'/);
   assert.match(out, /https:\/\/example\.invalid/);
+});
+
+// ---------------------------------------------------------------------------
+// The lake's own resource group (Gov run 42082972878)
+// ---------------------------------------------------------------------------
+// loomDlzRg is the ADMIN resource group whenever useSingleDlz is false, so storage-grant modules scoped to it
+// looked for the ADOPTED lake in the wrong RG (ResourceNotFound / ParentResourceNotFound). The fix scopes them
+// to loomStorageRg, which falls back to loomDlzRg unless the root passes the adopted lake's RG.
+
+const ADMIN_PLANE_MAIN = 'modules/admin-plane/main.bicep';
+const lf = (rel) => readBicep(rel).replace(/\r\n/g, '\n');
+
+test('LAKE RG: every SCOPED module that is handed the lake account name is scoped to loomStorageRg', () => {
+  // Breaks if: any one of the nine scope lines goes back to resourceGroup(loomDlzRg), or the variable is renamed.
+  // `loomDirectLake` is excluded on purpose: it is a Container App at the admin RG that only receives the account
+  // NAME as a setting and dereferences nothing, so it has no `scope:` line to be wrong.
+  const chunks = lf(ADMIN_PLANE_MAIN).split(/\nmodule /).slice(1);
+  const scoped = chunks
+    .map((c) => ({ name: c.split(' ')[0], head: c.slice(0, 1500) }))
+    .filter((m) => /\n {4}storageAccountName: loomStorageAccount\n/.test(m.head) && /\n {2}scope: /.test(m.head));
+  assert.ok(scoped.length >= 9, `population floor: expected at least 9 scoped lake modules, found ${scoped.length}`);
+  const wrong = scoped.filter((m) => !m.head.includes('\n  scope: resourceGroup(loomStorageRg)\n')).map((m) => m.name);
+  assert.deepEqual(wrong, [], 'these lake-grant modules look for the account in the wrong resource group');
+});
+
+test('LAKE RG: loomStorageRg falls back to loomDlzRg, so an estate that deploys its own lake is unchanged', () => {
+  // Breaks if: the fallback is flipped or dropped (every non-adopt estate would then scope to an empty RG name).
+  const src = lf(ADMIN_PLANE_MAIN);
+  assert.ok(
+    src.includes('var loomStorageRg = empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg\n'),
+    'loomStorageRg must be `empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg`',
+  );
+  assert.ok(src.includes("param loomStorageAccountRg string = ''\n"), "the parameter must default to '' so the fallback is the default");
+});
+
+test('LAKE RG: the root passes the adopted lake RG, and nothing for a cross-subscription lake', () => {
+  // Breaks if: the pass-through is deleted (the parameter stays '' and the bug silently returns) or inverted.
+  const root = lf('main.bicep');
+  assert.ok(root.includes('    loomStorageAccountRg: lakeIsCrossSub ? \'\' : lakeAdoptRg\n'), 'root must pass the adopted lake RG to admin-plane');
+  assert.ok(root.includes('var lakeAdoptRg = adoptRg(adopt, \'storage-adls\')\n'), 'lakeAdoptRg must still come from the adopt plan');
+});
+
+test('DIAG: the Redis OSS Container App declares no log category group, and still ships metrics', () => {
+  // Breaks if: `categoryGroup: 'allLogs'` returns (ARM answers BadRequest on a Microsoft.App/containerApps target) or
+  // the metrics block is lost along with it (the absence-only half would then pass on an empty setting).
+  const src = lf('modules/shared/redis-oss-aca.bicep');
+  const diag = src.slice(src.indexOf("resource appDiag 'Microsoft.Insights/diagnosticSettings"));
+  assert.ok(diag.includes('name: \'diag-loom-stdz\''), 'the diagnostic setting must still exist');
+  assert.ok(!diag.includes("categoryGroup: 'allLogs'"), 'allLogs is rejected on a Container App target');
+  assert.ok(diag.includes('logs: []'), 'logs must be an explicit empty array');
+  assert.ok(diag.includes("category: 'AllMetrics'"), 'metrics must still be shipped');
+});
+
+test('LAKE RG: the two consumers that name their RG outside the `scope:` line also resolve to the lake RG', () => {
+  // Breaks if: adxCluster's adlsAccountRg goes back to loomDlzRg, or adxExportRbac's default RG goes back to the
+  // admin RG (`resourceGroup().name`) while its account still defaults to the lake. These two were found by
+  // independent review of the first cut: neither passes `storageAccountName`, so the population test above
+  // cannot see them.
+  const src = lf(ADMIN_PLANE_MAIN);
+  assert.ok(src.includes('\n    adlsAccountRg: loomStorageRg\n'), 'adxCluster must hand the ADX module the lake RG');
+  assert.ok(!src.includes('\n    adlsAccountRg: loomDlzRg\n'), 'adlsAccountRg must not fall back to the DLZ/admin RG');
+  const exp = src.slice(src.indexOf('module adxExportRbac '));
+  const scopeLine = /\n {2}scope: (resourceGroup\([^\n]*\))\n/.exec(exp)?.[1] ?? '';
+  assert.ok(scopeLine.includes('loomStorageRg'), `adxExportRbac scope must reach loomStorageRg, got: ${scopeLine}`);
+  assert.ok(scopeLine.includes('loomRtiExportAdlsRg'), 'an explicitly named export RG must still win');
+  assert.ok(scopeLine.includes('resourceGroup().name'), 'a custom export account with no RG keeps the old admin-RG fallback');
 });

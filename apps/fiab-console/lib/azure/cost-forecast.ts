@@ -34,7 +34,7 @@
  * the shared 'cost' cache posture — real REST only, no mocks (no-vaporware.md).
  */
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from './cloud-endpoints';
 import { MonitorError } from './monitor-client';
 import {
@@ -126,7 +126,7 @@ async function forecastScopeViaApi(
       if (deadline != null && Date.now() >= deadline) {
         throw new MonitorError('Forecast call exceeded the report time budget', 504);
       }
-      const res = await fetchWithTimeout(url, {
+      const res = await armCountedFetch(url, {
         method: 'POST',
         headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify(body),

@@ -931,7 +931,7 @@ export async function createOwnedItem(
   // opened straight after create already has a canvas) but DEADLINE-BOUNDED and
   // never-throwing, so a slow control plane cannot make item creation hang or
   // fail. A no-op for the item types that have no backing service.
-  await autoBindOnCreate(resource!);
+  await autoBindOnCreate(resource!, { session });
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
   // Mirror a data-product into the consumer-discovery index (best-effort; no-throw).

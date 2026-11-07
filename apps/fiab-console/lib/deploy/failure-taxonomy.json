@@ -139,7 +139,9 @@
       "not": [
         "skunotavailable",
         "quotaexceeded",
-        "has surpassed its resource quota"
+        "has surpassed its resource quota",
+        "authorization failed for template resource",
+        "does not have permission to perform action"
       ],
       "observed": "ARM rejects main.bicep's compiled template. Excluded when the nested reason is a SKU/quota problem, which InvalidTemplateDeployment also wraps. The third exclusion was added after deploy-gov.yml run 31917112453 (2026-08-16): the per-tenant Purview quota refusal is wrapped in InvalidTemplateDeployment but its text never contains the token 'quotaexceeded', so the first two exclusions did not catch it and a genuine quota condition classified as `defect` / not-remediable — sending the operator to re-run `az bicep build` for a template that was perfectly valid.",
       "remediationKind": "not-remediable",
@@ -191,9 +193,11 @@
       "anyOf": [
         "authorizationfailed",
         "linkedauthorizationfailed",
-        "does not have authorization to perform action"
+        "does not have authorization to perform action",
+        "does not have permission to perform action",
+        "authorization failed for template resource"
       ],
-      "observed": "ARM's standard RBAC denial. LinkedAuthorizationFailed is the cross-resource variant (e.g. assigning a UAMI you cannot read).",
+      "observed": "ARM's standard RBAC denial. LinkedAuthorizationFailed is the cross-resource variant (e.g. assigning a UAMI you cannot read). The last two phrases are the wording ARM uses when a NESTED template deployment is denied: Gov run 42106150785 (2026-11-05) returned InvalidTemplateDeployment wrapping 'Authorization failed for template resource ... does not have permission to perform action Microsoft.Authorization/roleAssignments/write', which defect.invalid-template (higher precedence) previously labelled a Loom defect.",
       "remediationKind": "operator-action",
       "remediation": "The deploying identity lacks the role this action needs. A subscription-scoped deployment requires Contributor on the target subscription; creating role assignments additionally requires User Access Administrator or Owner. Grant the role at the scope named in the ARM message, then re-run.",
       "grantHint": "az role assignment create --assignee <deploy-principal> --role Contributor --scope /subscriptions/<sub>"
@@ -560,6 +564,22 @@
       "remediationKind": "platform-will-fix",
       "remediation": "The subscription has not registered a resource provider this deployment needs. Registering is idempotent and safe — the platform performs it and retries once. If it cannot (the identity lacks Microsoft.Resources/subscriptions/providers/register/action), the exact command is emitted instead.",
       "grantHint": "az provider register --namespace <namespace> --wait"
+    },
+    {
+      "id": "eventual.account-provisioning-state",
+      "class": "eventual-consistency",
+      "anyOf": [
+        "accountprovisioningstateinvalid"
+      ],
+      "not": [
+        "in state failed",
+        "in state canceled",
+        "in state cancelled",
+        "in state deleting"
+      ],
+      "observed": "A Cognitive Services / Foundry account PUT returns before its async provisioning finishes, so a private endpoint created against it in the same deployment is refused AccountProvisioningStateInvalid \"in state Accepted\". Gov run 42167265779 (2026-11-06): pe-aifndry-loom-usgovvirginia refused; the portal showed the account Succeeded afterwards. Terminal states (Failed, Canceled, Deleting) are excluded: those are not a wait.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The account was still provisioning when its private endpoint was created. It reaches Succeeded on its own; the platform waits and retries. No operator action."
     },
     {
       "id": "eventual.principal-not-found",

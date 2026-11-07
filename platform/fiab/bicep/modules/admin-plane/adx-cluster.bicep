@@ -27,7 +27,7 @@ param location string
 @description('Cluster name (admin-plane shared). ADX cluster names are GLOBALLY-unique DNS names, so the default is suffixed with a per-subscription uniqueString — this lets a new tenant/DMLZ estate coexist with an older hub (e.g. during a clean-rebuild migration) without colliding on `adx-csa-loom-shared`. The DLZ landing-zone module derives the same per-sub name in its `adminPlaneAdxClusterName` default (single-sub/tenant paths share the subscription); cross-sub consumers (dlz-attach, multi-sub fan-out) must instead receive the real deployed name via the hub output / LOOM_ADMIN_ADX_CLUSTER.')
 param clusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
 
-@description('SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072).')
+@description('SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072). RE-MEASURED 2026-11-04 (gov-adx-sku-probe run 41880903882): usgovvirginia now offers only 5 SKUs and NOT the E8as_v5 entries; Standard_L8as_v3 is the smallest SKU offered in both regions.')
 @allowed([
   // Commercial only. Neither is offered in any Azure Government region — see above.
   'Dev(No SLA)_Standard_E2a_v4'
@@ -51,6 +51,7 @@ param clusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id),
   'Standard_E16as_v5+4TB_PS'
   'Standard_E80ids_v4'
   'Standard_E80ids_v4+32TB_PS'
+  'Standard_L8as_v3'
 ])
 param skuName string = 'Dev(No SLA)_Standard_E2a_v4'
 

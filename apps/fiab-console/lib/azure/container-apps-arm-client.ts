@@ -26,7 +26,7 @@
  * No mocks. Real ARM REST only.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -175,7 +175,7 @@ function storageListKeysUrl(cfg: AcaConfig, account: string, rg: string): string
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new AcaArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -626,7 +626,7 @@ export async function acrManifestExists(registry: string, repo: string, tag: str
     const aad = await credential.getToken(ARM_SCOPE);
     if (!aad?.token) return 401;
     const tenant = process.env.LOOM_TENANT_ID || process.env.AZURE_TENANT_ID || '';
-    const exch = await fetchWithTimeout(`https://${registry}/oauth2/exchange`, {
+    const exch = await armCountedFetch(`https://${registry}/oauth2/exchange`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -639,7 +639,7 @@ export async function acrManifestExists(registry: string, repo: string, tag: str
     if (!exch.ok) return exch.status;
     const refreshToken = (await exch.json().catch(() => ({})) as any)?.refresh_token;
     if (!refreshToken) return 401;
-    const tok = await fetchWithTimeout(`https://${registry}/oauth2/token`, {
+    const tok = await armCountedFetch(`https://${registry}/oauth2/token`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -655,7 +655,7 @@ export async function acrManifestExists(registry: string, repo: string, tag: str
     const accept =
       'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, ' +
       'application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json';
-    const r = await fetchWithTimeout(`https://${registry}/v2/${repo}/manifests/${tag}`, {
+    const r = await armCountedFetch(`https://${registry}/v2/${repo}/manifests/${tag}`, {
       method: 'GET',
       headers: { Accept: accept, Authorization: `Bearer ${accessToken}` },
     });

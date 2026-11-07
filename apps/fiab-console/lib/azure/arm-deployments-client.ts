@@ -20,7 +20,7 @@
  * MessageBar naming the exact env var. No mocks, no sample data.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -105,7 +105,7 @@ async function token(): Promise<string> {
 async function armGet(path: string): Promise<any> {
   const tk = await token();
   const url = resolveSameOriginUrl(path, ARM, 'the ARM token');
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
   });

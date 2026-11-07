@@ -11,7 +11,21 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideReap } from '../reap-acr-agent-pools.mjs';
+import { decideReap, parseQueueCount } from '../reap-acr-agent-pools.mjs';
+
+// Breaks if a null / empty / missing queue read becomes 0 ("queue empty"), which would let prune delete a pool whose
+// queue was never established. Number(null) and Number('') are both 0: exactly the inputs the old line accepted.
+test('parseQueueCount: only a real number counts; null, empty, missing and failed reads are NaN', () => {
+  for (const v of [null, '', undefined, { count: null }, {}, true]) {
+    assert.ok(Number.isNaN(parseQueueCount({ ok: true, value: v })), `value ${JSON.stringify(v)} must be NaN`);
+  }
+  assert.ok(Number.isNaN(parseQueueCount({ ok: false, err: 'InternalServerError' })));
+  // Positive pair: genuine zero and non-zero counts survive, in both shapes az can emit.
+  assert.equal(parseQueueCount({ ok: true, value: 0 }), 0);
+  assert.equal(parseQueueCount({ ok: true, value: { count: 0 } }), 0);
+  assert.equal(parseQueueCount({ ok: true, value: { count: 3 } }), 3);
+  assert.equal(parseQueueCount({ ok: true, value: '2' }), 2);
+});
 
 const NOW = Date.parse('2026-10-19T12:00:00Z');
 const IDLE = 30;

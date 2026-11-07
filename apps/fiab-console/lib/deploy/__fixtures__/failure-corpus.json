@@ -140,6 +140,56 @@
       }
     },
     {
+      "name": "eventual-consistency — a private endpoint refused while its Foundry account is still Accepted, verbatim",
+      "source": "deploy-fiab-gcch run 42167265779 (Gov, usgovvirginia), 2026-11-06, Provision leaf (module admin-plane > agent-foundry). Classified unknown / [no signal] before this case existed, so it was never retried although the portal showed the account Succeeded afterwards.",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Accepted",
+      "expect": {
+        "class": "eventual-consistency",
+        "signalId": "eventual.account-provisioning-state",
+        "retryable": true
+      }
+    },
+    {
+      "name": "NOT eventual — the same code in a TERMINAL state is not a wait (control for the exclusion)",
+      "source": "synthesised; the control for the `not` clause on eventual.account-provisioning-state",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Failed",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "NOT eventual — the same code in the terminal state Canceled is not a wait",
+      "source": "synthesised; a control for the `not` clause on eventual.account-provisioning-state",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Canceled",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "NOT eventual — the same code in the terminal state Cancelled (double l) is not a wait",
+      "source": "synthesised; a control for the `not` clause on eventual.account-provisioning-state",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Cancelled",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "NOT eventual — the same code in the terminal state Deleting is not a wait",
+      "source": "synthesised; a control for the `not` clause on eventual.account-provisioning-state",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Deleting",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
       "name": "eventual-consistency — Entra replication lag on a just-created UAMI",
       "source": "ARM RBAC on a principal created earlier in the same deployment",
       "input": "ERROR: (PrincipalNotFound) Principal 3f2b… does not exist in the directory 9c1e….",
@@ -326,6 +376,26 @@
       "expect": {
         "class": "quota",
         "signalId": "quota.tenant-resource-quota",
+        "retryable": false
+      }
+    },
+    {
+      "name": "permission — a nested roleAssignments/write denial wrapped in InvalidTemplateDeployment, verbatim",
+      "source": "deploy-fiab-gcch run 42106150785 (Gov, usgovvirginia), 2026-11-05, Provision leaf from the redacted deploy-failure.json artifact. Classified `defect` / not-remediable (\"file a bug\") before this case existed, although the cause was the deploy identity lacking roleAssignments/write on the adopted lake in the DLZ resource group.",
+      "input": "InvalidTemplateDeployment: The template deployment failed with error: 'Authorization failed for template resource '<guid>' of type 'Microsoft.Authorization/roleAssignments'. The client '<guid>' with object id '<guid>' does not have permission to perform action 'Microsoft.Authorization/roleAssignments/write' at scope '/subscriptions/<redacted>/resourceGroups/rg-csa-loom-dlz--usgovvirginia/providers/Microsoft.Storage/storageAccounts/saloomlv6hjg46gtu66/providers/Microsoft.Authorization/roleAssignments/<guid>'.'.",
+      "expect": {
+        "class": "permission",
+        "signalId": "permission.authorization-failed",
+        "retryable": false
+      }
+    },
+    {
+      "name": "permission — the same denial reaching the classifier as the multi-error wrapper",
+      "source": "the second leaf of the same run: 'Deployment failed with multiple errors', carrying the identical authorization wording.",
+      "input": "InvalidTemplateDeployment: The template deployment failed with error: 'Deployment failed with multiple errors: 'Authorization failed for template resource '<guid>' of type 'Microsoft.Authorization/roleAssignments'. The client '<guid>' with object id '<guid>' does not have permission to perform action 'Microsoft.Authorization/roleAssignments/write' at scope '/subscriptions/<redacted>/resourceGroups/rg-csa-loom-dlz--usgovvirginia/providers/Microsoft.Storage/storageAccounts/saloomlv6hjg46gtu66''.'.",
+      "expect": {
+        "class": "permission",
+        "signalId": "permission.authorization-failed",
         "retryable": false
       }
     },

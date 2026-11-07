@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LHDS PDP decision input",
+  "description": "Reconciled with the W1-4 token-claims contract lhds-at/1 (docs/fiab/health/security.md section A7/A8, PR #5127). The PDP verifies the AS-signed token itself (ES384 against data.lhds.config.jwks) and reads claims from the verified payload, so the interceptor passes the RAW token, never pre-parsed claims. Request-side fields are the interceptor contract owned by W1-5; items marked PROVISIONAL are not yet confirmed by any interceptor implementation (W2-3, W3-3).",
+  "type": "object",
+  "required": ["access_token", "request"],
+  "properties": {
+    "access_token": {
+      "type": "string",
+      "description": "Raw compact JWT: typ at+jwt, alg ES384, lhds_ver lhds-at/1. Claims checked: iss, aud (single string), exp, iat, jti, lhds_ver, tenant, sub, sub_type, client_id, scope (v2 form), lhds_roles, lhds_map_ver, pou, patient (patient/ scopes), idp_tid (user). act or cnf present = deny. pou BTG = deny (W1). Any missing claim = deny."
+    },
+    "request": {
+      "type": "object",
+      "required": ["service", "interaction", "tenant", "base"],
+      "properties": {
+        "service": { "type": "string", "enum": ["fhir", "dicom"] },
+        "interaction": {
+          "type": "string",
+          "description": "fhir: read|vread|history|search|create|update|patch|delete|operation. dicom: wado|qido|stow|delete. Keys of data.lhds.interactions."
+        },
+        "tenant": { "type": "string", "description": "Tenant slug resolved from the URL or host by the interceptor, never from the body. Compared to the tenant claim exactly (no case-folding or trimming)." },
+        "base": { "type": "string", "description": "Base URL of the request as received (the audience the token must name). Must be one of the tenant's bases in data.lhds.stamp." },
+        "resource_type": { "type": "string", "description": "fhir only, required: FHIR resource type of the target." },
+        "op": { "type": "string", "description": "fhir interaction=operation only: e.g. $export. Gated by lhds_roles via the role-scope map." },
+        "patient_compartment": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "PROVISIONAL (engine-resolved, ADR-011): patient ids owning the target, or the patients a search is bound to. Required non-empty for patient/ scopes; empty means unbound and denies. Every owner must equal the token patient."
+        },
+        "categories": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "PROVISIONAL: category values the search carries (search) or the resource has (read), for category-constrained scopes. Compared by exact string to the scope constraint value; system|code vs bare code forms are NOT normalised."
+        }
+      }
+    }
+  }
+}

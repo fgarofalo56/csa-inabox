@@ -124,10 +124,16 @@ resource agwPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
+// Estate Power (#5099 phase B): this gateway is the console's public path for users
+// without VPN, and its only backend pool targets the console (the ACA environment IP).
+// Stopping it would make the surface that RESUMES the estate unreachable for them, so it
+// is exempt from pause. Estate Power would also hold it out at runtime (an IP-only backend
+// cannot be shown not to be the console), but the stamp makes the exemption explicit and
+// independent of an ARM read. Tag only; no behavioural change to the deployment.
 resource appGateway 'Microsoft.Network/applicationGateways@2024-05-01' = {
   name: 'agw-loom-${location}'
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause': 'exempt' })
   zones: ['1', '2', '3']
   properties: {
     sku: {

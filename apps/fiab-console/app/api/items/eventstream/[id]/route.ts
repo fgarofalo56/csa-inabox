@@ -16,10 +16,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
+import { loadKustoItem, loadKustoItemUnscoped, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { teardownForItemDelete } from '@/lib/azure/item-teardown-registry';
 import { recordItemOpen } from '@/lib/items/record-open';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -111,11 +113,9 @@ function configFromContent(content: any): StreamConfig | null {
   };
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     // Feed "Recent": type-specific base routes bypass the generic GET's write.
     await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'eventstream', workspaceId: item.workspaceId });
@@ -164,7 +164,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
 /**
  * DELETE /api/items/eventstream/[id]
@@ -177,28 +177,53 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
  * to tear down on the default path per no-fabric-dependency.md). Returns 404 when
  * the caller's tenant doesn't own it.
  */
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
-    if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // #5046 — role check. `loadKustoItem` only proves the caller CREATED the
+    // workspace (tenant partition), so it neither admitted legitimate Members
+    // nor distinguished roles. Load unscoped and authorize against the parent
+    // workspace with write-capable roles only (Owner/Admin/Member or tenant
+    // admin; `allowReadRoles:false`) - the same ladder the generic route uses.
+    // A missing item and a refused caller both answer 404, as before; a 409
+    // `tenant_unconfirmed` refusal is handed back unflattened.
+    const item = await loadKustoItemUnscoped(params.id, 'eventstream');
+    if (!item || !item.workspaceId) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId: item.workspaceId,
+      itemId: item.id,
+      itemType: 'eventstream',
+      allowReadRoles: false,
+      notFound: 'not found',
+    });
+    if (denied) return denied;
+    // Tear down the backing Event Hub + Stream Analytics job BEFORE the Cosmos
+    // doc goes (the refs live on it), RECORDED-ONLY: the job is deleted by its
+    // recorded `asaJobName`, or - when none was recorded - only after its
+    // `loomItemId` ARM tag proves it belongs to this item. A failed teardown
+    // does not make the item undeletable, but it is SURFACED (`warning` +
+    // `teardown.orphans`), never silent. See lib/azure/item-teardown-registry.ts.
+    const teardown = await teardownForItemDelete(
+      { id: item.id, workspaceId: item.workspaceId, itemType: 'eventstream', displayName: item.displayName, state: item.state as Record<string, unknown> | null },
+      session.claims.oid,
+    );
     const items = await itemsContainer();
     await items.item(item.id, item.workspaceId).delete();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      teardown,
+      ...(teardown.warning ? { warning: teardown.warning } : {}),
+    });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
   const config = sanitizeConfig(body?.config ?? body);
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const saved = await saveItemState(item, {
       source: config.source ?? null,
@@ -221,4 +246,4 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

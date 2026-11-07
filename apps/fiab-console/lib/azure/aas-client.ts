@@ -31,7 +31,7 @@
  *   XMLA Execute/Command — https://learn.microsoft.com/analysis-services/xmla/xml-elements-commands
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { buildModelBimTmsl, type TmslRelationship, AasError, aasDefaultDatabase } from './aas-tmsl';
@@ -134,7 +134,7 @@ export async function executeAasXmla(tmslJson: string, database: string): Promis
     return { ok: false, error: `Token acquisition failed: ${e?.message || String(e)}` };
   }
   try {
-    const res = await fetchWithTimeout(AAS_XMLA_ENDPOINT, {
+    const res = await armCountedFetch(AAS_XMLA_ENDPOINT, {
       method: 'POST',
       headers: {
         'authorization': `Bearer ${token}`,
@@ -186,7 +186,7 @@ export async function updateFabricSemanticModelTmsl(
     `${FABRIC_BASE}/workspaces/${encodeURIComponent(workspaceId)}` +
     `/semanticModels/${encodeURIComponent(semanticModelId)}/updateDefinition`;
   try {
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'POST',
       headers: { 'authorization': `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -204,7 +204,7 @@ export async function updateFabricSemanticModelTmsl(
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 2_000));
-        const poll = await fetchWithTimeout(loc, { headers: { 'authorization': `Bearer ${token}` }, cache: 'no-store' });
+        const poll = await armCountedFetch(loc, { headers: { 'authorization': `Bearer ${token}` }, cache: 'no-store' });
         if (poll.status === 200 || poll.status === 201) return { ok: true };
         if (poll.status !== 202) {
           const t = await poll.text();
@@ -546,7 +546,7 @@ export async function postAasRefresh(
   if (objects && objects.length) {
     body.Objects = objects.map((o) => (o.partition ? { table: o.table, partition: o.partition } : { table: o.table }));
   }
-  const r = await fetchWithTimeout(`${modelBase()}/refreshes`, {
+  const r = await armCountedFetch(`${modelBase()}/refreshes`, {
     method: 'POST',
     headers: { authorization: await authHeader(), 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -577,7 +577,7 @@ export interface AasRefreshStatus {
 
 /** GET the status of a previously-queued refresh. */
 export async function getAasRefreshStatus(refreshId: string): Promise<AasRefreshStatus> {
-  const r = await fetchWithTimeout(`${modelBase()}/refreshes/${encodeURIComponent(refreshId)}`, {
+  const r = await armCountedFetch(`${modelBase()}/refreshes/${encodeURIComponent(refreshId)}`, {
     headers: { authorization: await authHeader() },
   });
   if (!r.ok) {
@@ -789,7 +789,7 @@ export async function applyTmslViaFabric(
   const url = `${FABRIC_BASE}/workspaces/${encodeURIComponent(workspaceId)}/semanticModels/${encodeURIComponent(
     semanticModelId,
   )}/updateDefinition`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ definition }),
@@ -839,7 +839,7 @@ export async function executeAasQuery(
 ): Promise<AasQueryResult> {
   const token = userToken || (await getAasToken());
   const url = `${aasModelUrl(region, serverName, database)}/query`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
@@ -935,7 +935,7 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<{ json:
     const s = qs.toString();
     if (s) url += (url.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method,
     headers: {
       authorization: `Bearer ${token}`,
@@ -1153,7 +1153,7 @@ export async function executeTmsl(
   const token = await calcGroupXmlaToken(host);
   const url = `https://${host}/servers/${serverName}/`;
   const envelope = buildTmslExecuteEnvelope(tmslJson, database);
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
@@ -1304,7 +1304,7 @@ export async function listAasServers(
     `${armBase()}/subscriptions/${encodeURIComponent(subscriptionId)}` +
     `/resourceGroups/${encodeURIComponent(resourceGroup)}` +
     '/providers/Microsoft.AnalysisServices/servers?api-version=2017-08-01';
-  const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${t.token}` }, cache: 'no-store' });
+  const res = await armCountedFetch(url, { headers: { authorization: `Bearer ${t.token}` }, cache: 'no-store' });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new AasError(j?.error?.message || `ARM ${res.status}`, res.status, undefined, url);
   return (j.value || []) as AasServer[];
@@ -1533,7 +1533,7 @@ export async function executeAggTmsl(catalog: string, tmslJson: string): Promise
   }
   const token = await getAggXmlaToken(xmlaScope());
   const envelope = buildSoapExecuteEnvelope(catalog, tmslJson);
-  const res = await fetchWithTimeout(endpoint, {
+  const res = await armCountedFetch(endpoint, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,
@@ -1667,7 +1667,7 @@ export async function provisionAasServer(opts: {
     },
     tags: { 'loom-managed': 'true', 'loom-purpose': 'datamart-migration' },
   };
-  const res = await fetchWithTimeout(aasServerPath(cfg, opts.serverName), {
+  const res = await armCountedFetch(aasServerPath(cfg, opts.serverName), {
     method: 'PUT',
     headers: {
       authorization: `Bearer ${tok}`,
@@ -1691,7 +1691,7 @@ export async function provisionAasServer(opts: {
 export async function getAasServer(serverName: string): Promise<ProvisionedAasServer | null> {
   const cfg = readAasConfig();
   const tok = await aasArmToken();
-  const res = await fetchWithTimeout(aasServerPath(cfg, serverName), {
+  const res = await armCountedFetch(aasServerPath(cfg, serverName), {
     headers: { authorization: `Bearer ${tok}`, accept: 'application/json' },
     cache: 'no-store',
   });
@@ -2235,7 +2235,7 @@ async function postXmla(envelope: string, scope: string, xmlaUrl: string): Promi
   const token = await colGetToken(scope);
   let res: Response;
   try {
-    res = await fetchWithTimeout(xmlaUrl, {
+    res = await armCountedFetch(xmlaUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -2505,7 +2505,7 @@ export async function executeDqCommand(tmsl: object): Promise<void> {
     '</SOAP-ENV:Envelope>',
   ].join('\n');
 
-  const res = await fetchWithTimeout(`${dqModelBase()}/xmla`, {
+  const res = await armCountedFetch(`${dqModelBase()}/xmla`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
@@ -2768,7 +2768,7 @@ export async function executeDax(
   const url = buildTileXmlaUrl(server);
   const tok = await credential.getToken(aasScope());
   if (!tok?.token) throw new AasError('Failed to acquire AAS token', 401);
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tok.token}`,

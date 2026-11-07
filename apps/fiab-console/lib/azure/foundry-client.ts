@@ -16,7 +16,7 @@
  * 404 → null. Any other non-2xx throws FoundryError(status, body).
  */
 import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -84,7 +84,7 @@ async function foundryFetch(
     : '';
   const url = `${foundryBase()}${path}${sep}api-version=${apiVer}${query}`;
   const { query: _q, apiVersion: _av, timeoutMs, ...rest } = init;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -147,7 +147,7 @@ function walkFoundryPages(
 ): Promise<PagedWalkResult<any>> {
   return walkPagedListResult(`foundry ${label}`, async (next, timeoutMs) => {
     const res = next
-      ? await fetchWithTimeout(resolveSameOriginUrl(next, armBase(), 'the ARM token'), { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      ? await armCountedFetch(resolveSameOriginUrl(next, armBase(), 'the ARM token'), { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
       : await firstPage(timeoutMs);
     return readJson<{ value?: any[]; nextLink?: string }>(res); // 404 -> null -> stop
   }, { ...budgetOpts, sameOriginAs: armBase() }); // GHSA-4gvx-9p49-p43g — refuse an off-origin nextLink inside the walker too, not only at the fetch above.
@@ -622,7 +622,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion}${query}`;
   const { query: _q, apiVersion: _av, timeoutMs, ...rest } = init;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -656,7 +656,7 @@ async function amlDataPlaneFetch(
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AML data plane');
   const url = `https://${amlDataPlaneHost(region)}${segment.startsWith('/') ? segment : '/' + segment}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -1093,7 +1093,7 @@ export async function moderateText(text: string, categories?: string[]): Promise
   const tok = await contentSafetyToken();
   const body: any = { text };
   if (categories?.length) body.categories = categories;
-  const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+  const res = await armCountedFetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1108,7 +1108,7 @@ export async function moderateText(text: string, categories?: string[]): Promise
 export async function moderateImage(imageBase64: string): Promise<any> {
   const ep = contentSafetyEndpoint();
   const tok = await contentSafetyToken();
-  const res = await fetchWithTimeout(`${ep}/contentsafety/image:analyze?api-version=2024-09-01`, {
+  const res = await armCountedFetch(`${ep}/contentsafety/image:analyze?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ image: { content: imageBase64 } }),
@@ -1146,7 +1146,7 @@ async function contentSafetyFetch(path: string, init: RequestInit = {}): Promise
   const tok = await contentSafetyToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${ep}/contentsafety${path}${sep}api-version=${CS_DATA_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -1303,7 +1303,7 @@ export async function contentSafetyHealth(): Promise<ContentSafetyHealth> {
       value = { configured, reachable: false, error: 'No Content Safety endpoint resolved.' };
     } else {
       const tok = await contentSafetyToken();
-      const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+      const res = await armCountedFetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
         method: 'POST',
         headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
         body: JSON.stringify({ text: 'ping', categories: ['Hate'] }),
@@ -1398,7 +1398,7 @@ export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVer
   try { tok = await contentSafetyToken(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
+    res = await armCountedFetch(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ userPrompt: userPrompt.slice(0, 10_000), documents: [] }),
@@ -1439,7 +1439,7 @@ export async function moderateContent(text: string): Promise<ContentSafetyVerdic
   try { tok = await contentSafetyToken(); } catch (e) { return safetyFailOpen('moderateContent', e); }
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+    res = await armCountedFetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1909,7 +1909,7 @@ export interface SearchIndexSummary {
 export async function listIndexes(): Promise<SearchIndexSummary[]> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (!res.ok) {
@@ -1927,7 +1927,7 @@ export async function listIndexes(): Promise<SearchIndexSummary[]> {
 export async function getIndex(name: string): Promise<any | null> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (res.status === 404) return null;
@@ -1952,7 +1952,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
       return rest;
     });
   }
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(cleaned),
@@ -1967,7 +1967,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
 export async function searchIndex(name: string, query: string, top = 25): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ search: query, top }),
@@ -1992,7 +1992,7 @@ export async function uploadDocuments(name: string, docs: any[]): Promise<{ uplo
   const svc = searchService();
   const tok = await searchToken();
   const value = docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d }));
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -2023,7 +2023,7 @@ export async function deleteDocuments(name: string, keys: string[], keyField = '
   for (let i = 0; i < keys.length; i += BATCH) {
     const batch = keys.slice(i, i + BATCH);
     const value = batch.map((k) => ({ '@search.action': 'delete', [keyField]: k }));
-    const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+    const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -2072,7 +2072,7 @@ export async function vectorSearch(name: string, opts: {
     body.queryType = 'semantic';
     body.semanticConfiguration = opts.semanticConfiguration;
   }
-  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await armCountedFetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

@@ -7,7 +7,8 @@
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
+import { assertEstateAllowsWake } from '@/lib/estate/estate-wake-guard';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
@@ -63,7 +64,7 @@ function actionUrlFor(coords: WorkspaceCoords, action: 'resume' | 'pause'): stri
 async function armFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -145,6 +146,8 @@ export async function getPoolState(): Promise<{ state: PoolState; sku: string; s
 }
 
 export async function resumePool(): Promise<void> {
+  // #5111: a routine wake must not undo an estate pause. Throws EstatePausedError.
+  await assertEstateAllowsWake('the Synapse dedicated SQL pool');
   const url = await resolveActionUrl('resume');
   const res = await armFetch(url, { method: 'POST' });
   if (!res.ok && res.status !== 202) {

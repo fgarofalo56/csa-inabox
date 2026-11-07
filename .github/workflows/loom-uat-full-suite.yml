@@ -109,7 +109,34 @@ jobs:
       execution: ${{ steps.uat.outputs.execution }}
       result_line: ${{ steps.uat.outputs.result_line }}
     steps:
+      # STAND DOWN VISIBLY on a DECLARED-paused estate (#5045). The lane needs a
+      # RUNNING Commercial estate: the suite drives live Container Apps, Cosmos,
+      # ADX and Synapse. Against a paused one every journey fails for a reason
+      # that is deliberate, which is how a detector turns into noise nobody
+      # reads. The verdict comes from the checked-in declaration ONLY
+      # (scripts/ci/estate-pause-declaration.json), never from observed state:
+      # a genuinely broken estate and a deliberately stopped one look identical,
+      # so keying on state would read a real outage as fine forever. The script
+      # is fail-open by design (unreadable register => not paused => the suite
+      # runs), so a malformed declaration can never silence this lane.
+      - uses: actions/checkout@v7.0.1
+      - name: Is the Commercial estate DECLARED paused?
+        id: pause
+        run: node scripts/ci/estate-pause-declared.mjs --boundary Commercial
+      - name: Stand down - estate is declared paused
+        if: steps.pause.outputs.declared_paused == 'true'
+        run: |
+          echo "::warning::Estate is DECLARED paused in scripts/ci/estate-pause-declaration.json - the full-suite UAT was NOT run. This night is UNMEASURED, not clean."
+          {
+            echo "### Full-suite UAT: STOOD DOWN (not run)"
+            echo ""
+            echo "The Commercial estate is declared paused, so no loom-uat execution was started."
+            echo "**This night is UNMEASURED - it is not a pass.** Resume the estate and delete the"
+            echo "declaration entry (see the register resume instruction) to re-arm the lane."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Azure login
+        if: steps.pause.outputs.declared_paused != 'true'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -122,6 +149,7 @@ jobs:
 
       - name: Run the full UAT suite and wait for a verdict
         id: uat
+        if: steps.pause.outputs.declared_paused != 'true'
         env:
           RG: ${{ env.RG_NAME }}
           JOB: ${{ env.JOB_NAME }}
@@ -329,13 +357,22 @@ jobs:
           # (auto-bind-by-default 5, deploy-integrity R6: hand back a concrete
           # answer, not a pointer to a log).
           #
+          # THE FILTER MUST SELECT FAILURES, NOT THE WORD "axe" (#5045). It used
+          # to match `axe` / `serious`, which every PASSING a11y verdict line
+          # carries ("axe-ratchet ... serious=1 vs baseline"). With
+          # `order by asc | take 60` the passing a11y lines came first and the
+          # line naming the real crash (a UAT_VERDICT with status fail, e.g. the
+          # notebook-run-cell CRASH note) never made the 60. Measured on run
+          # 39425171984: the error annotations listed 22 passing a11y verdicts
+          # and one UAT_REAL_FAILS line, with the crash text absent.
+          #
           # The cost of that gap was real: #3169 sat with "a11y:workspaces and
           # a11y:setup regressed past baseline" and NO violation detail, so the
           # fix needed a manual query against an estate most contributors cannot
           # reach.
           FAILS=""
           if [[ -n "${WS:-}" ]]; then
-            FQ="ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($SINCE) | where ContainerName_s == 'uat' | where Log_s has 'UAT_REAL_FAILS' or Log_s has 'axe' or Log_s has 'serious' | order by TimeGenerated asc | take 60 | project Log_s"
+            FQ="ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($SINCE) | where ContainerName_s == 'uat' | where Log_s has 'UAT_REAL_FAILS' or (Log_s has 'UAT_VERDICT' and Log_s has '\"status\":\"fail\"') | order by TimeGenerated asc | take 60 | project Log_s"
             if FAILS=$(az monitor log-analytics query -w "$WS" --analytics-query "$FQ" --query "[].Log_s" -o tsv 2>"$ERR"); then
               FAILS=$(echo "$FAILS" | tr -d '\r')
             else
@@ -386,6 +423,13 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          # Before #5045 this job had NO checkout, and `gh` without a repo
+          # context dies with "failed to run git: fatal: not a git repository" -
+          # measured on the nightly runs (e.g. 39425171984, step "File or update
+          # the failure issue"), which is why no [uat-nightly] issue was ever
+          # filed. The checkout above now exists, but name the repo explicitly
+          # anyway so this step never depends on a working tree again.
+          GH_REPO: ${{ github.repository }}
           STATUS: ${{ steps.uat.outputs.status }}
           EXECUTION: ${{ steps.uat.outputs.execution }}
           RESULT_LINE: ${{ steps.uat.outputs.result_line }}

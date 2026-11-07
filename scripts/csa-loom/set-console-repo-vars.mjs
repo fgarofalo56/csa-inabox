@@ -22,7 +22,9 @@ export const EXIT_FAILED = 1;
 export const EXIT_USAGE = 2;
 
 const URL_RE = /^https:\/\/[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/;
-const AUD_RE = /^api:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// api://<guid>, or the BARE <guid> for a console app that exposes no identifier URI
+// (the supplied-app path derives the audience from the app's live identifierUris).
+const AUD_RE = /^(api:\/\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function namesFor(boundary) {
   if (boundary === 'GCC-High') {
@@ -37,7 +39,7 @@ export function validate(url, audience) {
     throw new Error('console URL must be https://<plain host> with no path, port, query, slash or whitespace');
   }
   if (typeof audience !== 'string' || !AUD_RE.test(audience)) {
-    throw new Error('console audience must match api://<guid> on a single line');
+    throw new Error('console audience must match api://<guid> or a bare <guid> on a single line');
   }
 }
 

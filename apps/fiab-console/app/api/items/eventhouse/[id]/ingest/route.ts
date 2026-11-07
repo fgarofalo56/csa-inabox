@@ -52,6 +52,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { guardAdxItemRequest, scopeAdxDatabase } from '../../../_lib/adx-item-scope';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -243,7 +244,7 @@ async function handleEventHub(item: WorkspaceItem, body: any): Promise<NextRespo
       compression: 'None',
     },
   };
-  const res = await fetch(url, {
+  const res = await armCountedRawFetch(url, {
     method: 'PUT',
     headers: { 'authorization': `Bearer ${armToken.token}`, 'content-type': 'application/json' },
     body: JSON.stringify(payload),

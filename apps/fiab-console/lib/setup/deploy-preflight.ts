@@ -32,7 +32,7 @@
  */
 
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 
 /**
  * Hard ceiling on each pre-flight ARM round-trip. The pre-flight is a
@@ -241,7 +241,7 @@ export async function checkSubscriptionDeployPermission(
     // Permissions - List is a GET (per the Authorization REST API); POST returns
     // 405/404 and would be mis-read as a deny. Bounded — a hung cross-sub ARM
     // call becomes an honest `error` result, never an edge 504.
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${armBase()}/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`,
       { method: 'GET', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
       PREFLIGHT_FETCH_TIMEOUT_MS,
@@ -291,7 +291,7 @@ export async function checkResourceGroupManagePermission(
     // Permissions - List For Resource Group is a GET (per the Authorization REST
     // API). POST returns 405/404, which the caller would mis-read as "Reader-only"
     // and false-flag a verified RG-scoped-Contributor DLZ as needing RBAC repair.
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${armBase()}/subscriptions/${subscriptionId}/resourceGroups/${encodeURIComponent(
         resourceGroup,
       )}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`,
@@ -337,7 +337,7 @@ export async function checkProvidersRegistered(
     return { missing: [], error: `token: ${e?.message ?? String(e)}` };
   }
   try {
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${armBase()}/subscriptions/${subscriptionId}/providers?api-version=2022-09-01&$select=namespace,registrationState`,
       { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
       PREFLIGHT_FETCH_TIMEOUT_MS,

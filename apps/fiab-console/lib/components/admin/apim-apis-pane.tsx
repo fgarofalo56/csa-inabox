@@ -10,7 +10,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimApiSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   protocolBadge: { marginRight: tokens.spacingHorizontalS },
@@ -36,7 +36,7 @@ const EMPTY_FORM: ApiForm = {
   subscriptionRequired: true,
 };
 
-export function ApimApisPane() {
+export function ApimApisPane({ gatewayId }: { gatewayId?: string } = {}) {
   const styles = useStyles();
   const [apis, setApis] = useState<ApimApiSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +61,7 @@ export function ApimApisPane() {
     // apimFetchJson reads the body as text first and surfaces a non-JSON body
     // (HTML 404/500 page) or an honest 503 config-gate as a readable error
     // instead of crashing the pane with "Unexpected token '<'".
-    apimFetchJson('/api/items/apim-api')
+    apimFetchJson(withGateway('/api/items/apim-api', gatewayId))
       .then((d) => {
         if (d.ok && Array.isArray(d.apis)) {
           setApis(d.apis as ApimApiSummary[]);
@@ -71,7 +71,7 @@ export function ApimApisPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -104,7 +104,7 @@ export function ApimApisPane() {
     try {
       // POST upserts: create derives an id from displayName server-side; edit
       // reuses the existing name. The route does a real ARM PUT /apis.
-      const d = await apimFetchJson('/api/items/apim-api', {
+      const d = await apimFetchJson(withGateway('/api/items/apim-api', gatewayId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -133,7 +133,7 @@ export function ApimApisPane() {
     if (!deleting) return;
     setDeleteBusy(true);
     try {
-      const d = await apimFetchJson(`/api/items/apim-api/${encodeURIComponent(deleting.name)}`, {
+      const d = await apimFetchJson(withGateway(`/api/items/apim-api/${encodeURIComponent(deleting.name)}`, gatewayId), {
         method: 'DELETE',
       });
       if (d.ok) {

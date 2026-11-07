@@ -23,7 +23,7 @@
  */
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed, type PagingTruncation } from '@/lib/azure/paging-budget';
 import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
@@ -64,7 +64,7 @@ async function listSubscriptions(
   let url = `${arm()}/subscriptions?api-version=2022-12-01`;
   while (budget.claimPage()) {
     const r = await budget.runPage((timeoutMs) =>
-      fetchWithTimeout(
+      armCountedFetch(
         // SECURITY (GHSA-4gvx-9p49-p43g): after the first page `url` is an
         // absolute URL read out of a RESPONSE BODY and an ARM bearer token — a
         // user OBO token here — rides on the request. Pin it to `armBase()` and

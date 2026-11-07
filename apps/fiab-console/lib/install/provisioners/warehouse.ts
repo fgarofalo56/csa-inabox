@@ -21,6 +21,7 @@
  */
 import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
+import { isEstatePausedError } from '@/lib/estate/estate-wake-guard';
 import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 import { resolveInfraResidual } from './types';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
@@ -127,6 +128,16 @@ async function ensurePoolOnline(steps: string[]): Promise<RemediationGate | null
       await resumePool();
       steps.push('Resume accepted (202). Pool will be Online in ~1-3 min; click Retry to run DDL + seed.');
     } catch (e: any) {
+      if (isEstatePausedError(e)) {
+        // #5111: the estate paused this pool on purpose. Do NOT wake it and do NOT
+        // say "Loom issued an ARM resume" - none was sent.
+        steps.push(`Resume NOT sent: ${e.message}`);
+        return {
+          reason: 'The estate is paused, so the Synapse dedicated SQL pool was deliberately left Paused. DDL + seed did not run.',
+          remediation: e.message,
+          link: '/admin/scaling',
+        };
+      }
       steps.push(`ARM resume submit failed: ${e?.message || String(e)}`);
     }
     return RESUME_GATE;

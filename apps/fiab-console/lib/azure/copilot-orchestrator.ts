@@ -76,6 +76,7 @@ import {
 } from './synapse-sql-client';
 import * as synapseDev from './synapse-dev-client';
 import * as synapsePool from './synapse-pool-arm';
+import { isEstatePausedError } from '@/lib/estate/estate-wake-guard';
 import { registerWarehouseTools } from '../copilot/sql-tools';
 import * as databricks from './databricks-client';
 import * as apim from './apim-client';
@@ -521,7 +522,17 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Synapse',
     description: 'Resume the dedicated SQL pool (idempotent if already Online).',
     parameters: obj({}),
-    handler: async () => { await synapsePool.resumePool(); return { ok: true }; },
+    handler: async () => {
+      try {
+        await synapsePool.resumePool();
+        return { ok: true };
+      } catch (e) {
+        // #5111: the estate paused the pool on purpose. Hand the user the real reason
+        // (who/when/where to resume) instead of a generic tool failure.
+        if (isEstatePausedError(e)) return { ok: false, error: e.message, estatePaused: true };
+        throw e;
+      }
+    },
   });
   r.register({
     name: 'synapse_list_pipelines',

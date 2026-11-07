@@ -45,7 +45,7 @@
   "dependencies": {
     "@csa-loom/sdk": "file:../loom-sdk",
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.16.0",

@@ -256,7 +256,15 @@ param functionAppsConfig functionAppsConfigT = {}
 
 type adxConfigT = {
   @description('ADX cluster SKU. Dev(No SLA) SKUs are ~$140/mo and are COMMERCIAL-ONLY — Azure Government offers no Dev/Basic-tier ADX SKU in usgovvirginia or usgovarizona (MEASURED 2026-08-27, gov-adx-sku-probe run 33120409251). The six Standard_E*as_v5 / E80ids_v4 entries are the intersection of what both Gov regions offer. Standard tier has a 2-node minimum, so a Gov cluster costs two instances, not one (#4141, #4072).')
-  adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5' | 'Standard_E8as_v5+1TB_PS' | 'Standard_E8as_v5+2TB_PS' | 'Standard_E16as_v5+3TB_PS' | 'Standard_E16as_v5+4TB_PS' | 'Standard_E80ids_v4' | 'Standard_E80ids_v4+32TB_PS')?
+  adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5' | 'Standard_E8as_v5+1TB_PS' | 'Standard_E8as_v5+2TB_PS' | 'Standard_E16as_v5+3TB_PS' | 'Standard_E16as_v5+4TB_PS' | 'Standard_E80ids_v4' | 'Standard_E80ids_v4+32TB_PS' | 'Standard_L8as_v3')?
+
+  @description('Explicit ADX cluster name (4-22 chars, lowercase letters, digits and hyphens). Unset = the derived name adx-csa-loom-<6 hex of the subscription id>. Needed when a deleted cluster\'s name is still reserved (Gov run 42106150785: InvalidClusterName "already taken" about 20 hours after the delete). A landing zone attaching to this cluster must be given the same name (LOOM_ADMIN_ADX_CLUSTER / adminPlaneAdxClusterName).')
+  @minLength(4)
+  @maxLength(22)
+  adxClusterName: string?
+
+  @description('Region for the ADX cluster. Unset = the hub location. Gov run 42157975744: a fresh Standard_L8as_v3 cluster in usgovvirginia was refused (InsufficientResourcesForSubscription, "no available resources for the cluster"), so GCC-High places it in usgovarizona. ADX has no private endpoint in this topology, so there is no subnet region to match; endpoints come from the cluster outputs.')
+  adxLocation: string?
 
   @description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
   adxEnableOptimizedAutoscale: bool?
@@ -361,6 +369,9 @@ type observabilityConfigT = {
   @description('Deploy the V1 scheduled synthetic-journey monitor (loom-synthetic-monitor Container App Job — six real journeys incl. the TRUE MSAL login probe, every 15 min, in-VNet). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the specs).')
   syntheticMonitorEnabled: bool?
 
+  @description('API Gateway Plane W1-2 - enable the GatewayLlmLogs APIM diagnostic category. Set per boundary from the W0-9 measurement: true on Commercial, false on GCC-High (category absent) and on IL5 / GCC / DoD (unmeasured). Unset = false.')
+  apiplaneLlmLogs: bool?
+
   @description('Cron for the synthetic-journey runs. Default every 15 minutes.')
   syntheticMonitorCron: string?
 
@@ -438,6 +449,30 @@ type observabilityConfigT = {
 
   @description('N5 — per-pass dispatch bound (LOOM_ASSET_MAX_TRIGGERS). 0 (default) uses the code default of 25. A pass can never dispatch more materializations than this.')
   assetReconcilerMaxTriggers: int?
+
+  // LHDS (Health Data Services) Console wiring. The health control plane is its
+  // OWN deployment unit (health.bicep / deploy-health.yml), so its outputs are not
+  // visible to this template; the operator supplies them here after that deploy.
+  // They ride this bag because main.bicep is at the 256-param ceiling. Every one
+  // defaults to empty: an estate that never turned health on sees the neutral
+  // opt-in gate, not an error. No secret or id is hardcoded.
+  @description('LHDS — HTTPS base URL of loom-health-cp (LOOM_HEALTH_CP_URL), e.g. the fqdn output of modules/health/control-plane.bicep. Empty = health not deployed.')
+  healthCpUrl: string?
+
+  @description('LHDS — token audience loom-health-cp accepts (LOOM_HEALTH_CP_AUDIENCE); one of the control_plane_audiences given to deploy-health.yml.')
+  healthCpAudience: string?
+
+  @description('LHDS — id of a registered, healthy stamp new health tenants are placed on (LOOM_HEALTH_DEFAULT_STAMP_ID).')
+  healthDefaultStampId: string?
+
+  @description('LHDS — id of the registered Gov health stamp (LOOM_HEALTH_GOV_STAMP_ID); empty until one exists. Switches the Gov image gate on.')
+  healthGovStampId: string?
+
+  @description('LHDS — id of the workflow run that verified the Gov image lane (Trivy + cosign) (LOOM_HEALTH_GOV_IMAGE_ATTESTATION). Empty until #4584 lands; do not set by hand.')
+  healthGovImageAttestation: string?
+
+  @description('LHDS — "verified" only once the lakehouse isolation prerequisite is deployed and checked live (LOOM_HEALTH_LAKEHOUSE_ISOLATION). Empty keeps the health lakehouse sink disabled.')
+  healthLakehouseIsolation: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -509,6 +544,11 @@ var sparkKeepWarmCron = functionAppsConfig.?sparkKeepWarmCron ?? '*/5 * * * *'
 // copilot-evaluator-job.bicep. Must match that the module default.
 var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 5000
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
+// Same expression as adx-cluster.bicep's own default, so a boundary that sets no name keeps its derived name.
+var adxClusterNameEff = adxConfig.?adxClusterName ?? 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
+// Unset = the hub location, byte-for-byte the old behaviour. The cluster, its databases and their data connections
+// must all share this region (an ADX database's `location` must equal its cluster's).
+var adxLocationEff = adxConfig.?adxLocation ?? location
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
 var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
@@ -616,6 +656,9 @@ param apimEnabled bool = false
 
 @description('Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed.')
 param aiSearchEnabled bool = false
+
+@description('Region for the AI Search service. Empty = the hub location. Gov run 42106150785: Microsoft.Search `standard` was unavailable in usgovvirginia ("does not have enough resources available"), so GCC-High sets usgovarizona. The private endpoint stays in the hub subnet; a private endpoint may target a service in another region.')
+param aiSearchLocation string = ''
 
 @description('Deploy shared ADX cluster in the admin plane. Each DLZ then attaches its own database to this single cluster.')
 param adxEnabled bool = false
@@ -1898,9 +1941,13 @@ param loomStorageAccount string = ''
 @description('True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5).')
 param loomStorageAccountSameSub bool = true
 
+@description('Resource group that holds the lake storage account (loomStorageAccount). Empty = loomDlzRg, which is right whenever this template deployed the lake. Set it when the lake is ADOPTED from a different resource group in this subscription: loomDlzRg is the ADMIN resource group whenever useSingleDlz is false, so every storage-grant module scoped to it looked for the account in the wrong RG (Gov run 42082972878: ResourceNotFound / ParentResourceNotFound on the adopted lake under loom-s3-gateway-lake-rbac and org-visuals-rbac).')
+param loomStorageAccountRg string = ''
+
 // Grants may only be attempted when the account is BOTH configured and local.
 // Every consumer below uses this instead of `!empty(loomStorageAccount)`.
 var loomStorageGrantable = !empty(loomStorageAccount) && loomStorageAccountSameSub
+var loomStorageRg = empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg
 
 @description('True when a DIFFERENT pass in the same deployment owns the lake grants this module cannot make — platform/fiab/bicep/main.bicep\'s `dlzLakeGrantPass` (modules/data-plane/dlz-lake-grant-pass.bicep, #3336), invoked at `resourceGroup(<lakeSub>, <lakeRg>)` with coordinates read from the adopt plan. Set by the orchestrator ONLY after the deploy lane has MEASURED that the deploying identity holds Microsoft.Authorization/roleAssignments/write at the lake (scripts/csa-loom/probe-lake-grant-rights.mjs). It does NOT arm any grant in THIS module — every module here still keys on loomStorageGrantable, so nothing new can fail in this subscription. It exists so a capability whose grant has an owner ELSEWHERE is not also blocked from DEPLOYING here, which is the defect that left svc-s3-gateway with no deploy path on any tenant estate whose lake is cross-sub (#3337).')
 param loomStorageGrantedElsewhere bool = false
@@ -3461,7 +3508,10 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
   // HUB PE-writer serialization chain (see consoleCosmos header).
   dependsOn: [ keyvault, consoleCosmos, registry ]
   params: {
-    location: location
+    location: empty(aiSearchLocation) ? location : aiSearchLocation
+    // The endpoint lives in the hub VNet, so it stays in the hub region; so does the (VNet-injected) script host.
+    privateEndpointLocation: location
+    scriptLocation: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneSearchId: network.outputs.privateDnsZoneIds.search
     workspaceId: monitoring.outputs.lawId
@@ -3806,6 +3856,8 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     seedSampleApi: seedSampleApi
+    // API Gateway Plane W1-2 - GatewayLlmLogs per boundary (observabilityConfig bag; measured in W0-9).
+    apiplaneLlmLogs: observabilityConfig.?apiplaneLlmLogs ?? false
     // Model-strategy M4 — OPT-IN AI-gateway (default OFF). Authored only when
     // opted in AND a real AOAI endpoint exists; else the console uses direct-with-MI.
     aoaiApimGatewayEnabled: aoaiApimGatewayEnabled
@@ -3870,7 +3922,8 @@ var effectiveAdxSkuName = (boundary == 'GCC-High' || boundary == 'IL5') && start
 module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {
   name: 'adx-cluster'
   params: {
-    location: location
+    location: adxLocationEff
+    clusterName: adxClusterNameEff
     skuName: effectiveAdxSkuName
     enableOptimizedAutoscale: adxEnableOptimizedAutoscale
     autoscaleMinimum: adxAutoscaleMinimum
@@ -3895,7 +3948,7 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     // subscription (a sub-scoped deployment cannot grant there) → grant is
     // skipped → wizard shows the honest gate. The console still binds the name.
     adlsAccountName: loomStorageGrantable ? loomStorageAccount : ''
-    adlsAccountRg: loomDlzRg
+    adlsAccountRg: loomStorageRg
     // EH data connections: grant cluster MI Azure Event Hubs Data Receiver on the DLZ EH namespace.
     // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
     ehNamespaceName: loomEventHubNamespace
@@ -3935,7 +3988,7 @@ module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerN
 // at the storage account's RG (DLZ lake account is commonly in a different RG).
 module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && (!empty(loomRtiExportAdls) || loomStorageGrantable)) {
   name: 'adx-export-rbac'
-  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : resourceGroup().name)
+  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : (empty(loomRtiExportAdls) ? loomStorageRg : resourceGroup().name))
   params: {
     exportAdlsAccountName: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount
     clusterPrincipalId: adxCluster!.outputs.clusterPrincipalId
@@ -3950,7 +4003,7 @@ module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingA
 // editor) when loomStorageAccount is unset.
 module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'label-rbac-grants'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -3974,7 +4027,7 @@ module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomSt
 // from grant on 4 of 7 consumers; this is one of the ones it missed.
 module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'console-azure-connections-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     storageAccountName: loomStorageAccount
@@ -4011,7 +4064,7 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
 // the parent resource '…/saloomdefaulttr4nm4dcgsq' could not be found".
 module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
   name: 'org-visuals-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -4025,7 +4078,8 @@ module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGr
 module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled && adxEnabled && empty(existingAdxClusterName)) {
   name: 'workspace-monitor'
   params: {
-    location: location
+    // Its only uses of `location` are the ADX database and data connection, which must follow the cluster's region.
+    location: adxLocationEff
     adxClusterName: adxCluster!.outputs.clusterName
     monitorDbName: workspaceMonitorDbName
     lawName: monitoring.outputs.lawName
@@ -5018,6 +5072,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // tab still writes Delta<->Iceberg dual metadata into the lake and
             // every catalog surface honest-gates with a Fix-it.
             { name: 'LOOM_ICEBERG_CATALOG_URL', value: icebergCatalogUrl }
+            // LHDS W1-7 — Console wiring for the health-tenant item and its four
+            // gates (health-control-plane / -stamp-capacity / -gov-image-gate /
+            // -lakehouse-isolation). Sourced from observabilityConfig.health*;
+            // empty = health not deployed (neutral opt-in, not an error).
+            { name: 'LOOM_HEALTH_CP_URL', value: observabilityConfig.?healthCpUrl ?? '' }
+            { name: 'LOOM_HEALTH_CP_AUDIENCE', value: observabilityConfig.?healthCpAudience ?? '' }
+            { name: 'LOOM_HEALTH_DEFAULT_STAMP_ID', value: observabilityConfig.?healthDefaultStampId ?? '' }
+            { name: 'LOOM_HEALTH_GOV_STAMP_ID', value: observabilityConfig.?healthGovStampId ?? '' }
+            { name: 'LOOM_HEALTH_GOV_IMAGE_ATTESTATION', value: observabilityConfig.?healthGovImageAttestation ?? '' }
+            { name: 'LOOM_HEALTH_LAKEHOUSE_ISOLATION', value: observabilityConfig.?healthLakehouseIsolation ?? '' }
             // #3339 fix 1 — the Entra audience the BFF mints its SUBJECT token
             // against before the RFC 8693 exchange at the catalog
             // (lib/azure/iceberg-catalog-client.ts `resolveIcebergAuth`).
@@ -5391,7 +5455,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
-            { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
+            // Console-created ADX children (KQL databases, Eventhouse data connections) must carry the CLUSTER's region.
+            // A cluster this template creates is in adxLocationEff; an adopted one is assumed to be in the hub location.
+            { name: 'LOOM_KUSTO_LOCATION',     value: !empty(existingAdxClusterName) ? location : (adxEnabled ? adxLocationEff : '') }
             // Per-DLZ ADX database is named loomdb_<domain>; the single-sub DLZ
             // uses domain "default" → loomdb_default. Underscore (not hyphen) so
             // the name is a valid bare KQL identifier. For a reused cluster the
@@ -5466,6 +5532,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_APIM_SUB',           value: !empty(existingApimName) ? byoApimSub : (apimEnabled ? subscription().subscriptionId : '') }
+            // API Gateway Plane (W1-2): feature switch (default ON, opt-out) and the
+            // deploy-owned gateway ARM id the Console auto-registers on first admin load.
+            { name: 'LOOM_APIPLANE_ENABLED',   value: 'true' }
+            { name: 'LOOM_APIPLANE_DEPLOY_GATEWAY_ID', value: !empty(existingApimName) ? '/subscriptions/${byoApimSub}/resourceGroups/${byoApimRg}/providers/Microsoft.ApiManagement/service/${existingApimName}' : (apimEnabled ? apim!.outputs.apimResourceId : '') }
             // Cosmos DB control-plane navigator (databases/containers/sprocs). This
             // is the USER-navigated account (distinct from Loom's own store at
             // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console
@@ -6864,7 +6934,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         external: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
-        minReplicas: 1
+        // Disabled (default) => no always-on failing replica: scale to zero and declare
+        // no probes (the worker serves no /health listener; crash-looped since 2026-07-23).
+        // Enabled => unchanged (min 1, the three HTTP probes).
+        minReplicas: loomDirectLakeShimEnabled ? 1 : 0
+        noProbes: !loomDirectLakeShimEnabled
         maxReplicas: 2
         env: [
           // Cosmos config store the shim reads its per-model refresh policy from
@@ -7089,7 +7163,7 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 //    isolated scratch-RG experiment against THIS role and THIS scope.
 module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-transform-runner-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: identity.outputs.uamiConsolePrincipalId
@@ -7386,7 +7460,7 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
 // blanket grant, or a move to dedicated per-app identities.
 module servingTierLakeRbac '../data-plane/serving-tier-lake-rbac.bicep' = if ((duckdbTierActive || icebergCatalogActive) && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-serving-tier-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: identity.outputs.uamiConsolePrincipalId
@@ -7447,7 +7521,7 @@ module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
 // that does not hold the account (#3202's remaining consumers).
 module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-s3-gateway-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: s3Gateway!.outputs.storageUamiPrincipalId
@@ -8010,7 +8084,7 @@ resource risingwaveAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // account name either way; only the grant is conditional.
 module risingwaveLakeRbac 'azure-connections-rbac.bicep' = if (risingwaveActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'risingwave-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     consolePrincipalId: risingwaveUami!.properties.principalId
     storageAccountName: loomStorageAccount
@@ -8203,7 +8277,7 @@ resource directLakeAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // inside the container — fail-closed and legible, never a silent wrong answer.
 module directLakeLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (directLakeSvcActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-directlake-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: directLakeUami!.properties.principalId
@@ -9014,7 +9088,7 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
 // was not found" — the lake lives in the DLZ subscription, not the admin RG.
 module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && loomStorageGrantable) {
   name: 'aas-direct-lake-shim'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     location: location
     storageAccountName: loomStorageAccount

@@ -45,6 +45,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { TokenCredential } from '@azure/identity';
 import { armBase, armScope } from '../azure/cloud-endpoints';
 import type { NormalizedOutput } from '../azure/synapse-livy-client';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 const ARM_SCOPE = armScope();
 const NOTEBOOK_TOKEN_API_VERSION = '2024-10-01';
@@ -175,7 +176,7 @@ export async function getNotebookToken(forceRefresh = false): Promise<NotebookTo
     `/providers/Microsoft.MachineLearningServices/workspaces/${cfg.ws}` +
     `/listNotebookAccessToken?api-version=${NOTEBOOK_TOKEN_API_VERSION}`;
 
-  const res = await fetch(url, {
+  const res = await armCountedRawFetch(url, {
     method: 'POST',
     headers: { authorization: await armAuthHeader(), 'content-type': 'application/json' },
   });

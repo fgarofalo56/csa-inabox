@@ -46,7 +46,7 @@
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE, type PageDeadline } from '@/lib/azure/paging-budget';
 import { adoptionArmTypes, armTypeToServiceKey, getServiceDef } from '@/lib/deploy/adoption-catalog';
 import { COVERAGE_QUERY } from '@/lib/deploy/discovery-model';
@@ -207,7 +207,7 @@ export async function probeArgCoverage(
   for (const group of groups) {
     let res: Response;
     try {
-      res = await fetchWithTimeout(
+      res = await armCountedFetch(
         `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`,
         {
           method: 'POST',
@@ -254,7 +254,7 @@ async function probeSubscription(
 ): Promise<{ readable: true; displayName?: string } | { readable: false; detail: string }> {
   const url = `${armBase()}/subscriptions/${encodeURIComponent(subscriptionId)}?api-version=${SUB_API_VERSION}`;
   try {
-    const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' }, timeoutMs);
+    const res = await armCountedFetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' }, timeoutMs);
     if (res.ok) {
       const j: any = await res.json().catch(() => ({}));
       return { readable: true, displayName: typeof j?.displayName === 'string' ? j.displayName : undefined };
@@ -448,7 +448,7 @@ export async function scanEstate(req: EstateScanRequest): Promise<EstateScanResu
       let page: Response | PageDeadline;
       try {
         page = await budget.runPage((timeoutMs) =>
-          fetchWithTimeout(
+          armCountedFetch(
             `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`,
             {
               method: 'POST',

@@ -262,7 +262,10 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
             : ((contains(app, 'tier') && app.tier == 'console')
                 ? { cpu: json(consoleCpu), memory: consoleMemory }
                 : { cpu: json('0.5'), memory: '1Gi' })
-          probes: [
+          // `noProbes: true` (set per app in admin-plane/main.bicep) declares NO probes:
+          // for a worker with no HTTP listener an HTTP probe can only fail. Absent =>
+          // the three probes below, unchanged for every other app.
+          probes: contains(app, 'noProbes') && app.noProbes ? [] : [
             {
               type: 'Liveness'
               httpGet: {

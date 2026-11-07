@@ -124,7 +124,7 @@ describe('admin/env-config registry', () => {
     expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
   });
 
-  it('exposes exactly the 62 editable runtime variables (catalog completeness)', () => {
+  it('exposes exactly the 211 editable runtime variables (catalog completeness)', () => {
     // The env-config catalog is the union of every required + anyOf key across
     // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-<count>; this
     // pins the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to
@@ -360,7 +360,13 @@ describe('admin/env-config registry', () => {
     // the new svc-databricks-account-admin gate. bicep already forwarded it
     // (loomDatabricksAccountId) but no spec required it, so a Fix-it could not
     // write the one value the account-admin probe needs before it can ask.
-    expect(EDITABLE_ENV.length).toBe(205);
+    // Then to 210 by LHDS W1-7, +5/-0: LOOM_HEALTH_CP_URL, LOOM_HEALTH_CP_AUDIENCE,
+    // LOOM_HEALTH_DEFAULT_STAMP_ID, LOOM_HEALTH_GOV_IMAGE_ATTESTATION and
+    // LOOM_HEALTH_LAKEHOUSE_ISOLATION (the four health-* gates; GOV_STAMP_ID is an
+    // appliesWhenPresent trigger, not a required var, so it is not editable).
+    // Then to 211 by LHDS W1-7 follow-up, +1/-0: LOOM_HEALTH_AUTH_GRAPH_CONSENT
+    // (the health-auth-graph-consent gate).
+    expect(EDITABLE_ENV.length).toBe(211);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

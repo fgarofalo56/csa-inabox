@@ -3354,7 +3354,9 @@ test('CONTRACT: the build lane carries ACR_LEASE_STATE across the acquire/releas
   assert.match(yaml, /lease_state: \$\{\{ steps\.acquire\.outputs\.lease_state \}\}/,
     'acr_enable must publish the lease state; $GITHUB_ENV does not cross jobs, and without this the release ' +
       'job cannot tell an erased lease from one it never held');
-  assert.match(yaml, /needs: \[resolve, build, acr_enable\]/,
+  // carry_forward is awaited too: re-locking the registry under a running re-tag
+  // would deny its data-plane reads (changed-app plan, plan-image-builds.mjs).
+  assert.match(yaml, /needs: \[resolve, build, acr_enable, carry_forward\]/,
     'acr_restore must depend on acr_enable or it cannot read those outputs');
   assert.match(yaml, /ACR_LEASE_STATE: \$\{\{ needs\.acr_enable\.outputs\.lease_state \|\| 'none' \}\}/,
     'and it must actually consume it — a published output nobody reads is the guard-adoption gap');
@@ -3614,7 +3616,11 @@ test('the gate keeps actions:read and the auto-heal gets actions:write on the JO
   // run-delete / artifact-delete / cancel for no reason.
   const jobAt = yaml.indexOf('    name: Deploy + validate CSA Loom in Commercial');
   assert.notEqual(jobAt, -1, 'the deploy-validate job was renamed; this assertion is looking at the wrong job');
-  const jobHead = yaml.slice(jobAt, jobAt + 1600);
+  // The job's own keys (if:, needs:, permissions:) all precede `steps:`, so read up to there. A
+  // fixed 1600-byte window broke when #5114 lengthened the job's if: (permissions moved to byte 1635).
+  const stepsAt = yaml.indexOf('\n    steps:', jobAt);
+  assert.notEqual(stepsAt, -1, 'the deploy-validate job has no steps: key after its name; the slicer is looking at the wrong job');
+  const jobHead = yaml.slice(jobAt, stepsAt);
   const jobPerms = /\n {4}permissions:\n((?: {6}\S.*\n)+)/.exec(jobHead);
   assert.ok(jobPerms, 'the deploy-validate job declares no permissions block, so it inherits the workflow-level ' +
     'one — and the auto-heal dispatch (#3799) would 403 on the one run where the estate is already wrong');
@@ -4912,6 +4918,12 @@ const UNLEASED_ARM_IMAGE_WRITERS = Object.freeze({
     reason:
       'IL5 boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape. Unported sovereign gap, same as GCC-High. cloud-parity.md, #3676.',
   },
+  'deploy-health.yml': {
+    writes: 1,
+    recorded: '2026-10-25',
+    reason:
+      'LHDS, dispatch-only, Commercial and GCC-High. `az deployment sub create -f platform/fiab/bicep/health.bicep` renders exactly ONE Container App, loom-health-cp (modules/health/control-plane.bicep), which admin-plane/main.bicep never renders and which no roll, redeploy-with-apps or dataplane-roll lane writes (it is in no ROLL_APPS list and no appImageTags key; scripts/ci/deploy-image-roles.mjs NOT_ROLL_BLOCKING). So the field this deploy writes is not a field any leased writer writes: no shared field to arbitrate, and taking the estate lease would only make a health deploy wait on an unrelated roll. The risk this DOES leave is a health deploy starting while the estate is mid-roll on the same hub environment; the estate-pause gate is the only serialiser. Same shape as deploy-loom-sharing.yml. Revisit if loom-health-cp ever joins a roll set. Refs #5116.',
+  },
   'deploy-loom-sharing.yml': {
     writes: 1,
     recorded: '2026-09-11',
@@ -6168,4 +6180,96 @@ test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', {
   assert.match(r.out, /LOSING the claim race/);
   assert.doesNotMatch(r.out, /Two lanes believed they held the same mutex/,
     'R7: this run never confirmed, so it cannot assert that two lanes held the mutex');
+});
+
+// ---------------------------------------------------------------------------
+// LOOM_ALLOW_IMAGE_TAG_REVERT reaches pin-refresh (Gov run 41977484915)
+// ---------------------------------------------------------------------------
+// The revert gate accepted the acknowledgement and the very next step refused the same digest-pinned app,
+// so the override was reachable and useless. Each control below names the value that breaks it.
+
+const DIGEST_UNITY = [{ name: 'loom-unity', image: 'acr1.azurecr.io/loom-unity@sha256:' + 'b'.repeat(64) }];
+
+test('ACK: a digest-pinned app proceeds when acknowledged, and the verdict NAMES what was acknowledged', () => {
+  // Breaks if: acknowledgeDigestPinned is ignored (decision stays 'refuse') or acknowledged comes back empty.
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1' },
+    resolution: resolveRunningImageTags(DIGEST_UNITY),
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'proceed', v.reason);
+  assert.deepEqual(v.acknowledged.map((u) => u.key), ['unity']);
+  assert.match(v.reason, /ACKNOWLEDGED via LOOM_ALLOW_IMAGE_TAG_REVERT=true: unity run by digest/);
+});
+
+test('ACK CONTROL: the SAME state without the acknowledgement still REFUSES (the default is unchanged)', () => {
+  // Breaks if: the acknowledgement defaults on. Only the flag differs from the test above.
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1' },
+    resolution: resolveRunningImageTags(DIGEST_UNITY),
+  });
+  assert.equal(v.decision, 'refuse');
+  assert.match(v.reason, /UNKNOWN is not "unchanged"/);
+  assert.deepEqual(v.acknowledged, []);
+});
+
+test('ACK DOES NOT WIDEN: an acknowledged run still refuses an unknown that is NOT a digest', () => {
+  // Breaks if: the acknowledgement covers every unknown. A console running two different tags is ambiguous,
+  // not digest-pinned, and an operator who acknowledged a digest revert said nothing about that.
+  const resolution = resolveRunningImageTags([
+    { name: 'loom-console', image: 'acr1.azurecr.io/loom-console:aaaa1111' },
+    { name: 'loom-console-b', image: 'acr1.azurecr.io/loom-console:bbbb2222' },
+  ]);
+  assert.ok(resolution.unknown.length >= 1 && resolution.unknown.every((u) => u.digest !== true), JSON.stringify(resolution.unknown));
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { [CONSOLE_IMAGE_KEY]: STALE },
+    resolution,
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'refuse', v.reason);
+});
+
+test('ACK, mixed: one digest app acknowledged plus one ambiguous app REFUSES, and names only the ambiguous one', () => {
+  // Breaks if: a single acknowledged key clears the whole unknown list.
+  const resolution = resolveRunningImageTags([
+    ...DIGEST_UNITY,
+    { name: 'loom-console', image: 'acr1.azurecr.io/loom-console:aaaa1111' },
+    { name: 'loom-console-b', image: 'acr1.azurecr.io/loom-console:bbbb2222' },
+  ]);
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1', [CONSOLE_IMAGE_KEY]: STALE },
+    resolution,
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'refuse', v.reason);
+  assert.match(v.reason, new RegExp(`${CONSOLE_IMAGE_KEY} \\(pinned`));
+  assert.doesNotMatch(v.reason, /unity \(pinned/, 'the acknowledged key must not be listed as the blocker');
+});
+
+test('CLI ACK: LOOM_ALLOW_IMAGE_TAG_REVERT=true exits 0 and warns; unset or anything else exits 1', () => {
+  // Breaks if: cliMain stops reading the variable, or reads it loosely ("1", "yes", "TRUE" must not enable it).
+  const run = (value) => runCli(
+    ['pin-refresh', '--deploy-apps-enabled', 'true', '--containers', 'c.json'],
+    { env: { LOOM_UNITY_TAG: 'v0.1', ...(value === undefined ? {} : { LOOM_ALLOW_IMAGE_TAG_REVERT: value }) }, files: { 'c.json': JSON.stringify(DIGEST_UNITY) } },
+  );
+  const on = run('true');
+  assert.equal(on.code, 0, on.logs);
+  assert.match(on.logs, /::warning::\[pin-refresh\] ACKNOWLEDGED loom-unity/);
+  for (const off of [undefined, '', 'false', '1', 'yes', 'TRUE']) {
+    const r = run(off);
+    assert.equal(r.code, 1, `value ${JSON.stringify(off)} must not enable the acknowledgement`);
+    assert.match(r.logs, /PIN REFRESH REFUSED/);
+  }
+});
+
+test('ACK WIRING: the GCC-High re-pin step passes vars.LOOM_ALLOW_IMAGE_TAG_REVERT through env:', () => {
+  // Breaks if: the env: line is deleted or the variable renamed, which makes the acknowledgement unreachable here again.
+  const wf = readFileSync('.github/workflows/deploy-fiab-gcch.yml', 'utf8').replace(/\r\n/g, '\n');
+  const step = wf.split(/\n {6}- /).find((st) => st.includes('id: repin'));
+  assert.ok(step, 'the re-pin step (id: repin) was not found');
+  assert.match(step, /\n {10}LOOM_ALLOW_IMAGE_TAG_REVERT: \$\{\{ vars\.LOOM_ALLOW_IMAGE_TAG_REVERT \}\}\n/);
 });

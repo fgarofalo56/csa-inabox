@@ -471,7 +471,7 @@ export async function cleanupWorkspaces(ids: string[]): Promise<void> {
     for (let i = 0; i < unique.length; i += 500) {
       const chunk = unique.slice(i, i + 500);
       try {
-        const r = await ctx.post(`${BASE}/api/workspaces/bulk-delete`, { data: { ids: chunk } });
+        const r = await ctx.post(`${BASE}/api/workspaces/bulk-delete`, { data: { ids: chunk, cascade: true } });
         const body = await r.json().catch(() => ({}));
         deleted += Array.isArray(body?.deleted) ? body.deleted.length : 0;
         failed += Array.isArray(body?.failed) ? body.failed.length : chunk.length;

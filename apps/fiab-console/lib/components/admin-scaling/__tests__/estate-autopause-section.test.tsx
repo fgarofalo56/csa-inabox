@@ -9,6 +9,8 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 const clientFetch = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: unknown[]) => clientFetch(...a) }));
 const jsonGet = vi.fn();
+// #5099 phase C: the always-on section also reads through jsonGet, so the cadence is counted on the STATE route only.
+const stateReads = () => jsonGet.mock.calls.filter((c) => c[0] === '/api/admin/estate/state').length;
 vi.mock('@/lib/components/admin-scaling/json-get', () => ({ jsonGet: (...a: unknown[]) => jsonGet(...a) }));
 
 import { EstateAutoPauseSection, EstatePowerPanel, formatIdle, parseIdleHours } from '../estate-power-panel';
@@ -106,7 +108,7 @@ describe('EstateAutoPauseSection', () => {
     expect(JSON.parse((clientFetch.mock.calls[1][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 6 });
   });
 
-  it('an UNREADABLE stored setting offers one-click "Reset to defaults" which PUTs {enabled:true, idleHours:2}', async () => {
+  it('an UNREADABLE stored setting offers one-click "Reset to defaults" which PUTs the explicit defaults incl. containerApps (a bare PUT is refused 503 while unreadable)', async () => {
     clientFetch.mockResolvedValue(okResponse());
     mount(
       <EstateAutoPauseSection
@@ -118,7 +120,7 @@ describe('EstateAutoPauseSection', () => {
     expect(screen.getByText('The saved auto-pause setting could not be read')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults (on, 2 hours)' }));
     await waitFor(() => expect(clientFetch).toHaveBeenCalledTimes(1));
-    expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 2 });
+    expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } });
   });
 
   it('unreadable ACTIVITY says idleness is unknown (and shows no idle-for badge)', () => {
@@ -148,7 +150,7 @@ describe('mounted in EstatePowerPanel', () => {
     cleanup();
     jsonGet.mockResolvedValue({ ok: true, state: 'RUNNING', estateId: 'loom:e', preview: { wouldPause: [] } });
     mount(<EstatePowerPanel styles={styles} />);
-    await waitFor(() => expect(jsonGet).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(stateReads()).toBe(2));
     await screen.findByText('Estate power');
     expect(screen.queryByTestId('estate-autopause')).toBeNull();
   });

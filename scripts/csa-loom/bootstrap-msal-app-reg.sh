@@ -25,6 +25,13 @@
 #   APP_DISPLAY_NAME    stable display name (default "CSA Loom Console (<KEYVAULT_NAME>)")
 #   CONSOLE_HOSTS       comma-separated hosts (no scheme) for redirect URIs
 #   EXISTING_CLIENT_ID  use-existing override (skip create; reconcile if owned)
+#   CONSOLE_APP_SUPPLIED=true  with EXISTING_CLIENT_ID: the operator NAMED the console
+#                       app (workflow input console_app_client_id). It is read by id
+#                       and validated first (CONSOLE_APP_OBJECT_ID /
+#                       CONSOLE_APP_EXPECTED_NAME optional); AZURE_CLOUD selects Graph.
+#                       Note: the later `az ad app ... --id` calls resolve the id with
+#                       the az CLI's own filtered lookup; only the tenant-wide
+#                       displayName LISTING is skipped.
 #   KEYVAULT_NAME       Key Vault to write secrets into (required)
 #   MSAL_SECRET_NAME    default loom-msal-client-secret
 #   MSAL_CLIENT_ID_SECRET_NAME  default loom-msal-client-id — the app registration's
@@ -315,6 +322,22 @@ echo "==> Resolving Entra app registration '${APP_DISPLAY_NAME}'"
 if [ -n "${EXISTING_CLIENT_ID}" ]; then
   APP_ID="${EXISTING_CLIENT_ID}"
   echo "    Using existing app (client) id: ${APP_ID}"
+  # SUPPLIED console app (deploy-integrity R5): READ it by id and VALIDATE it before
+  # anything is changed -- never list, never create. Not set by the old BYO
+  # LOOM_MSAL_CLIENT_ID path, which keeps its behaviour. The reader is the same
+  # node module the Estate.Power step uses; it classifies a refusal (could not read
+  # -> existence UNKNOWN) apart from a definite 404 and names the permission.
+  if [ "${CONSOLE_APP_SUPPLIED:-}" = "true" ]; then
+    SUPPLIED_ARGS=(--client-id "${APP_ID}" --supplied --validate-only)
+    [ -n "${CONSOLE_APP_OBJECT_ID:-}" ] && SUPPLIED_ARGS+=(--object-id "${CONSOLE_APP_OBJECT_ID}")
+    [ -n "${CONSOLE_APP_EXPECTED_NAME:-}" ] && SUPPLIED_ARGS+=(--expected-name "${CONSOLE_APP_EXPECTED_NAME}")
+    if ! SUPPLIED_OUT="$(node "$(dirname "${BASH_SOURCE[0]}")/ensure-estate-power-role.mjs" "${SUPPLIED_ARGS[@]}" 2>&1)"; then
+      echo "ERROR: the supplied console app registration ${APP_ID} could not be validated; nothing was created or changed." >&2
+      echo "${SUPPLIED_OUT}" >&2
+      exit 1
+    fi
+    echo "    ${SUPPLIED_OUT##*$'\n'}"
+  fi
 else
   # An UNREADABLE list is not an EMPTY one (deploy-integrity R7). This used to be
   # `2>/dev/null || true`, so a deploy SP without Graph read rights saw "no app"

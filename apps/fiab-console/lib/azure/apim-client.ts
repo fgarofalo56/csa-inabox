@@ -17,7 +17,8 @@
  * BFF can surface APIM's own validation messages to the editor UI.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -26,6 +27,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 import { trimEdges } from '@/lib/util/trim';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 const APIM_API = '2024-06-01-preview';
@@ -58,7 +60,20 @@ function apimSub(): string {
   return v;
 }
 
+/**
+ * Per-request gateway override (API Gateway Plane, `?gateway=<id>`). Absent =
+ * the deploy-default service named by env, exactly as before.
+ */
+const gatewayOverride = new AsyncLocalStorage<string>();
+
+/** Run `fn` with every apim-client call targeting the APIM service `resourceId` (an ARM service id). */
+export function withApimGateway<T>(resourceId: string | undefined, fn: () => Promise<T>): Promise<T> {
+  return resourceId ? gatewayOverride.run(resourceId, fn) : fn();
+}
+
 function apimBase(): string {
+  const ov = gatewayOverride.getStore();
+  if (ov) return `${armBase()}${ov}`;
   const sub = apimSub();
   const rg = process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2';
@@ -103,7 +118,7 @@ export class ApimError extends Error {
 
 async function apimFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string> } = {},
+  init: RequestInit & { query?: Record<string, string>; apiVersion?: string } = {},
 ): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
@@ -111,9 +126,9 @@ async function apimFetch(
   const query = init.query
     ? '&' + new URLSearchParams(init.query).toString()
     : '';
-  const url = `${apimBase()}${path}${sep}api-version=${APIM_API}${query}`;
-  const { query: _q, ...rest } = init;
-  return fetchWithTimeout(url, {
+  const url = `${apimBase()}${path}${sep}api-version=${init.apiVersion ?? APIM_API}${query}`;
+  const { query: _q, apiVersion: _v, ...rest } = init;
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -170,7 +185,7 @@ export async function getApimService(): Promise<ApimServiceShape | null> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: {
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
@@ -207,7 +222,7 @@ export async function updateApimSku(
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
   const body = { sku: { name: newSku, capacity } };
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token.token}`,
@@ -1181,7 +1196,7 @@ export async function testApiCall(args: {
   const headers: Record<string, string> = { ...(args.headers || {}) };
   if (key) headers['Ocp-Apim-Subscription-Key'] = key;
 
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: args.method || 'GET',
     headers,
     body: ['GET', 'HEAD'].includes((args.method || 'GET').toUpperCase()) ? undefined : args.body,
@@ -1508,6 +1523,69 @@ export async function getServiceInfo(): Promise<{
     managementApiUrl: j?.properties?.managementApiUrl,
     developerPortalStatus: j?.properties?.developerPortalStatus,
   };
+}
+
+// ---------------- Inventory read helpers (API Gateway Plane, W1-3) ----------------
+
+export const APIM_MCP_API = '2025-09-01-preview';
+
+export interface ApimPagedList {
+  items: any[];
+  /** false = a page failed or the page cap was hit; the caller must not treat absence as deletion. */
+  complete: boolean;
+  error?: string;
+}
+
+/** Follow nextLink to the end (cap 50 pages). nextLink must stay on the ARM host or it is not followed. */
+export async function pagedGet(resourceId: string, path: string, apiVersion: string): Promise<ApimPagedList> {
+  return withApimGateway(resourceId, async () => {
+    const items: any[] = [];
+    let res = await apimFetch(path, { apiVersion });
+    for (let page = 0; page < 50; page++) {
+      const j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+      if (!j) throw new ApimError(404, null, `APIM list ${path} answered 404`);
+      items.push(...(j.value || []));
+      if (!j.nextLink) return { items, complete: true };
+      // nextLink is read out of a RESPONSE BODY and gets the ARM token: pin it by ORIGIN, not by prefix
+      // (an ARM host name with a suffix appended passes startsWith). Off-origin is a partial result, not a fetch.
+      let next: string;
+      try { next = resolveSameOriginUrl(j.nextLink, armBase(), 'the ARM token'); }
+      catch { return { items, complete: false, error: 'nextLink left the ARM host; not followed' }; }
+      const token = await credential.getToken(ARM_SCOPE);
+      if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
+      res = await armCountedFetch(next, { headers: { authorization: `Bearer ${token.token}` } });
+    }
+    return { items, complete: false, error: 'page cap (50) reached' };
+  });
+}
+
+/** GET /policyFragments (policy fragments with their XML value). Throws ApimError on non-2xx. */
+export function listPolicyFragments(resourceId: string): Promise<ApimPagedList> {
+  return pagedGet(resourceId, '/policyFragments', APIM_API);
+}
+
+/**
+ * GET /apis at api-version 2025-09-01-preview, filtered to type `mcp`. A gateway that
+ * has not registered that version rejects the call (400/404/501): that is reported as
+ * `{ status: 'unavailable' }`, never as an empty list. Any other failure throws.
+ */
+export async function listMcpApis(
+  resourceId: string,
+): Promise<({ status: 'ok' } & ApimPagedList) | { status: 'unavailable'; reason: string }> {
+  try {
+    const r = await pagedGet(resourceId, '/apis', APIM_MCP_API);
+    return {
+      status: 'ok',
+      complete: r.complete,
+      error: r.error,
+      items: r.items.filter((a) => String(a?.properties?.type ?? a?.properties?.apiType ?? '').toLowerCase() === 'mcp'),
+    };
+  } catch (e) {
+    if (e instanceof ApimError && [400, 404, 405, 501].includes(e.status)) {
+      return { status: 'unavailable', reason: `The gateway rejected api-version ${APIM_MCP_API} (HTTP ${e.status}): ${e.message}` };
+    }
+    throw e;
+  }
 }
 
 // ---------------- Developer portal (portalRevisions) ----------------

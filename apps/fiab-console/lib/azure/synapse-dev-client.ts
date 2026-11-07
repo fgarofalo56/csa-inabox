@@ -15,7 +15,8 @@
  * No mocks. Every call hits the real API and surfaces errors verbatim.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
+import { assertEstateAllowsWake } from '@/lib/estate/estate-wake-guard';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -140,7 +141,7 @@ export function devBase(): string {
 async function callArmRaw(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -221,7 +222,7 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
 async function callDev(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetchWithTimeout(
+  return armCountedFetch(
     `${devBase()}${path}`,
     {
       ...init,
@@ -290,7 +291,7 @@ async function commitArtifact<T>(r: Response, label: string): Promise<T> {
   while (Date.now() < deadline) {
     await new Promise((res) => setTimeout(res, delay));
     delay = Math.min(delay * 1.5, 5000);
-    const pr = await fetchWithTimeout(loc, { headers: { authorization: `Bearer ${tok.token}` } });
+    const pr = await armCountedFetch(loc, { headers: { authorization: `Bearer ${tok.token}` } });
     if (pr.status === 202) continue; // still running
     const body = await pr.text();
     let parsed: any = {};
@@ -1259,6 +1260,8 @@ export async function listDedicatedSqlPools(): Promise<Array<{ name: string; sta
  */
 export async function resumeDedicatedPool(name: string): Promise<void> {
   if (!name) throw new Error('resumeDedicatedPool: name is required');
+  // #5111: refuse while the estate is paused (the estate's own resume posts to ARM directly).
+  await assertEstateAllowsWake(`the Synapse dedicated SQL pool ${name}`);
   const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/resume?api-version=${ARM_API}`, { method: 'POST' });
   if (!r.ok && r.status !== 202) {
     throw new Error(`resumeDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
@@ -1518,4 +1521,3 @@ export {
   type CopyActivityTranslator,
   type CopyColumnLineage,
 } from './copy-column-mappings';
-

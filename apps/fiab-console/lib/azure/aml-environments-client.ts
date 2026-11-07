@@ -28,7 +28,7 @@
  * to set. Routes surface that as a Fluent MessageBar; the editor surface still
  * renders fully (per no-vaporware.md).
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -136,7 +136,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${ML_API}${query}`;
   const { query: _q, timeoutMs, ...rest } = init;
-  return fetchWithTimeout(
+  return armCountedFetch(
     url,
     {
       ...rest,
@@ -209,7 +209,7 @@ async function pagedList(path: string): Promise<any[]> {
       // SECURITY (GHSA-4gvx-9p49-p43g) — `next` is an absolute URL read out of a
       // RESPONSE BODY and this expression mints an ARM token for it. Pin it to
       // `armBase()` and fail closed rather than fetching.
-      ? await fetchWithTimeout(
+      ? await armCountedFetch(
           resolveSameOriginUrl(next, armBase(), 'the ARM token'),
           { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } },
           timeoutMs,

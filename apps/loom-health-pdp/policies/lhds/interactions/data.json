@@ -1,0 +1,20 @@
+{
+  "version": "lhds-interactions/1",
+  "fhir": {
+    "read": "r",
+    "vread": "r",
+    "history": "r",
+    "search": "s",
+    "create": "c",
+    "update": "u",
+    "patch": "u",
+    "delete": "d"
+  },
+  "fhir_operation": "operation",
+  "dicom": {
+    "wado": "dicom:read",
+    "qido": "dicom:read",
+    "stow": "dicom:write",
+    "delete": "dicom:delete"
+  }
+}

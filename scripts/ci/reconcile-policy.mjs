@@ -454,6 +454,7 @@ export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
       unknown.push({
         key: entry.key,
         why: `running by digest (${digestPinned.map((h) => h.name).join(', ')}); a tag cannot be derived from a digest without resolving it in ACR`,
+        digest: true,
       });
       continue;
     }
@@ -776,11 +777,12 @@ export function comparePins(previous = {}, resolution = null) {
   }
   const unknownWhy = new Map((resolution.unknown || []).map((u) => [u.key, u.why]));
   const absent = new Set(resolution.absent || []);
+  const unknownDigest = new Set((resolution.unknown || []).filter((u) => u.digest === true).map((u) => u.key));
   for (const entry of APP_IMAGE_TAGS) {
     const was = previous?.[entry.key];
     const now = resolution.pinned?.[entry.key];
     if (was && unknownWhy.has(entry.key)) {
-      unknown.push({ key: entry.key, repo: entry.repo, was, why: unknownWhy.get(entry.key) });
+      unknown.push({ key: entry.key, repo: entry.repo, was, why: unknownWhy.get(entry.key), digest: unknownDigest.has(entry.key) });
       continue;
     }
     if (was && absent.has(entry.key)) {
@@ -806,10 +808,13 @@ export function comparePins(previous = {}, resolution = null) {
  * @param {Record<string,string>} a.previous  pins already exported
  * @param {ReturnType<typeof resolveRunningImageTags>|null} a.resolution fresh read
  * @param {string} [a.readError]  why the fresh read failed, when it did
+ * @param {boolean} [a.acknowledgeDigestPinned] LOOM_ALLOW_IMAGE_TAG_REVERT=true. Covers ONLY apps that
+ *        run by digest: the operator already told the revert gate that writing this deploy's tag over
+ *        them is intended. Any other unknown still refuses.
  * @returns {{decision:'proceed'|'refuse', repin:Record<string,string>,
  *            comparison:ReturnType<typeof comparePins>, reason:string}}
  */
-export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution = null, readError = '' } = {}) {
+export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution = null, readError = '', acknowledgeDigestPinned = false } = {}) {
   const comparison = comparePins(previous, resolution);
   const none = { repin: {}, comparison };
 
@@ -840,16 +845,26 @@ export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution 
     };
   }
 
-  if (comparison.unknown.length) {
+  // The revert gate (assert-no-silent-image-tag-revert.mjs) accepts LOOM_ALLOW_IMAGE_TAG_REVERT=true as an
+  // explicit, logged choice. Without honouring it HERE the acknowledgement is reachable and useless: this step
+  // refuses the same digest-pinned app one step later (Gov run 41977484915). Only digest-pinned unknowns are
+  // covered; an unreadable or ambiguous tag stays a refusal.
+  const acknowledged = acknowledgeDigestPinned === true ? comparison.unknown.filter((u) => u.digest === true) : [];
+  const stillUnknown = comparison.unknown.filter((u) => !acknowledged.includes(u));
+  if (stillUnknown.length) {
     return {
       ...none,
+      acknowledged: [],
       decision: 'refuse',
       reason:
         'these images were pinned by this run and the fresh read can no longer say what they are running: ' +
-        comparison.unknown.map((u) => `${u.key} (pinned ${u.was}; ${u.why})`).join('; ') +
+        stillUnknown.map((u) => `${u.key} (pinned ${u.was}; ${u.why})`).join('; ') +
         '. Applying the earlier pin might revert them and might not — UNKNOWN is not "unchanged". Refusing.',
     };
   }
+  const ackNote = acknowledged.length
+    ? ` ACKNOWLEDGED via LOOM_ALLOW_IMAGE_TAG_REVERT=true: ${acknowledged.map((u) => u.key).join(', ')} run by digest and this deploy writes its tag over them, as the operator chose.`
+    : '';
 
   const repin = { ...(resolution.pinned || {}) };
   const drifted = comparison.moved.length + comparison.appeared.length;
@@ -857,10 +872,11 @@ export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution 
     return {
       ...none,
       repin,
+      acknowledged,
       decision: 'proceed',
       reason:
         `re-measured ${Object.keys(repin).length} running image(s) immediately before the apply; every one still ` +
-        'matches the tag this deploy will write. The ARM PUT is a no-op for every image.',
+        'matches the tag this deploy will write. The ARM PUT is a no-op for every image.' + ackNote,
     };
   }
 
@@ -880,9 +896,10 @@ export function decidePinRefresh({ deployAppsEnabled, previous = {}, resolution 
   return {
     ...none,
     repin,
+    acknowledged,
     decision: 'proceed',
     reason:
-      `RE-PINNED ${drifted} image(s) to what is running RIGHT NOW — ${parts.join('; ')}. ` +
+      ackNote.trimStart() + ` RE-PINNED ${drifted} image(s) to what is running RIGHT NOW — ${parts.join('; ')}. ` +
       'Applying the earlier measurement would have written the older tag back over the estate, which is exactly ' +
       'how PR #3665 was reverted nine minutes after it went live (#3676). The what-if above previewed the earlier ' +
       'tag for these image fields; every other argument is byte-identical, and the tags written are tags that are ' +
@@ -2631,8 +2648,12 @@ export function cliMain(argv, io) {
       previous,
       resolution,
       readError,
+      acknowledgeDigestPinned: String(env.LOOM_ALLOW_IMAGE_TAG_REVERT || '') === 'true',
     });
 
+    for (const u of verdict.acknowledged || []) {
+      log(`::warning::[pin-refresh] ACKNOWLEDGED ${u.repo}: pinned ${u.was}, running by digest — ${u.why}. LOOM_ALLOW_IMAGE_TAG_REVERT=true, so this deploy proceeds and writes the tag over it.`);
+    }
     for (const m of verdict.comparison.moved) {
       log(`::warning::[pin-refresh] MOVED ${m.repo}: pinned ${m.was}, now running ${m.now} — re-pinning to the running tag (#3676).`);
     }

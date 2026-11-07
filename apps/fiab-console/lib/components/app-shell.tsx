@@ -45,6 +45,7 @@ import { RunningWorkloadsButton } from './running-workloads-button';
 import { GlobalJobToaster } from './global-job-toaster';
 import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
 import { SessionProvider, type ShellSession } from './session-context';
+import { EstatePausedBanner } from './estate-paused-banner';
 import { RequestAccessButton } from './access/request-access-button';
 import { GlobalTimeBar } from './time-machine/global-time-bar';
 
@@ -268,6 +269,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </nav>
       <main className={`${styles.main} loom-app-grid-bg`}>
+        {/* Shown ONLY while part of the estate is paused; renders nothing otherwise. */}
+        <EstatePausedBanner />
         <GlobalErrorBoundary>{children}</GlobalErrorBoundary>
       </main>
       <CommandPalette />

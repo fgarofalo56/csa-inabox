@@ -24,7 +24,7 @@
  * still renders.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, isContinuationAllowed, type PagingTruncation } from './paging-budget';
 import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
@@ -52,6 +52,8 @@ import {
   cached,
   clearMonitorCache,
 } from './monitor-arm';
+import { runWithArmCallerUnlessGuarded } from './arm-read-gate';
+import { mapWithConcurrency } from '@/lib/util/concurrency';
 import {
   SWALLOWED_ARM_ERROR,
   describeArmError,
@@ -526,7 +528,7 @@ export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQuery
   if (!kql?.trim()) throw new MonitorError('query required', 400);
   const tk = await token(LA_SCOPE);
   const url = `${LA_ENDPOINT}/v1/workspaces/${workspaceId}/query`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tk}`,
@@ -1312,13 +1314,23 @@ export async function getDiagnosticsCoverage(): Promise<DiagCoverage[]> {
   // a diag setting is enabled/disabled (enableDiagnostics() clears the cache), so
   // a Diagnostics-tab revisit / Refresh inside the window is served from memory.
   // Keyed by the LAW resource id (its scope determines the coverage answer).
-  return cached(`diag:${loomLaw}`, DIAG_TTL_MS, () => _getDiagnosticsCoverage(loomLaw));
+  return cached(`diag:${loomLaw}`, DIAG_TTL_MS, () =>
+    runWithArmCallerUnlessGuarded('diagnostics.coverage', () => _getDiagnosticsCoverage(loomLaw)));
+}
+
+/** In-flight diagnosticSettings GETs per sweep: LOOM_DIAG_COVERAGE_CONCURRENCY, default 10, clamp 1..32. */
+export function diagCoverageConcurrency(raw: string | undefined = process.env.LOOM_DIAG_COVERAGE_CONCURRENCY): number {
+  const n = Math.floor(Number(raw));
+  if (raw === undefined || raw.trim() === '' || !Number.isFinite(n)) return 10;
+  return Math.min(32, Math.max(1, n));
 }
 
 async function _getDiagnosticsCoverage(loomLaw: string): Promise<DiagCoverage[]> {
   const resources = await listResources();
 
-  const probes = resources.map(async (r): Promise<DiagCoverage> => {
+  // Bounded pool, not an unbounded Promise.all: ~450 simultaneous GETs from the
+  // install job tripped ARM 429s (2026-10-21). Order and per-row errors unchanged.
+  return mapWithConcurrency(resources, diagCoverageConcurrency(), async (r): Promise<DiagCoverage> => {
     const base: DiagCoverage = {
       id: r.id, name: r.name, type: r.type, resourceGroup: r.resourceGroup,
       supported: true, routesToLoomLaw: false, settingNames: [],
@@ -1350,8 +1362,6 @@ async function _getDiagnosticsCoverage(loomLaw: string): Promise<DiagCoverage[]>
       };
     }
   });
-
-  return Promise.all(probes);
 }
 
 /**

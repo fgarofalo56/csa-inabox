@@ -224,6 +224,7 @@ const REGISTRY: Record<string, Entry> = {
   'aip-logic':          { icon: Molecule24Regular,            family: 'fabric-iq', label: 'Spindle (AIP Logic)' },
   'ontology-sdk':       { icon: Code24Regular,                family: 'fabric-iq', label: 'Ontology SDK' },
   'health-check':       { icon: HeartPulse24Regular,          family: 'fabric-iq', label: 'Health Check' },
+  'health-tenant':      { icon: HeartPulse24Regular,          family: 'database',  label: 'Health Tenant' },
   'release-environment':{ icon: Rocket24Regular,              family: 'fabric-iq', label: 'Release Environment' },
   'agent-flow':         { icon: BotSparkle24Regular,          family: 'fabric-iq', label: 'Agent Flow' },
 

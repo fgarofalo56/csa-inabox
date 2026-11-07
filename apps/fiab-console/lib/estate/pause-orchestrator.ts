@@ -72,6 +72,7 @@ import {
   type EstatePowerState,
   type EstateSkuSnapshot,
   type PausedResourceSnapshot,
+  type ResumeHold,
   type ResumeOutcome,
 } from './pause-state';
 import {
@@ -89,14 +90,27 @@ import {
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
 import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
-import { containerAppPauseGuard } from './pause-guards';
+import { CONSUMPTION_PLAN_REASON, dbActGuard, guardedTierType, isConsumerType, isDbTierType, tierPauseGuard } from './pause-guards';
+import { applySetGuards, type OutOfTierRow } from './pause-set-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
 // Re-exported with `export ... from` (not `import {X}; export {X}`): istanbul coverage
 // instrumentation leaves the latter form undefined at first read (CI shards run with it).
 export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
-export { containerAppPauseGuard } from './pause-guards';
+export { containerAppPauseGuard, aksPauseGuard } from './pause-guards';
+
+// #5099 phase C: the resume path lives in ./pause-resume (file-size ratchet); same public surface.
+export {
+  applyResumePoll,
+  confirmConsumersStopped,
+  pollResume,
+  startResume,
+  type ResumeDispatch,
+  type ResumePollResult,
+  type ResumeRunResult,
+} from './pause-resume';
+import { CONSUMER_DRAIN_BUDGET_MS, confirmConsumersStopped } from './pause-resume';
 import type {
   ActuatorResult,
   EstateActuator,
@@ -132,7 +146,7 @@ export interface EstatePlan {
   inventory: PauseInventory;
   dryRun: DryRunResult;
   /** Loom-owned + pausable, but held out of THIS tier, with the reason. */
-  outOfTier: Array<{ resourceId: string; name: string; resourceType: string; reason: string }>;
+  outOfTier: OutOfTierRow[];
   /**
    * THE POPULATION REPORT. What the ownership resolver actually found, and by
    * which evidence.
@@ -264,6 +278,8 @@ export function planPause(
     namedByDeploy?: number;
     /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
     selfAppName?: string;
+    /** Resources held out by an async guard (App Gateway backend read): lower-cased id -> reason. */
+    holds?: ReadonlyMap<string, string>;
   },
 ): EstatePlan {
   const full = buildPauseInventory(discovered, ctx);
@@ -273,20 +289,11 @@ export function planPause(
   for (const c of full.pausable) {
     const type = c.resource.resourceType.toLowerCase();
     if (ESTATE_PAUSE_TIER.includes(type)) {
-      if (type === 'microsoft.app/containerapps') {
-        const guard = containerAppPauseGuard(
-          { name: c.resource.name, tags: c.resource.tags },
-          ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
-        );
-        if (!guard.eligible) {
-          outOfTier.push({
-            resourceId: c.resource.resourceId,
-            name: c.resource.name,
-            resourceType: c.resource.resourceType,
-            reason: guard.reason,
-          });
-          continue;
-        }
+      // Container Apps and AKS clusters can host the console: per-resource guard (#5099).
+      const guard = tierPauseGuard(c.resource, ctx.selfAppName ?? process.env.CONTAINER_APP_NAME);
+      if (!guard.eligible) {
+        outOfTier.push({ resourceId: c.resource.resourceId, name: c.resource.name, resourceType: c.resource.resourceType, reason: guard.reason });
+        continue;
       }
       inTier.push(c);
       continue;
@@ -301,6 +308,8 @@ export function planPause(
     });
   }
 
+  // #5099 phase B: set-level guards (gateway holds; a database needs its consumers in the set).
+  inTier.splice(0, inTier.length, ...applySetGuards(inTier, outOfTier, ctx.holds));
   const inventory: PauseInventory = { ...full, pausable: inTier };
   const dryRun = dryRunPause(inventory);
 
@@ -490,6 +499,11 @@ export async function startPause(
     now?: string;
     /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
     selfAppName?: string;
+    /**
+     * Bounded wait for a database's consumers to drain after their scale-to-zero
+     * was accepted (#5099 phase C). Default 6 reads, 5s apart.
+     */
+    consumerDrain?: { attempts?: number; delayMs?: number; budgetMs?: number };
   },
 ): Promise<PauseRunResult> {
   const snapshot = newPauseSnapshot({
@@ -502,6 +516,12 @@ export async function startPause(
   const actions: PauseActionResult[] = [];
   let dispatchedAny = false;
 
+  // One shared read-back deadline for the whole request (see CONSUMER_DRAIN_BUDGET_MS), started at first use.
+  let drainDeadline: number | undefined;
+  const drainDeadlineAt = (): number => {
+    drainDeadline ??= Date.now() + Math.max(0, ctx.consumerDrain?.budgetMs ?? CONSUMER_DRAIN_BUDGET_MS);
+    return drainDeadline;
+  };
   for (const candidate of plan.inventory.pausable) {
     const { resource } = candidate;
     const base = {
@@ -527,24 +547,43 @@ export async function startPause(
       continue;
     }
 
-    // (1b) Container Apps only: the console must survive the pause. Re-check
-    //      identity against FRESH tags, so a tag added since the preview (an
-    //      exemption) is honoured and an unreadable tag set fails safe.
-    if (resource.resourceType.toLowerCase() === 'microsoft.app/containerapps') {
+    // (1b) Guarded types (the console's Container App / AKS / gateway; databases
+    //      with consumers): re-check against FRESH tags, so a tag added since the
+    //      preview (an exemption) is honoured and an unreadable tag set fails safe.
+    let consumers: string[] | undefined;
+    if (guardedTierType(resource.resourceType)) {
       let freshTags: Readonly<Record<string, string>> | null = null;
       try {
         freshTags = await actuator.readTags(resource.resourceId);
       } catch {
         freshTags = null;
       }
-      const guard = containerAppPauseGuard(
-        { name: resource.name, tags: freshTags },
+      const guard = tierPauseGuard(
+        { resourceType: resource.resourceType, name: resource.name, tags: freshTags },
         ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
       );
-      if (!guard.eligible) {
-        actions.push({ ...base, status: 'skipped', detail: guard.reason });
+      // A database is judged against what this run ACTUALLY did to its consumers (they pause first).
+      const dep = isDbTierType(resource.resourceType) ? dbActGuard({ name: resource.name, tags: freshTags }, actions) : null;
+      if (!guard.eligible || (dep && !dep.eligible)) {
+        actions.push({ ...base, status: 'skipped', detail: guard.eligible ? dep!.reason : guard.reason });
         continue;
       }
+      // ARM accepts a scale-to-zero before the replicas drain, so `dispatched` is
+      // not `stopped`: read each consumer back before the database goes down.
+      if (dep && dep.consumers.length) {
+        const drained = await confirmConsumersStopped(dep.consumers, actions, actuator, ctx.consumerDrain, drainDeadlineAt());
+        if (!drained.ok) {
+          actions.push({
+            ...base,
+            status: 'skipped',
+            detail:
+              `${resource.name} is held out: ${drained.reason} Stopping the server underneath a running app `
+              + 'would break it. Left RUNNING.',
+          });
+          continue;
+        }
+      }
+      consumers = dep?.consumers;
     }
 
     // (2) Authoritative ARM power read. No reading -> no snapshot -> no pause.
@@ -578,6 +617,7 @@ export async function startPause(
       replicaCount: power.replicaCount,
       scale: power.scale,
       children: power.children,
+      consumers,
       fallbackSku: candidate.fallbackSku,
       ownership: recheck.ownership,
     });
@@ -598,13 +638,14 @@ export async function startPause(
 
     // (5) The mutation.
     const result = await actuator.pause(candidate, entry);
-    if (result.ok && result.noop) {
-      // The actuator established that stopping changes nothing. Un-record it:
-      // there is nothing to restore, and keeping it would leave the estate in
-      // PAUSING forever waiting for a state change that was never requested.
+    if (result.held || (result.ok && result.noop)) {
+      // The actuator established that stopping changes nothing (noop), or re-checked
+      // a guard at act time and held the resource out (held, reported 'skipped').
+      // Un-record it: there is nothing to restore, and keeping it would leave the
+      // estate in PAUSING forever waiting for a state change that was never requested.
       const at = snapshot.resources.indexOf(entry);
       if (at >= 0) snapshot.resources.splice(at, 1);
-      actions.push({ ...base, status: 'no-op', detail: result.detail });
+      actions.push({ ...base, status: result.held ? 'skipped' : 'no-op', detail: result.detail });
       continue;
     }
     dispatchedAny = dispatchedAny || result.ok;
@@ -654,6 +695,8 @@ export interface ResourceProgress {
   /** 'done' | 'in-flight' | 'unknown' | 'failed'. */
   phase: 'done' | 'in-flight' | 'unknown' | 'failed';
   detail: string;
+  /** Pause only (#5111): settled as a no-op - nothing was stopped, so it must not read "Stopped". */
+  noop?: boolean;
   /** Resume only: whether a real data-plane round-trip succeeded. */
   servable?: boolean;
   /** Resume only: false when no probe is wired for this type. */
@@ -699,9 +742,17 @@ export async function pollPause(
 
     // A resource that was ALREADY stopped before the pause counts as settled —
     // there was nothing to stop.
-    const expectation: 'running' | 'stopped' = 'stopped';
     const wasRunning = isRunningState(entry.prePausePowerState);
-    const settled = wasRunning ? isPausedState(state) : !isRunningState(state);
+    // #5111: `expectation` is where the resource goes on RESUME, i.e. its recorded
+    // pre-pause state - the same meaning pause-resume gives it. It used to be a
+    // hard-coded 'stopped', so the panel labelled EVERY row "was stopped before the
+    // pause", Online-before-pause resources included.
+    const expectation: 'running' | 'stopped' = wasRunning ? 'running' : 'stopped';
+    // A site on a Consumption plan (plan READ, not assumed) has nothing to stop and no
+    // idle charge. If one is in the snapshot (recorded before it was held out), it is a
+    // confirmed NO-OP rather than a resource the estate waits on forever.
+    const consumptionNoop = entry.resourceType === 'microsoft.web/sites' && power.consumptionPlan === true && wasRunning;
+    const settled = consumptionNoop || (wasRunning ? isPausedState(state) : !isRunningState(state));
     if (settled) confirmed += 1;
 
     // DRIFT — a resource that came back up under a PAUSED estate. PRP §5 lists
@@ -710,7 +761,7 @@ export async function pollPause(
     // rolls itself on every merge to main, and ANY ARM PUT resumes App
     // Gateway/Firewall. Detecting it is this slice's job; RE-ASSERTING the
     // paused state is the reconciler's (W6), which does not exist yet.
-    const drifted = snapshot.state === 'PAUSED' && isRunningState(state);
+    const drifted = snapshot.state === 'PAUSED' && isRunningState(state) && !consumptionNoop;
     if (drifted) driftedResources.push(entry.resourceId);
 
     progress.push({
@@ -721,8 +772,12 @@ export async function pollPause(
       expectation,
       atExpectedState: settled,
       phase: settled ? 'done' : state === 'Unknown' ? 'unknown' : 'in-flight',
+      ...(consumptionNoop ? { noop: true } : {}),
       detail: power.reading
-        ? drifted
+        ? consumptionNoop
+          // R7: say what is true. It is NOT stopped - it reads `state` and was never stopped.
+          ? `no-op (Consumption plan): ${entry.name} reads ${state} and was never stopped - ${CONSUMPTION_PLAN_REASON}`
+          : drifted
           ? `ARM reports ${entry.name} is ${state}, but this estate is PAUSED. Something restarted it `
             + 'out of band. Loom has NOT re-paused it — the invariant reconciler that would (PRP W6) '
             + 'is not built yet.'
@@ -772,308 +827,6 @@ export async function pollPause(
     driftedResources,
     reason,
     throttled,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Resume
-// ---------------------------------------------------------------------------
-
-export interface ResumeDispatch {
-  resourceId: string;
-  name: string;
-  status: 'dispatched' | 'skipped' | 'failed';
-  detail: string;
-  error?: string;
-}
-
-export interface ResumeRunResult {
-  snapshot: EstatePauseSnapshot;
-  dispatches: ResumeDispatch[];
-}
-
-/**
- * Dispatch the resume. Moves the estate to `RESUMING` and NOTHING further.
- *
- * `RUNNING` is never reachable from here — it is only ever produced by
- * `pollResume`, from confirmed ARM reads plus a servability probe. A resume is
- * a ~15-minute operation, so the request that starts it cannot possibly know
- * how it ended, and a function that returned RUNNING at dispatch time would be
- * asserting something it did not establish.
- */
-export async function startResume(
-  snapshot: EstatePauseSnapshot,
-  actuator: EstateActuator,
-  ctx?: { now?: string },
-): Promise<ResumeRunResult> {
-  assertTransition(snapshot.state, 'RESUMING');
-  const now = ctx?.now ?? new Date().toISOString();
-  const next: EstatePauseSnapshot = {
-    ...snapshot,
-    state: 'RESUMING',
-    resumeStartedAt: now,
-    updatedAt: now,
-    resumeOutcomes: [],
-  };
-
-  const dispatches: ResumeDispatch[] = [];
-  for (const entry of orderForResume(snapshot.resources)) {
-    // Restore TO the pre-pause state. Something that was already stopped when
-    // Loom found it stays stopped — resuming it would be Loom starting a
-    // resource nobody asked it to start.
-    if (!isRunningState(entry.prePausePowerState)) {
-      dispatches.push({
-        resourceId: entry.resourceId,
-        name: entry.name,
-        status: 'skipped',
-        detail:
-          `${entry.name} was ${entry.prePausePowerState} before the pause, so it is left as it is. `
-          + 'Resume restores the estate to what it was, not to what it could be.',
-      });
-      continue;
-    }
-    // R-SCOPE-3, the RESUME half. `startPause` calls `reverifyBeforeAct`; this
-    // side deliberately does NOT re-read live tags, because resume is the
-    // RECOVERY direction — a tag removed or rewritten while the estate was down
-    // would then strand a paused resource permanently, which is a worse failure
-    // than the one the check prevents.
-    //
-    // What it asserts instead is the snapshot's OWN recorded verdict.
-    // `capturePrePauseState` refuses to write an entry that is not 'loom-owned'
-    // (pause-state.ts), so every legitimately written entry satisfies this and
-    // nothing recoverable is ever refused. What it stops is an entry that never
-    // came from a gated pause at all — a hand-edited or tampered Cosmos document
-    // driving `actuator.resume` at a resource Loom does not own. Before this,
-    // resume was guarded only by the STRUCTURAL `assertActuationTarget`, which
-    // checks that an id is well-formed and self-consistent, not that it is ours.
-    if (entry.ownership?.verdict !== 'loom-owned') {
-      dispatches.push({
-        resourceId: entry.resourceId,
-        name: entry.name,
-        status: 'skipped',
-        detail:
-          `${entry.name} is recorded in this snapshot with ownership verdict `
-          + `'${entry.ownership?.verdict ?? 'none'}', not 'loom-owned', so it was NOT resumed. A `
-          + 'snapshot entry that did not come from a gated pause is not evidence that Loom may act '
-          + 'on this resource.',
-        error: `not-loom-owned:${entry.ownership?.verdict ?? 'none'}`,
-      });
-      continue;
-    }
-
-    const result = await actuator.resume(entry);
-    dispatches.push({
-      resourceId: entry.resourceId,
-      name: entry.name,
-      status: result.ok ? 'dispatched' : 'failed',
-      detail: result.detail,
-      ...(result.error ? { error: result.error } : {}),
-    });
-  }
-
-  return { snapshot: next, dispatches };
-}
-
-export interface ResumePollResult {
-  state: 'RESUMING' | 'RUNNING' | 'RESUME_FAILED';
-  outcomes: ResumeOutcome[];
-  progress: ResourceProgress[];
-  unconfirmed: ResumeOutcome[];
-  reason: string;
-  /** True once every resource has settled one way or the other. */
-  terminal: boolean;
-  /** How many resources' reads/probes were throttled (429) in this poll. */
-  throttled: number;
-}
-
-/**
- * Confirm a resume from authoritative ARM reads PLUS a real data-plane probe.
- *
- * The two-stage confirmation is the correctness core of this file:
- *
- *   stage 1  `confirmResume(entry, reading)`  — did ARM say it is Online?
- *   stage 2  `actuator.probeServable(entry)`  — can it actually serve a request?
- *
- * stage 2 exists because stage 1 is documented by Microsoft to LIE for 2-3
- * minutes on a Synapse dedicated pool: the ARM status flips to `ONLINE` before
- * the pool accepts a query. A resource that ARM reports Online but that fails
- * its probe is downgraded to `unknown` — not to `confirmed-mismatch`, because
- * "it is still warming up" and "it is broken" are different claims and we only
- * established the first.
- *
- * `deriveResumeState` then does the arithmetic, and it treats `unknown` as
- * failure. So an unprobeable or unfinished resume yields RESUME_FAILED, never
- * RUNNING (R-CAP-4).
- *
- * `settleAfterMs` exists so a poll taken 30 seconds into a 10-minute ADX start
- * reads `RESUMING` (still working) rather than `RESUME_FAILED` (gave up). It
- * bounds patience; it never converts an unconfirmed resource into a confirmed
- * one, which is why `unconfirmed` is reported identically in both branches.
- */
-export async function pollResume(
-  snapshot: EstatePauseSnapshot,
-  actuator: EstateActuator,
-  opts?: { now?: string; settleAfterMs?: number },
-): Promise<ResumePollResult> {
-  const outcomes: ResumeOutcome[] = [];
-  const progress: ResourceProgress[] = [];
-  const throttledIds = new Set<string>();
-
-  for (const entry of snapshot.resources) {
-    const power = await actuator.readPower(entry);
-    let outcome = confirmResume(entry, power.reading, power.error);
-    if (power.throttled) {
-      throttledIds.add(entry.resourceId);
-      outcome = { ...outcome, reason: throttledDetail(entry.name, power.error, 'it is running') };
-    }
-    const observed = power.reading?.powerState ?? 'Unknown';
-
-    // Where this resource is SUPPOSED to end up. Resume restores the estate to
-    // what it WAS, so something already stopped before the pause is expected to
-    // be stopped now.
-    const expectation: 'running' | 'stopped' = isRunningState(entry.prePausePowerState)
-      ? 'running'
-      : 'stopped';
-
-    let servable: boolean | undefined;
-    let probed: boolean | undefined;
-
-    // Probe ONLY the resources that are supposed to be up, and gate the probe on
-    // the OBSERVED ARM state rather than on any `ResumeConfirmation` string. The
-    // success set has TWO members (`confirmed-running` and
-    // `confirmed-restored-paused`), so a hand-rolled comparison is wrong in one
-    // direction or the other; `isResumeSuccess()` is the only sanctioned reader
-    // of the verdict, and the observed state is what tells us whether to probe.
-    if (expectation === 'running' && isRunningState(observed)) {
-      const probe = await actuator.probeServable(entry);
-      servable = probe.servable;
-      probed = probe.probed;
-      if (!probe.servable) {
-        if (probe.throttled) throttledIds.add(entry.resourceId);
-        outcome = {
-          resourceId: entry.resourceId,
-          confirmation: 'unknown',
-          observedState: observed,
-          reason:
-            `ARM reports ${entry.name} is ${observed}, but `
-            + (probe.probed
-              ? 'a real request to it did not succeed: '
-              : 'service readiness verification did not complete: ')
-            + `${probe.detail} A resumed Synapse pool reports ONLINE 2-3 minutes before it can serve, `
-            + 'so the status field alone does not establish that this resource is usable.',
-        };
-      }
-    }
-
-    // `atExpectedState` is computed from the OBSERVED power state, never from a
-    // confirmation string, and a resource that is supposed to be up is only "at
-    // its expected state" once a real request to it has succeeded.
-    const atExpectedState =
-      expectation === 'running'
-        ? isRunningState(observed) && servable === true
-        : isPausedState(observed);
-
-    outcomes.push(outcome);
-    progress.push({
-      resourceId: entry.resourceId,
-      name: entry.name,
-      resourceType: entry.resourceType,
-      powerState: observed,
-      expectation,
-      atExpectedState,
-      phase: atExpectedState ? 'done' : observed === 'Unknown' ? 'unknown' : 'in-flight',
-      detail: outcome.reason,
-      ...(servable === undefined ? {} : { servable }),
-      ...(probed === undefined ? {} : { probed }),
-      typicalResumeSeconds: TYPICAL_RESUME_SECONDS[entry.resourceType.toLowerCase()],
-    });
-  }
-
-  const verdict = deriveResumeState(snapshot, outcomes);
-  const throttled = throttledIds.size;
-
-  // A verdict manufactured by throttling alone is HELD, never settled (./pause-throttle).
-  const held = holdStateForThrottle(verdict, throttledIds, snapshot.state);
-  if (held) {
-    const reason = throttleHoldReason(throttled, snapshot.resources.length);
-    return { state: held, outcomes, progress, unconfirmed: verdict.unconfirmed, terminal: false, reason, throttled };
-  }
-
-  // Still inside the published resume window: report RESUMING rather than a
-  // premature failure. This can only DELAY a verdict, never manufacture a
-  // successful one — `verdict.state === 'RUNNING'` short-circuits above it.
-  const startedAt = snapshot.resumeStartedAt ? Date.parse(snapshot.resumeStartedAt) : NaN;
-  const nowMs = Date.parse(opts?.now ?? new Date().toISOString());
-  const settleAfterMs = opts?.settleAfterMs ?? defaultSettleMs(snapshot);
-  const stillSettling =
-    Number.isFinite(startedAt) && Number.isFinite(nowMs) && nowMs - startedAt < settleAfterMs;
-
-  if (verdict.state === 'RESUME_FAILED' && stillSettling) {
-    return {
-      state: 'RESUMING',
-      outcomes,
-      progress,
-      unconfirmed: verdict.unconfirmed,
-      terminal: false,
-      reason:
-        `${verdict.unconfirmed.length} of ${snapshot.resources.length} resource(s) are not yet `
-        + `confirmed servable, and the resume started ${Math.round((nowMs - startedAt) / 1000)}s ago `
-        + `(typical window ${Math.round(settleAfterMs / 1000)}s). Still RESUMING — this is not a `
-        + 'success claim, it is a statement that the window has not elapsed.',
-      throttled,
-    };
-  }
-
-  return {
-    state: verdict.state,
-    outcomes,
-    progress,
-    unconfirmed: verdict.unconfirmed,
-    terminal: true,
-    reason: verdict.reason,
-    throttled,
-  };
-}
-
-/** The longest typical resume in the snapshot, plus 50% headroom, min 60s. */
-function defaultSettleMs(snapshot: Pick<EstatePauseSnapshot, 'resources'>): number {
-  const longest = snapshot.resources.reduce((max, r) => {
-    const s = TYPICAL_RESUME_SECONDS[r.resourceType.toLowerCase()] ?? 0;
-    return s > max ? s : max;
-  }, 0);
-  return Math.max(60_000, Math.round(longest * 1.5) * 1000);
-}
-
-/**
- * Fold a poll result back into the snapshot document for persistence.
- *
- * TWO independent gates run here, deliberately:
- *
- *   `assertNoFalseGreen` — the outcome-level check. A RUNNING write must be
- *       backed by a `confirmed-running` outcome for EVERY snapshot resource,
- *       including the zero-outcomes case that `[].every()` would wave through.
- *   `assertTransition`   — the state-machine check.
- *
- * The first is load-bearing on its own because `LEGAL_TRANSITIONS` permits
- * `RESUMING -> RUNNING` and `PAUSING -> RUNNING` DIRECTLY: the transition table
- * does not itself require confirmation, so `assertTransition` alone would let a
- * caller write RUNNING over an unconfirmed resume. Never call it alone on this
- * path — route through `deriveResumeState` (which `pollResume` does) and then
- * through this function.
- */
-export function applyResumePoll(
-  snapshot: EstatePauseSnapshot,
-  poll: ResumePollResult,
-  now = new Date().toISOString(),
-): EstatePauseSnapshot {
-  assertNoFalseGreen(poll.state, poll.outcomes, snapshot.resources.length);
-  if (snapshot.state !== poll.state) assertTransition(snapshot.state, poll.state);
-  return {
-    ...snapshot,
-    state: poll.state,
-    updatedAt: now,
-    resumeOutcomes: poll.outcomes,
-    ...(poll.state === 'RUNNING' ? { resumeConfirmedAt: now } : {}),
   };
 }
 

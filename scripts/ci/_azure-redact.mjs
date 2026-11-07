@@ -139,6 +139,34 @@ export function redact(text) {
 }
 
 /**
+ * TOKEN-SHAPED CONTENT (#5082). redact() above only knows ids. A raw ACR task
+ * log or run error message can also carry SAS signatures, storage keys, bearer
+ * tokens, JWTs and `password=` / `client_secret=` pairs (the ACR log SAS is the
+ * measured case: run 39634317953 died with AuthenticationFailed on one). Kept as
+ * a SEPARATE function so redact()'s pinned contract (size-independent, id-only,
+ * used by the deploy lane's structural tests) is not changed; callers that print
+ * raw Azure log text apply both: redact(redactSecrets(text)).
+ *
+ * Each pattern keeps the key and replaces only the value, so the line stays
+ * readable. IDEMPOTENT: `<redacted>` matches none of them. Not exhaustive: it is
+ * a floor for the shapes named here, not a promise about every secret format.
+ *
+ * @param {unknown} text
+ * @returns {string} '' for a non-string
+ */
+export function redactSecrets(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, '<redacted-jwt>')
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <redacted>')
+    .replace(/\b(sig|AccountKey|SharedAccessKey|SharedAccessSignature)=[^&;\s"']+/gi, '$1=<redacted>')
+    .replace(
+      /\b((?:client[_-]?secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|secret)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s&;,"']+)/gi,
+      '$1<redacted>',
+    );
+}
+
+/**
  * THE PUBLICATION-BOUNDARY PRIMITIVE (#3829 round 5).
  *
  * Every named boundary in this lane — formatStdout()/formatStderr() in

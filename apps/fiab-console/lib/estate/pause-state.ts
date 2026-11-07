@@ -422,11 +422,26 @@ export interface PausedResourceSnapshot {
    * these back. Optional and additive, like `scale`.
    */
   children?: EstateComputeChild[];
+  /**
+   * PostgreSQL / MySQL flexible servers (#5099 phase B): the lower-cased consumer
+   * app names the dependency guard judged at pause time (from the
+   * `loom-estate-pause-consumers` tag). The re-stop of a server Azure auto-restarted
+   * while the estate is PAUSED checks that none of these is running again.
+   * Optional and additive, like `scale`.
+   */
+  consumers?: string[];
   /** R-CAP-1 — used only when the original SKU is unavailable on resume. */
   fallbackSku?: EstateFallbackSku;
 
   /** R-SCOPE-3/4 — why this resource was judged Loom's, recorded at capture. */
   ownership: LoomOwnershipEvidence;
+
+  /**
+   * Set when the pause verb for this resource was REJECTED or could not be recorded:
+   * the resource was not stopped, so it is not counted as paused by the banner.
+   * Optional and additive; absent = the verb was accepted.
+   */
+  pauseFailed?: string;
 }
 
 /**
@@ -474,6 +489,21 @@ export interface EstatePauseSnapshot {
    * matters, and it must name which resources are unconfirmed.
    */
   resumeOutcomes?: ResumeOutcome[];
+  /**
+   * Consumers (Container Apps / web apps) whose start is HELD until the database
+   * they connect to reads Online (#5099 phase C). `pollResume` releases each one
+   * when its database is Online; `startResume` never records a hold for a
+   * database whose start failed (that consumer is `skipped`, not held).
+   */
+  resumeHeld?: ResumeHold[];
+}
+
+export interface ResumeHold {
+  resourceId: string;
+  name: string;
+  /** The database this consumer waits for. */
+  dbResourceId: string;
+  dbName: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +767,7 @@ export function capturePrePauseState(args: {
   replicaCount?: number;
   scale?: EstateScaleSnapshot;
   children?: EstateComputeChild[];
+  consumers?: string[];
   fallbackSku?: EstateFallbackSku;
   ownership: LoomOwnershipEvidence;
 }): PausedResourceSnapshot {
@@ -780,6 +811,7 @@ export function capturePrePauseState(args: {
     ...(typeof args.replicaCount === 'number' ? { replicaCount: args.replicaCount } : {}),
     ...(args.scale ? { scale: args.scale } : {}),
     ...(args.children ? { children: args.children } : {}),
+    ...(args.consumers && args.consumers.length ? { consumers: args.consumers } : {}),
     ...(args.fallbackSku ? { fallbackSku: args.fallbackSku } : {}),
     ownership: args.ownership,
   };

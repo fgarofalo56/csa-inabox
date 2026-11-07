@@ -34,7 +34,7 @@
  * `MlflowNotConfiguredError` fire — surfaced as a Fluent MessageBar naming the
  * one-time env/role to set; the editor surface still renders fully.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -286,7 +286,7 @@ export function _resetMlflowBackendCache(): void {
 /** Probe a backend's tracking API. 200 → live; 401/403/404/5xx → try the next candidate. */
 async function probeBackend(b: MlflowBackend): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${b.root}/api/2.0/mlflow/experiments/search`, {
+    const res = await armCountedFetch(`${b.root}/api/2.0/mlflow/experiments/search`, {
       method: 'POST',
       headers: { authorization: await b.authHeader(), 'content-type': 'application/json' },
       body: JSON.stringify({ max_results: 1 }),
@@ -349,7 +349,7 @@ async function mlflowFetch(
     const qs = sp.toString();
     if (qs) url += `?${qs}`;
   }
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),

@@ -14,6 +14,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
+import { assertEstateAllowsWake } from '@/lib/estate/estate-wake-guard';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
@@ -184,6 +185,8 @@ export async function listWarehouseEvents(
 }
 
 export async function startWarehouse(id: string): Promise<void> {
+  // #5111: the estate stops SQL warehouses; do not wake one while it is paused.
+  await assertEstateAllowsWake('the Databricks SQL warehouse');
   const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/start`, {
     method: 'POST',
   });
@@ -1132,6 +1135,8 @@ export async function editCluster(clusterId: string, spec: ClusterSpec): Promise
 }
 
 export async function startCluster(clusterId: string): Promise<void> {
+  // #5111: the estate terminates clusters; the auto-start paths must not wake one while it is paused.
+  await assertEstateAllowsWake('the Databricks cluster');
   const res = await dbxFetch('/api/2.0/clusters/start', {
     method: 'POST',
     body: JSON.stringify({ cluster_id: clusterId }),
@@ -2698,4 +2703,3 @@ export async function queryServingEndpoint(name: string, payload: unknown): Prom
   let body: unknown; try { body = text ? JSON.parse(text) : {}; } catch { body = text; }
   return { status: res.status, latencyMs, body };
 }
-

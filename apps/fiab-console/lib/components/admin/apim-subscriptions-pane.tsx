@@ -11,7 +11,7 @@ import {
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimSubscriptionSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   keyList: {
@@ -43,7 +43,7 @@ const useStyles = makeStyles({
   },
 });
 
-export function ApimSubscriptionsPane() {
+export function ApimSubscriptionsPane({ gatewayId }: { gatewayId?: string } = {}) {
   const styles = useStyles();
   const [subscriptions, setSubscriptions] = useState<ApimSubscriptionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,7 +66,7 @@ export function ApimSubscriptionsPane() {
   }
 
   useEffect(() => {
-    apimFetchJson('/api/apim/subscriptions')
+    apimFetchJson(withGateway('/api/apim/subscriptions', gatewayId))
       .then((d) => {
         if (d.ok && Array.isArray(d.subscriptions)) {
           setSubscriptions(d.subscriptions as ApimSubscriptionSummary[]);
@@ -76,7 +76,7 @@ export function ApimSubscriptionsPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   const visibleSubs = useMemo(() => {
     if (!q.trim()) return subscriptions;
@@ -89,7 +89,7 @@ export function ApimSubscriptionsPane() {
 
   async function handleApprove(sub: ApimSubscriptionSummary) {
     try {
-      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
+      const d = await apimFetchJson(withGateway(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, gatewayId), {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'active' }),
@@ -108,7 +108,7 @@ export function ApimSubscriptionsPane() {
 
   async function handleRejectOrSuspend(sub: ApimSubscriptionSummary) {
     try {
-      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
+      const d = await apimFetchJson(withGateway(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, gatewayId), {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'suspended' }),
@@ -130,7 +130,7 @@ export function ApimSubscriptionsPane() {
     setShowKeysDialog(true);
     setKeys(null);
     try {
-      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}/keys`);
+      const d = await apimFetchJson(withGateway(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}/keys`, gatewayId));
       if (d.ok) {
         setKeys({ primaryKey: d.primaryKey as string | undefined, secondaryKey: d.secondaryKey as string | undefined });
       } else {

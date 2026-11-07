@@ -29,6 +29,7 @@ import {
   createManifestTagReader,
   discoverFromManifest,
   ESTATE_PAUSE_ENABLED_ENV,
+  estatePauseEnabled,
   evaluateDrift,
   loadPauseSnapshot,
   partitionDiscovery,
@@ -54,6 +55,15 @@ import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cache';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
+import {
+  mergeForPause,
+  resolveContainerAppsForPause,
+  resolveGatewayHoldsForPause,
+  resolveTaggedForPause,
+} from '@/lib/estate/estate-pause-set';
+import { applyReassert, reassertAutoRestarted } from '@/lib/estate/pause-reassert';
+import { resumeHoldsChanged } from '@/lib/estate/pause-resume';
+import { discardPauseProgress, withIncrementalSnapshot } from '@/lib/estate/pause-incremental';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
 import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
@@ -126,7 +136,7 @@ export interface PauseBody {
  * is bounded by the pause tier (at most a handful of resources) and mutates
  * nothing.
  */
-async function runningPayload(actuator: EstateActuator) {
+async function runningPayload(actuator: EstateActuator, tenantId: string) {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
   // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
@@ -135,12 +145,23 @@ async function runningPayload(actuator: EstateActuator) {
   // as the pause POST excludes it, so the two sides mint the same token while
   // the absence persists — and it is surfaced in `absent`, never dropped.
   const discovered = await discoverFromManifest(entries, createManifestTagReader());
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  // Container Apps join through the stored policy (default ON), listed per app.
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  // #5099 — estate-tagged resources (AKS, VMs, Databricks, ASA, web sites), unioned in.
+  const tagged = await resolveTaggedForPause(manifest.estateId);
+  const present = mergeForPause(part.present, apps, tagged);
+  // #5099 phase B - an Application Gateway is held out unless its backend pools are read
+  // and shown not to target the console; a THROTTLED read is a read failure (retry), not a hold-out.
+  const gateways = await resolveGatewayHoldsForPause(present);
+  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures, ...gateways.readFailures];
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
     namedByDeploy,
+    holds: gateways.holds,
   });
 
   // R-CAP-3 — read the live SKU so the confirm dialog names what is at risk.
@@ -168,6 +189,10 @@ async function runningPayload(actuator: EstateActuator) {
     outOfTier: plan.outOfTier,
     /** Types this tier covers that no env var named — an honest coverage gap. */
     unresolved,
+    /** Per-app fate of every Container App in the group + the opt-out policy applied. */
+    containerApps: apps.status,
+    /** Estate-tag (Resource Graph) discovery: incomplete is NEVER "nothing to pause". */
+    discovery: tagged.status,
     /** True when the deploy names resources but the opt-in is unset. */
     manifestGated,
     risks,
@@ -226,12 +251,21 @@ async function computeStateFields(
 
   // No snapshot, or a snapshot that says the estate is up -> show the preview.
   if (!snapshot || snapshot.state === 'RUNNING') {
-    const payload = await runningPayload(actuator);
+    const payload = await runningPayload(actuator, tenantId);
     return { ...payload, snapshotId: snapshot?.id ?? null, power };
   }
 
   if (snapshot.state === 'PAUSING' || snapshot.state === 'PAUSED') {
-    const poll = await pollPause(snapshot, actuator);
+    const polled = await pollPause(snapshot, actuator);
+    // #5099 phase B - Azure restarts a stopped PostgreSQL (7 d) / MySQL (30 d) flexible server on
+    // its own. The estate stays PAUSED (drift is a report, never a state change); the idle
+    // auto-pause lane, which reads this state every 30 min, re-stops it. Only that lane, only
+    // when armed, and only those two types (see ./pause-reassert).
+    const reassert =
+      snapshot.state === 'PAUSED' && polled.drifted && opts?.pipelineActivity === true && estatePauseEnabled()
+        ? await reassertAutoRestarted(snapshot, polled, actuator)
+        : [];
+    const poll = applyReassert(polled, reassert);
     if (poll.state !== snapshot.state) {
       await savePauseSnapshot(applyPausePoll(snapshot, poll)).catch(() => {});
     }
@@ -246,6 +280,7 @@ async function computeStateFields(
       total: poll.total,
       drifted: poll.drifted,
       driftedResources: poll.driftedResources,
+      reassert,
       reason: poll.reason,
       resources: snapshot.resources,
       typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
@@ -261,6 +296,10 @@ async function computeStateFields(
   const verdict = resolveReadVerdict(snapshot.state, poll);
   if (verdict.persist) {
     await savePauseSnapshot(applyResumePoll(snapshot, poll)).catch(() => {});
+  } else if (poll.resumeHeld && resumeHoldsChanged(snapshot, poll)) {
+    // A released hold must be stored even when the STATE did not change (RESUMING -> RESUMING),
+    // or every later poll re-sends the consumer's start. Only the hold list is written.
+    await savePauseSnapshot({ ...snapshot, resumeHeld: poll.resumeHeld, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const illegal = verdict.state !== poll.state;
   // When the stored state is kept over a better poll, summarizeResume's
@@ -320,12 +359,21 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // GET /state, so the token stays coherent while the absence persists. It is
   // surfaced (`absent` + audit row below), never silently dropped. Unreadable
   // rows (throttled/timeout) stay IN the population and refuse below.
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  const tagged = await resolveTaggedForPause(manifest.estateId);
+  const present = mergeForPause(part.present, apps, tagged);
+  // #5099 phase B - an Application Gateway is held out unless its backend pools are read
+  // and shown not to target the console; a THROTTLED read is a read failure (retry), not a hold-out.
+  const gateways = await resolveGatewayHoldsForPause(present);
+  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures, ...gateways.readFailures];
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
     namedByDeploy,
+    holds: gateways.holds,
   });
 
   // R-CAP-3 — the live SKU, so the risk names the thing at risk.
@@ -357,6 +405,8 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
       population: plan.population,
       outOfTier: plan.outOfTier,
       unresolved,
+      containerApps: apps.status,
+      discovery: tagged.status,
       manifestGated,
       risks,
       highRisk: highRiskCount(risks),
@@ -525,14 +575,23 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
       examined: plan.population.examined,
       tagCensus: plan.population.tagCensus,
       absentExcluded: absent.length,
+      discoveryIncomplete: tagged.status.incomplete,
     });
-    return apiError(plan.population.statement, 409, {
-      population: plan.population,
-      preview: plan.dryRun,
-      unresolved,
-      absent,
-      trackedBy: 3922,
-    });
+    // R7 (#5099): an incomplete discovery must never read as "the correct fail-safe answer".
+    return apiError(
+      tagged.status.incomplete
+        ? `Nothing was paused, but that is NOT a statement that nothing needs pausing. ${tagged.status.note}`
+        : plan.population.statement,
+      409,
+      {
+        population: plan.population,
+        preview: plan.dryRun,
+        unresolved,
+        absent,
+        discovery: tagged.status,
+        trackedBy: 3922,
+      },
+    );
   }
 
   // --- Refuse to re-pause an estate that is already paused or mid-transition.
@@ -548,10 +607,22 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     estateId: manifest.estateId,
     resources: plan.dryRun.wouldPause.map((r) => ({ id: r.resourceId, mechanism: r.mechanism })),
     highRisk: highRiskCount(risks),
+    tagDiscovery: { matched: tagged.status.matched, incomplete: tagged.status.incomplete, heldOut: tagged.status.heldOut.length },
+    // Who/what decided which Container Apps joined: the policy in force and each app's fate.
+    containerApps: {
+      policy: apps.status.policy,
+      listError: apps.status.listError ?? null,
+      apps: apps.status.apps.map((a) => ({ name: a.name, state: a.state })),
+    },
   });
 
-  const run = await startPause(plan, actuator, {
-    snapshotId: randomUUID(),
+  // Record first, then patch (review N1): each resource's pre-pause state is persisted
+  // BEFORE its mutation, so a crash mid-loop leaves a recoverable PAUSING snapshot.
+  const snapshotId = randomUUID();
+  const progressBase = { id: snapshotId, tenantId, estateId: manifest.estateId, createdBy: who };
+  const incremental = withIncrementalSnapshot(actuator, progressBase);
+  const run = await startPause(plan, incremental.actuator, {
+    snapshotId,
     tenantId,
     estateId: manifest.estateId,
     // A CALLBACK, not the manifest we resolved above. W1 removed the ability to
@@ -566,6 +637,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // records that as RUNNING rather than as an empty PAUSING snapshot; report it
   // as the no-op it is, with the per-resource reasons.
   if (run.capturedNone) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     await audit(caller, 'estate-pause.captured-nothing', {
       estateId: manifest.estateId,
       actions: run.actions.map((a) => ({ id: a.resourceId, status: a.status })),
@@ -592,6 +664,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // resource is physically stopped. All-already-paused with zero failures
   // still saves: that snapshot settles to PAUSED on the first poll, truly.)
   if (dispatched.length === 0 && failed.length > 0) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     const alreadyPaused = run.actions.filter((a) => a.status === 'already-paused').length;
     const skipped = run.actions.filter((a) => a.status === 'skipped').length;
     await audit(caller, 'estate-pause.all-dispatches-rejected', {
@@ -624,6 +697,12 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     );
   }
 
+  // Record which resources the pause verb was REJECTED for, so the banner does not
+  // count them as stopped (review N4).
+  for (const a of failed) {
+    const r = run.snapshot.resources.find((x) => x.resourceId === a.resourceId);
+    if (r) r.pauseFailed = String(a.error || a.detail || 'pause rejected').slice(0, 300);
+  }
   await savePauseSnapshot(run.snapshot);
 
   await audit(caller, failed.length ? 'estate-pause.partial' : 'estate-pause.dispatched', {

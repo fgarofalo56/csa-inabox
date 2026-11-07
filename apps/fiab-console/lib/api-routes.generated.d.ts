@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1700 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1715 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -44,6 +44,14 @@ export type StaticApiRoute =
   | '/api/admin/access-requests'
   | '/api/admin/agent-quality'
   | '/api/admin/agent-quality/eval-alert'
+  | '/api/admin/api-gateway/environments'
+  | '/api/admin/api-gateway/environments/findings'
+  | '/api/admin/api-gateway/environments/matrix'
+  | '/api/admin/api-gateway/environments/reclassify'
+  | '/api/admin/api-gateway/environments/suggestions'
+  | '/api/admin/api-gateway/gateways'
+  | '/api/admin/api-gateway/gateways/discover'
+  | '/api/admin/api-gateway/runtime'
   | '/api/admin/audit-logs'
   | '/api/admin/autopilot'
   | '/api/admin/autopilot/apply'
@@ -96,6 +104,7 @@ export type StaticApiRoute =
   | '/api/admin/dspm-ai'
   | '/api/admin/embed-codes'
   | '/api/admin/env-config'
+  | '/api/admin/estate/always-on'
   | '/api/admin/estate/autopause'
   | '/api/admin/estate/pause'
   | '/api/admin/estate/resume'
@@ -393,6 +402,7 @@ export type StaticApiRoute =
   | '/api/embed/query'
   | '/api/embed/token'
   | '/api/estate/execute'
+  | '/api/estate/paused'
   | '/api/estate/plan'
   | '/api/estate/power'
   | '/api/eventhubs/authrules'
@@ -486,6 +496,7 @@ export type StaticApiRoute =
   | '/api/governance/workspace-egress'
   | '/api/health'
   | '/api/health/deep'
+  | '/api/health/tenants'
   | '/api/help-copilot/chat'
   | '/api/help-copilot/reindex'
   | '/api/help-copilot/sessions'
@@ -875,6 +886,9 @@ export type DynamicApiRoute =
   | `/api/admin/access-requests/${string}`
   | `/api/admin/access-requests/${string}/create-user`
   | `/api/admin/access-requests/${string}/invite-guest`
+  | `/api/admin/api-gateway/environments/${string}`
+  | `/api/admin/api-gateway/gateways/${string}`
+  | `/api/admin/api-gateway/gateways/${string}/sync`
   | `/api/admin/copilot-quality/${string}`
   | `/api/admin/copilot-quality/prompts/${string}`
   | `/api/admin/copilot/memory/${string}`
@@ -1023,6 +1037,7 @@ export type DynamicApiRoute =
   | `/api/foundry/fine-tuning/${string}`
   | `/api/governance/label-propagation/${string}`
   | `/api/governance/workspace-egress/${string}`
+  | `/api/health/tenants/${string}`
   | `/api/insights/digests/${string}`
   | `/api/insights/digests/${string}/preview`
   | `/api/insights/digests/${string}/run`

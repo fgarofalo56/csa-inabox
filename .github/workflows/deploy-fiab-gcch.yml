@@ -66,6 +66,10 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed Gov hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: deploy-fiab-commercial.yml has had this since audit-t157; the Gov lanes did not, so once a Gov hub existed this workflow could never succeed again.)'
         type: boolean
         default: false
+      override_estate_pause:
+        description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED a run_mode=full dispatch STANDS DOWN (nothing deployed, no approval requested) because the apply would start ADX and rewrite the paused Container Apps (#5111). true = you accept that.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -235,6 +239,24 @@ jobs:
       - id: read
         run: node scripts/ci/estate-pause-declared.mjs --boundary "$CSA_LOOM_BOUNDARY"
 
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111): the OBSERVED half of "is the estate
+  # paused" - the console's Estate Power state - complementing the checked-in
+  # declaration above. A schedule never applies on this lane, so it is skipped
+  # there. `deploy-validate` below cannot be split (one `az deployment sub
+  # create` re-renders every resource and the ADX preflight starts a cluster
+  # first), so a run_mode=full dispatch stands down whole BEFORE the approval gate
+  # is asked. The image phase builds into the ACR, which Estate Power never
+  # pauses, so it keeps running. UNKNOWN proceeds with a ::warning::.
+  estate-gate:
+    name: Estate pause gate
+    needs: precheck
+    if: ${{ github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' }}
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: GCC-High
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
   # IMAGE PHASE (no-vaporware.md two-phase contract). admin-plane/main.bicep
   # deploys loom-migrate + loom-risingwave DEFAULT-ON in every Container Apps
   # boundary, GCC-High included, and params/gcc-high.bicepparam sets
@@ -297,6 +319,12 @@ jobs:
     needs: [precheck, pause-declaration, build-gov-images]
     if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true'
     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    needs: [precheck, pause-declaration, build-gov-images, estate-gate]
+    # Estate stand-down (#5111): this lane has no schedule path (the conjunct above),
+    # so the fail-open `!= 'true'` branch is the live one; the schedule branch is
+    # kept so the expression is identical in every lane. whatif-only applies nothing.
+    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || inputs.run_mode != 'full')
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).
@@ -1100,7 +1128,7 @@ jobs:
         # run, so there is nothing to upload and `if-no-files-found: warn` would
         # otherwise print a warning about an absence that is expected (#4233).
         if: steps.adx_preflight.outputs.estate_paused != 'true'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-gcch-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt
@@ -1289,7 +1317,10 @@ jobs:
             --skip-if-registry-absent \
             "loom-duckdb:${LOOM_DUCKDB_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
             "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
-            "$VALKEY_REF"
+            "$VALKEY_REF" \
+            "loom-lineage-extractor:latest" \
+            "loom-secret-expiry-monitor:latest" \
+            "loom-report-subscriptions:latest"
 
       # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
       # Having the tag in scope is necessary and NOT sufficient. In scope with
@@ -1330,6 +1361,11 @@ jobs:
         # Gov (the #4064 class). It is filed separately; the moment the
         # declaration is deleted this gate runs again and refuses again.
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
+        env:
+          # The gate's documented escape hatch (assert-no-silent-image-tag-revert.mjs:145)
+          # reads process.env, and nothing exported it, so setting the variable did nothing.
+          # Unset arrives as '' and the script tests === 'true', so the default stays: refuse.
+          LOOM_ALLOW_IMAGE_TAG_REVERT: ${{ vars.LOOM_ALLOW_IMAGE_TAG_REVERT }}
         run: |
           set -euo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription
@@ -1413,6 +1449,9 @@ jobs:
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          # Same acknowledgement the revert gate reads. pin-refresh honours it ONLY for apps that run by
+          # digest; unset arrives as '' and the script tests === 'true', so the default stays: refuse.
+          LOOM_ALLOW_IMAGE_TAG_REVERT: ${{ vars.LOOM_ALLOW_IMAGE_TAG_REVERT }}
         run: |
           set -uo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription and
@@ -1659,6 +1698,18 @@ jobs:
             echo "console_url=$SMOKE_URL" >> "$GITHUB_OUTPUT"
             echo "::notice::smoke-test target (public ingress): $SMOKE_URL"
           fi
+
+      # The failure artifact deploy-retry.mjs writes (--artifact) was never uploaded, so the leaf detail it
+      # holds (type, name, deployment chain) died with the runner. The file passes through redact() as a whole
+      # (#3829) and deploy-notify-failure.mjs already posts it to a public issue, so this adds no new surface.
+      - name: Upload the Provision failure artifact
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gov-provision-failure-gcch-${{ github.run_id }}
+          path: ${{ github.workspace }}/deploy-failure.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       # ── ACR COMPLIANCE TAGS — APPLIED HERE, NOT BY THE TEMPLATE (#3714) ────
       # CLOUD PARITY: identical to the step in deploy-fiab-commercial.yml. The

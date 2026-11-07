@@ -185,10 +185,18 @@ var peVnetId = join(take(split(privateEndpointSubnetId, '/'), 9), '/')
 var createDnsZone = empty(privateDnsZoneId)
 var dnsVnetIds = union([peVnetId], additionalDnsVnetIds)
 
+// Estate Power (#5099 phase B): the Container Apps that connect to this server. Estate
+// Power stops a flexible server ONLY when every app named here is itself being paused,
+// so a server backing an always-on app is held out. loom-unity is on the never-pause
+// list (loom-unity-app.bicep: durable Postgres catalog; 23-30s cold start), so this
+// server is never stopped. Tag only; no behavioural change to the deployment.
+@description('Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means "consumers unknown" and the server is never stopped; the literal value none certifies no running app uses it.')
+param estatePauseConsumers string = 'loom-unity'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: name
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause-consumers': estatePauseConsumers })
   sku: {
     name: skuName
     tier: tier

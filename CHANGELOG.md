@@ -25,6 +25,249 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.120.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.1...csa-inabox-v0.120.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **gov:** resolve the ARM host from the active cloud in approve-cae-private-endpoints ([#5255](https://github.com/fgarofalo56/csa-inabox/issues/5255)) ([1126de1](https://github.com/fgarofalo56/csa-inabox/commit/1126de168d972792cc13763e162ee62364a7f95c)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+
+## [0.120.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.0...csa-inabox-v0.120.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **gov:** use a Microsoft.Consumption/budgets api version Azure Government supports ([#5251](https://github.com/fgarofalo56/csa-inabox/issues/5251)) ([dee03c2](https://github.com/fgarofalo56/csa-inabox/commit/dee03c2bc1696b2f1ae046feb6203c1625eb79e0)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+
+## [0.120.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.119.0...csa-inabox-v0.120.0) (2026-11-07)
+
+
+### Features
+
+* **lhds:** bootstrap control-plane Entra wiring (fed credential, HealthCP roles, allowlist) ([#5223](https://github.com/fgarofalo56/csa-inabox/issues/5223)) ([0d6f0c6](https://github.com/fgarofalo56/csa-inabox/commit/0d6f0c6a62a9ffdd1e699e85017d1246fb6f3d0e))
+
+## [0.119.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.118.0...csa-inabox-v0.119.0) (2026-11-07)
+
+
+### Features
+
+* **gov:** add a create-and-delete ADX capacity probe for usgovarizona ([#5247](https://github.com/fgarofalo56/csa-inabox/issues/5247)) ([e511211](https://github.com/fgarofalo56/csa-inabox/commit/e5112111baa93a7acca441077bd0402562066ee2))
+* **gov:** build the third literal-:latest Job image, loom-report-subscriptions, on the Gov ACR ([af810af](https://github.com/fgarofalo56/csa-inabox/commit/af810af61b2419d4760d1d02b34c9b29d99b8dc7))
+* **gov:** build the two Container App Job images on the Gov ACR and name them in the preflight ([fe48794](https://github.com/fgarofalo56/csa-inabox/commit/fe48794b37792822708e53e1825060c7f0c18669))
+* **gov:** explicit ADX cluster name via adxConfig; GCC-High uses adx-csa-loom-gcch1 ([6b4b78e](https://github.com/fgarofalo56/csa-inabox/commit/6b4b78e6308f9ca3cb6d18e16316c35c32ef6e31))
+* **gov:** place AI Search in usgovarizona for GCC-High via aiSearchLocation ([6c1f29c](https://github.com/fgarofalo56/csa-inabox/commit/6c1f29c301222545e39ab2184a8f6cc103ba31c6))
+* **gov:** place the GCC-High ADX cluster in usgovarizona via adxConfig.adxLocation ([4f4b78d](https://github.com/fgarofalo56/csa-inabox/commit/4f4b78d3cb425b5971357a10a83e902b9778b0d1))
+* **health:** PDP bundle publishing pipeline and control-plane publish target (W1-5) ([2c2543b](https://github.com/fgarofalo56/csa-inabox/commit/2c2543b3c3cf5fd055e36834fab6dfec51492b42))
+
+
+### Bug Fixes
+
+* **deploy:** classify a wrapped authorization denial as permission, not a Loom defect ([ef85cd6](https://github.com/fgarofalo56/csa-inabox/commit/ef85cd6fb4eaac200496cc5a7aba9e4abd273c07))
+* **deploy:** converge every named RoleAssignmentExists stray in one pass; retry the Accepted-account race ([ca0c925](https://github.com/fgarofalo56/csa-inabox/commit/ca0c925dcf885f8ec25b6f2614b35c1f23ee8c19))
+* **gov:** export LOOM_ALLOW_IMAGE_TAG_REVERT to the GCC-High revert gate ([4c5dbd4](https://github.com/fgarofalo56/csa-inabox/commit/4c5dbd43f42b9ade531b4bf662ca74290cab1043))
+* **gov:** make the ADX capacity probe read the operation error, not just the generic deployment one ([#5248](https://github.com/fgarofalo56/csa-inabox/issues/5248)) ([ffb99b8](https://github.com/fgarofalo56/csa-inabox/commit/ffb99b8955d083a5eaac73a50d9e15eaa6e4e9e9)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+* **gov:** move GCC-High ADX to Standard_L8as_v3, the SKU Virginia still offers ([b009279](https://github.com/fgarofalo56/csa-inabox/commit/b0092799c16553ae8b10d5ee761dd1e4c3cad468))
+* **gov:** pin-refresh honours LOOM_ALLOW_IMAGE_TAG_REVERT for digest-pinned apps ([b0b1447](https://github.com/fgarofalo56/csa-inabox/commit/b0b144704eadc7308ec37f0cd2429615c2710f0c))
+* **gov:** record each ARM leaf's deployment chain and upload the Provision failure artifact ([d1635ad](https://github.com/fgarofalo56/csa-inabox/commit/d1635ada627e75deb8b860a2af9dcf6956cd1039))
+* **gov:** scope lake-grant modules to the adopted lake's resource group; drop allLogs on the Redis Container App ([5969522](https://github.com/fgarofalo56/csa-inabox/commit/5969522167a80823a41ce0816f5638f0f9c6484a))
+* **gov:** turn ADX off for GCC-High until a SKU is accepted (capacity probe) ([#5249](https://github.com/fgarofalo56/csa-inabox/issues/5249)) ([f31f5f8](https://github.com/fgarofalo56/csa-inabox/commit/f31f5f84883350cf55b93ec060ad4de6161fe6f1)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+* **gov:** wait on the sustained ACR data-plane probe in the adoption image preflight ([432bc58](https://github.com/fgarofalo56/csa-inabox/commit/432bc5837d36cb45125eef84af2948f49f5de140))
+
+
+### Documentation
+
+* **lhds:** record the 2026-11-05/06 Gov deploy-lane PRs as merged, not deployed ([#5224](https://github.com/fgarofalo56/csa-inabox/issues/5224) [#5227](https://github.com/fgarofalo56/csa-inabox/issues/5227)-[#5240](https://github.com/fgarofalo56/csa-inabox/issues/5240)) ([b2ff899](https://github.com/fgarofalo56/csa-inabox/commit/b2ff89929ae59f73df3cafeebf41904746da3faa))
+* **lhds:** record W1 follow-ups as merged, not deployed ([#5220](https://github.com/fgarofalo56/csa-inabox/issues/5220)) ([8c17480](https://github.com/fgarofalo56/csa-inabox/commit/8c17480e9cc2772931d9e90ebc833025b6646e39))
+
+
+### Miscellaneous
+
+* **gov:** expire the GCC-High pause declaration again for the fresh-cluster deploy ([4fe9781](https://github.com/fgarofalo56/csa-inabox/commit/4fe97815d8a7892a67e0eb0be54773b229be4436))
+* **gov:** expire the GCC-High pause declaration for one validation window ([23a8909](https://github.com/fgarofalo56/csa-inabox/commit/23a8909dbba1a261b2f26bf3d904b7371652bbff))
+* **gov:** restore the GCC-High pause declaration after the ADX capacity block ([0f07b0d](https://github.com/fgarofalo56/csa-inabox/commit/0f07b0da4ec46ec1bc626553285d313832d25dc8))
+
+## [0.118.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.1...csa-inabox-v0.118.0) (2026-11-03)
+
+
+### Features
+
+* **apigw:** Gov registry receipt workflow (W1-7 GCC-High) ([#5206](https://github.com/fgarofalo56/csa-inabox/issues/5206)) ([942abc5](https://github.com/fgarofalo56/csa-inabox/commit/942abc57a501ca77086ecffd37f78af63fd6f713))
+* **apigw:** W1 gateway registry, observe mode, environments, hub shell ([#5191](https://github.com/fgarofalo56/csa-inabox/issues/5191)) ([387c3f6](https://github.com/fgarofalo56/csa-inabox/commit/387c3f6299e356b39ea2f51e07bf66f3dd8c91d2))
+* **health:** edge probe for tenant 403 and quota 429 + Retry-After ([#5149](https://github.com/fgarofalo56/csa-inabox/issues/5149)) ([76b5aa0](https://github.com/fgarofalo56/csa-inabox/commit/76b5aa0b1021302a41ae090b5be3c22a87d5547a))
+
+
+### Bug Fixes
+
+* **apigw:** accept a service name in the Gov registry receipt ([#5208](https://github.com/fgarofalo56/csa-inabox/issues/5208)) ([45555a4](https://github.com/fgarofalo56/csa-inabox/commit/45555a4fc4a982a7c9ca7067b85013def4ce0f00))
+* **console,apigw:** a client hang-up no longer kills the replica; inventory sync fans out ([#5205](https://github.com/fgarofalo56/csa-inabox/issues/5205)) ([ffb03de](https://github.com/fgarofalo56/csa-inabox/commit/ffb03de1ad2bddcae06c6d92a4e7e5658a6b632a))
+* **console,lhds:** thread session into workspace items create; log failed health-tenant bind ([#5177](https://github.com/fgarofalo56/csa-inabox/issues/5177)) ([#5214](https://github.com/fgarofalo56/csa-inabox/issues/5214)) ([c829736](https://github.com/fgarofalo56/csa-inabox/commit/c8297368528807aea10a0b395d4d508c401fd2fa))
+* **deps:** pin opentelemetry-api to 1.28.2 to match sdk in ai-agents ([c134a32](https://github.com/fgarofalo56/csa-inabox/commit/c134a32da6585682f8df1186fbef0ada74167205))
+* **health:** build loom-health-cp with the repo root as context ([#5171](https://github.com/fgarofalo56/csa-inabox/issues/5171)) ([73b45dc](https://github.com/fgarofalo56/csa-inabox/commit/73b45dc55dd51e9c098d86eb3e690620701b8893))
+* **lhds:** auth server reuse detection, state binding, key guards ([#5134](https://github.com/fgarofalo56/csa-inabox/issues/5134)) ([#5216](https://github.com/fgarofalo56/csa-inabox/issues/5216)) ([09f7611](https://github.com/fgarofalo56/csa-inabox/commit/09f761112fbd18c3ffac01146627dc1b54eca27c))
+* **lhds:** root openid-configuration for APIM validate-jwt ([#5160](https://github.com/fgarofalo56/csa-inabox/issues/5160)) ([#5213](https://github.com/fgarofalo56/csa-inabox/issues/5213)) ([6d38194](https://github.com/fgarofalo56/csa-inabox/commit/6d3819439a0284a0b22b5b4f60718ab481861ac4))
+
+
+### Documentation
+
+* **apigw:** close W1-7 with declared gaps tracked in [#5210](https://github.com/fgarofalo56/csa-inabox/issues/5210) ([#5209](https://github.com/fgarofalo56/csa-inabox/issues/5209)) ([80b5b42](https://github.com/fgarofalo56/csa-inabox/commit/80b5b427e70c3390de3033004f80bbaf05846635))
+* **apigw:** mark PRP apigw-W01 shipped with declared gaps ([#5211](https://github.com/fgarofalo56/csa-inabox/issues/5211)) ([49fbd26](https://github.com/fgarofalo56/csa-inabox/commit/49fbd265d6d2f846e32a3e74a15d973ca320017d))
+
+## [0.117.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.0...csa-inabox-v0.117.1) (2026-10-30)
+
+
+### Documentation
+
+* **lhds:** record the six W1 follow-up PRs as merged, not deployed ([#5164](https://github.com/fgarofalo56/csa-inabox/issues/5164)) ([c84e6c5](https://github.com/fgarofalo56/csa-inabox/commit/c84e6c5927cc342cc04b24f03fb1945a4daec476))
+
+## [0.117.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.116.0...csa-inabox-v0.117.0) (2026-10-30)
+
+
+### Features
+
+* **apiplane:** W0 APIM measurement probes and Retail Prices coverage script ([#5181](https://github.com/fgarofalo56/csa-inabox/issues/5181)) ([d877782](https://github.com/fgarofalo56/csa-inabox/commit/d877782a8298268af8c0a2613ae3e5154c6b09a9)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **health:** provision health-tenant backing tenant at create time ([#5172](https://github.com/fgarofalo56/csa-inabox/issues/5172)) ([b9decb4](https://github.com/fgarofalo56/csa-inabox/commit/b9decb4a8dcb883ddd90988360ac8e689b50e161))
+* **health:** wire tenant ARM adapter into control-plane main ([#5170](https://github.com/fgarofalo56/csa-inabox/issues/5170)) ([089ff80](https://github.com/fgarofalo56/csa-inabox/commit/089ff80e7c1c35682a40d49d8740272001560ee7))
+
+
+### Bug Fixes
+
+* **apiplane:** harden the W0 probes after the 5181 review, H1-H7 ([#5183](https://github.com/fgarofalo56/csa-inabox/issues/5183)) ([0f1ff4d](https://github.com/fgarofalo56/csa-inabox/commit/0f1ff4d7b934ee27baf5c1b35cd733d45e4c1724)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **console:** pin vitest back to 3.2.7 (5.0.5 broke main's vitest job) ([#5174](https://github.com/fgarofalo56/csa-inabox/issues/5174)) ([1e58004](https://github.com/fgarofalo56/csa-inabox/commit/1e58004dccf09e214353efdb742fb68e18e1a5a8))
+
+
+### Documentation
+
+* **apigw:** W0 receipt, decision pass and wrap-up of the measurement spike ([#5188](https://github.com/fgarofalo56/csa-inabox/issues/5188)) ([a74908d](https://github.com/fgarofalo56/csa-inabox/commit/a74908d104c18533b90cd472c7c2b7a6b61575a6)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **prp:** Loom API & AI Gateway Plane PRD + PRP set (Mosaic fold-in) ([#5180](https://github.com/fgarofalo56/csa-inabox/issues/5180)) ([007da59](https://github.com/fgarofalo56/csa-inabox/commit/007da59c49350ccab0c79e4cbeab62e883c5264c))
+
+## [0.116.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.115.0...csa-inabox-v0.116.0) (2026-10-28)
+
+
+### Features
+
+* **health:** W1-4 auth infra - Cosmos containers, env vars, scoped signing key ([#5158](https://github.com/fgarofalo56/csa-inabox/issues/5158)) ([26ffc2b](https://github.com/fgarofalo56/csa-inabox/commit/26ffc2bfdd0ab37ee6b58f1511b36f6c4fae6057))
+
+## [0.115.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.114.0...csa-inabox-v0.115.0) (2026-10-27)
+
+
+### Features
+
+* **health:** add DoD to the boundary enum, supported-in-code only (W1-8) ([#5146](https://github.com/fgarofalo56/csa-inabox/issues/5146)) ([a31e9c4](https://github.com/fgarofalo56/csa-inabox/commit/a31e9c45fdd310bffe29905bf4594aecb34fe13c))
+* **health:** APIM tenant routing wiring and tenant-independent discovery URL (W1-6 gaps) ([#5154](https://github.com/fgarofalo56/csa-inabox/issues/5154)) ([a13d13f](https://github.com/fgarofalo56/csa-inabox/commit/a13d13fe1ceb5e509f0ea84369beb2ea532593a1))
+* **health:** control-plane KV Crypto Officer + fail-closed tenant.destroy storage check ([#5157](https://github.com/fgarofalo56/csa-inabox/issues/5157)) ([1c68d16](https://github.com/fgarofalo56/csa-inabox/commit/1c68d160e232d431088e424b3b1dd52010130ddf))
+* **health:** health-tenant D12 exact-grant gate, quotas tab, Graph-consent gate (W1-7) ([#5159](https://github.com/fgarofalo56/csa-inabox/issues/5159)) ([bdccdd5](https://github.com/fgarofalo56/csa-inabox/commit/bdccdd5ed519389be10cee141fc68fcecd913264))
+* **health:** per-stamp PDP data and signed bundle publishing (W1-5) ([#5155](https://github.com/fgarofalo56/csa-inabox/issues/5155)) ([4a5bb2f](https://github.com/fgarofalo56/csa-inabox/commit/4a5bb2fca3118eb3f63358ed0d6ee8ce7b6a32fb))
+* **health:** wire the authorization server into the control plane (W1-4) ([#5156](https://github.com/fgarofalo56/csa-inabox/issues/5156)) ([caacd0c](https://github.com/fgarofalo56/csa-inabox/commit/caacd0c2c9e58e3db35016819c29f4d97579c12a))
+
+
+### Documentation
+
+* **lhds:** final W1 board sync - W1-6, W1-8, W1-9 merged, not deployed ([#5152](https://github.com/fgarofalo56/csa-inabox/issues/5152)) ([5cbc1b5](https://github.com/fgarofalo56/csa-inabox/commit/5cbc1b56bcc754147d0005c657b8c97186c27a51))
+* **lhds:** W1-9 health docs - greenfield, brownfield, per-cloud table, runbooks ([#5148](https://github.com/fgarofalo56/csa-inabox/issues/5148)) ([97ce3e5](https://github.com/fgarofalo56/csa-inabox/commit/97ce3e5cbc99229186b41d7334e37f1b1b6a10bd))
+
+## [0.114.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.113.0...csa-inabox-v0.114.0) (2026-10-27)
+
+
+### Features
+
+* **ci:** bootstrap accepts an existing console app registration instead of listing apps ([#5087](https://github.com/fgarofalo56/csa-inabox/issues/5087)) ([b192f05](https://github.com/fgarofalo56/csa-inabox/commit/b192f05ea347086c772af1cb876d94fc845083c8))
+* **ci:** build only the images whose inputs changed on a push to main ([#5070](https://github.com/fgarofalo56/csa-inabox/issues/5070)) ([55aa097](https://github.com/fgarofalo56/csa-inabox/commit/55aa0973b914279a82d639762483132c3f8524bd))
+* **ci:** route console + directlake onto the ACR build pool (count 2, guaranteed scale-down) ([#5066](https://github.com/fgarofalo56/csa-inabox/issues/5066)) ([dc72f85](https://github.com/fgarofalo56/csa-inabox/commit/dc72f85b275bb57161df891e186d6f84715e5864))
+* **console:** idle auto-pause includes Container Apps by default, with a paused banner ([#5083](https://github.com/fgarofalo56/csa-inabox/issues/5083)) ([af30d55](https://github.com/fgarofalo56/csa-inabox/commit/af30d55147f362f15e7b065e83b393df9b429b3a))
+* **console:** StackedSplit primitive + data-pipeline designer adoption ([#3699](https://github.com/fgarofalo56/csa-inabox/issues/3699) phases 2-3) ([#5095](https://github.com/fgarofalo56/csa-inabox/issues/5095)) ([2e56f50](https://github.com/fgarofalo56/csa-inabox/commit/2e56f50c4ce24f1db30ca8bd8f3ed70457091e8c))
+* **estate:** always-on disclosure with cost + Phase B review fixes ([#5099](https://github.com/fgarofalo56/csa-inabox/issues/5099) phase C) ([#5109](https://github.com/fgarofalo56/csa-inabox/issues/5109)) ([60a579c](https://github.com/fgarofalo56/csa-inabox/commit/60a579c36d7ef1b5184f9ba860143d98f5125c7b))
+* **estate:** discover every pausable type by loom-estate-id tag ([#5099](https://github.com/fgarofalo56/csa-inabox/issues/5099) phase A) ([#5100](https://github.com/fgarofalo56/csa-inabox/issues/5100)) ([80e455b](https://github.com/fgarofalo56/csa-inabox/commit/80e455b60ecc3170b021648718fcbe83dc9f0e42))
+* **estate:** pause PostgreSQL/MySQL (dependency-aware), App Gateway, Power BI Embedded ([#5099](https://github.com/fgarofalo56/csa-inabox/issues/5099) phase B) ([#5104](https://github.com/fgarofalo56/csa-inabox/issues/5104)) ([8f77094](https://github.com/fgarofalo56/csa-inabox/commit/8f770942cb4fe1a04691f8759bb5ecfc9b8ba721))
+* **health:** edge routing - APIM tenant fragment, WAF exclusions, rate limits (W1-6) ([#5145](https://github.com/fgarofalo56/csa-inabox/issues/5145)) ([76301d1](https://github.com/fgarofalo56/csa-inabox/commit/76301d1f9b8840ad100756de3252659252c76c22))
+* **health:** health-stamp pause guard and PostgreSQL restart scheduler (W1-8) ([#5138](https://github.com/fgarofalo56/csa-inabox/issues/5138)) ([7e51b25](https://github.com/fgarofalo56/csa-inabox/commit/7e51b25acdaa3e9f8484aba2a517f793cb3c5f56))
+* **health:** health-tenant item type, provisioner, editor, gates, Console env rows (W1-7) ([#5139](https://github.com/fgarofalo56/csa-inabox/issues/5139)) ([dcc2111](https://github.com/fgarofalo56/csa-inabox/commit/dcc21115236f67285868371159b98edac738e422))
+* **health:** LHDS as its own deployment unit (health.bicep) + deploy-health.yml (W1-1, W1-3) ([#5126](https://github.com/fgarofalo56/csa-inabox/issues/5126)) ([c39c7a4](https://github.com/fgarofalo56/csa-inabox/commit/c39c7a42fcdeb4385d23a84c16d47df7a665a80b))
+* **health:** LHDS authorization server - SMART v2 scopes, Backend Services, refresh (W1-4 server) ([#5131](https://github.com/fgarofalo56/csa-inabox/issues/5131)) ([47147f1](https://github.com/fgarofalo56/csa-inabox/commit/47147f16752ef3f975e3612c568dc14016fdedc2))
+* **health:** LHDS PDP Rego bundle v1 and decision API contract (W1-5) ([#5125](https://github.com/fgarofalo56/csa-inabox/issues/5125)) ([a1a606f](https://github.com/fgarofalo56/csa-inabox/commit/a1a606f4366679a8c2ba648f11a4c5b7bfe15934))
+* **health:** LHDS stamp bicep behind healthEnabled (W1-1) ([#5122](https://github.com/fgarofalo56/csa-inabox/issues/5122)) ([be5f24f](https://github.com/fgarofalo56/csa-inabox/commit/be5f24fc2a735e3e3a0a8126b9666688a6114b83))
+* **health:** LHDS tenant bicep + tenant.create/destroy jobs (W1-2) ([#5130](https://github.com/fgarofalo56/csa-inabox/issues/5130)) ([66668f5](https://github.com/fgarofalo56/csa-inabox/commit/66668f51c9193d777c146ced1acecf3e23cb82e3))
+* **health:** loom-health-cp control-plane service (W1-3) ([#5121](https://github.com/fgarofalo56/csa-inabox/issues/5121)) ([8284411](https://github.com/fgarofalo56/csa-inabox/commit/82844115d68a63f8eeea6ed17d01929c903dfc15))
+* **health:** PDP bundle endpoint, engines.bicep PDP workload, tighter authz tests, opa CI (W1-5) ([#5137](https://github.com/fgarofalo56/csa-inabox/issues/5137)) ([d8d5cff](https://github.com/fgarofalo56/csa-inabox/commit/d8d5cff17bca317aa198b9113af10c8ed756794b))
+* **lhds:** W0 no-cost pass - measurement scripts, local smoke, DEV sandbox, receipt ([#5093](https://github.com/fgarofalo56/csa-inabox/issues/5093)) ([506fb87](https://github.com/fgarofalo56/csa-inabox/commit/506fb8738c453cc28ceec64eb52a517a5964e23b))
+
+
+### Bug Fixes
+
+* **bicep:** scale the disabled direct-lake-shim to zero and drop its HTTP probes ([#5068](https://github.com/fgarofalo56/csa-inabox/issues/5068)) ([27c46a9](https://github.com/fgarofalo56/csa-inabox/commit/27c46a91f4b3716f644de4199482656fc3f7eca2))
+* **ci:** carry unchanged images forward with az acr import so the digest is preserved ([#5086](https://github.com/fgarofalo56/csa-inabox/issues/5086)) ([9401993](https://github.com/fgarofalo56/csa-inabox/commit/9401993d3eec6536a77fedda47792d070a6dbecd))
+* **ci:** Gov image builds default to the GitHub runner with registry layer cache; S1 pool test input; prune failed pools ([#5102](https://github.com/fgarofalo56/csa-inabox/issues/5102)) ([#5110](https://github.com/fgarofalo56/csa-inabox/issues/5110)) ([7ac688c](https://github.com/fgarofalo56/csa-inabox/commit/7ac688c9c2ef6da840ffd9556d30101aa2d98d13))
+* **ci:** gov-console-roll can build on the GitHub runner when ACR Tasks capacity is out ([#5102](https://github.com/fgarofalo56/csa-inabox/issues/5102)) ([#5108](https://github.com/fgarofalo56/csa-inabox/issues/5108)) ([d5406b0](https://github.com/fgarofalo56/csa-inabox/commit/d5406b0f1be84013fe3d648fc4d62889416f68b6))
+* **ci:** pool release survives a transient login and diagnose shows the failed run log ([#5084](https://github.com/fgarofalo56/csa-inabox/issues/5084)) ([081c29d](https://github.com/fgarofalo56/csa-inabox/commit/081c29d24d01342e2ac29a57e7ebefb33c6fa843))
+* **ci:** quota inventory in the ACR pool reaper + verified pool release in Gov/blue-green rolls ([#5102](https://github.com/fgarofalo56/csa-inabox/issues/5102)) ([#5103](https://github.com/fgarofalo56/csa-inabox/issues/5103)) ([27300ae](https://github.com/fgarofalo56/csa-inabox/commit/27300aeddee14bbafbd35cf0e1191900c307ce84))
+* **ci:** the build pool was never scaled up (jq filter compared the pool list to itself) ([#5080](https://github.com/fgarofalo56/csa-inabox/issues/5080)) ([f5830d2](https://github.com/fgarofalo56/csa-inabox/commit/f5830d2dbba16093aa4d19ad10ad4adb2ef8af35))
+* **console:** count every ARM GET in [arm-reads] and guard against uncounted ARM fetches ([#5074](https://github.com/fgarofalo56/csa-inabox/issues/5074)) ([89bb8bd](https://github.com/fgarofalo56/csa-inabox/commit/89bb8bd22868dd907d762f885aed3bb415350851))
+* **console:** generic item delete tears down recorded backing resources ([#5046](https://github.com/fgarofalo56/csa-inabox/issues/5046)) ([#5071](https://github.com/fgarofalo56/csa-inabox/issues/5071)) ([525c289](https://github.com/fgarofalo56/csa-inabox/commit/525c289784405b5a90c1c1ec89feb36971ddc89d))
+* **console:** pace and label the diagnostics coverage sweep and the install job ([#5064](https://github.com/fgarofalo56/csa-inabox/issues/5064)) ([64bc542](https://github.com/fgarofalo56/csa-inabox/commit/64bc54262ecdeadd36ffd77f6e3048dc229399eb))
+* **deploy:** deploy lanes stand down while the estate is paused (PRP-02 step 6) ([#5113](https://github.com/fgarofalo56/csa-inabox/issues/5113)) ([4256844](https://github.com/fgarofalo56/csa-inabox/commit/42568442ce505df36c6bed88596069647dd4a963))
+* **deploy:** scheduled deploys stand down when the estate state can't be read (fail-closed); dispatch stays fail-open ([#5114](https://github.com/fgarofalo56/csa-inabox/issues/5114)) ([f6ff68f](https://github.com/fgarofalo56/csa-inabox/commit/f6ff68f62922b908bfd1be11e60ec17281d1db22))
+* **deps:** bump next 15.5.27 -&gt; 15.5.28 in fiab-console (GHSA-2464-fhr4-w9xw) ([#5090](https://github.com/fgarofalo56/csa-inabox/issues/5090)) ([2f7694b](https://github.com/fgarofalo56/csa-inabox/commit/2f7694b0eaa4eefade0a9d4f994255621c266883))
+* **direct-lake-shim:** start and idle when disabled, fail loud only when enabled but misconfigured ([#5067](https://github.com/fgarofalo56/csa-inabox/issues/5067)) ([9fce0f6](https://github.com/fgarofalo56/csa-inabox/commit/9fce0f6125a49307d917fa007847293b9e3b554d))
+* **estate:** estate pause holds - block auto-resume while paused, Consumption sites are no-ops, true prior-state label ([#5111](https://github.com/fgarofalo56/csa-inabox/issues/5111)) ([#5112](https://github.com/fgarofalo56/csa-inabox/issues/5112)) ([9c3559a](https://github.com/fgarofalo56/csa-inabox/commit/9c3559a452a8fe1b603bb7085053fb58dad06d80))
+* **health:** deploy-health.yml param resolve + hub resource-group discovery ([#5132](https://github.com/fgarofalo56/csa-inabox/issues/5132)) ([d6a2845](https://github.com/fgarofalo56/csa-inabox/commit/d6a28450460ac073b2a37ef6162efd52eeafc75d))
+
+
+### Documentation
+
+* **lhds:** record W1 progress as merged, not deployed ([#5128](https://github.com/fgarofalo56/csa-inabox/issues/5128)) ([8770f86](https://github.com/fgarofalo56/csa-inabox/commit/8770f8613f72a14c9fac88f6a4de659d51af5704))
+* **lhds:** record W1-2, W1-4 server and deploy-health fix as merged, not deployed ([#5136](https://github.com/fgarofalo56/csa-inabox/issues/5136)) ([98c8455](https://github.com/fgarofalo56/csa-inabox/commit/98c8455be20e72ac8a66459ba00a045e4f3a4802))
+* **lhds:** sync W1 board - W1-5, W1-7, W1-8 TS half merged, not deployed ([#5144](https://github.com/fgarofalo56/csa-inabox/issues/5144)) ([54c2285](https://github.com/fgarofalo56/csa-inabox/commit/54c228523f421b2a0dcaa85355ae75932c8d5227))
+* **lhds:** W0 DEV run - DICOM, FHIR, Synthea, egress measured on the DEV sandbox ([#5107](https://github.com/fgarofalo56/csa-inabox/issues/5107)) ([27c37a7](https://github.com/fgarofalo56/csa-inabox/commit/27c37a7ab927f7a912dc2948f674325ff044b2fd))
+* **lhds:** W0-7 decision pass on DEV evidence (operator Q2 2026-10-24) ([#5118](https://github.com/fgarofalo56/csa-inabox/issues/5118)) ([ceb206c](https://github.com/fgarofalo56/csa-inabox/commit/ceb206cd5e171729840becaa53ec9d15a20e0d15))
+* **lhds:** W1-4 SMART v2 scope-mapping design and access-token contract ([#5127](https://github.com/fgarofalo56/csa-inabox/issues/5127)) ([9ab55e1](https://github.com/fgarofalo56/csa-inabox/commit/9ab55e19aae70bfa9b12a3bd60b424838a082078))
+* **prp:** Loom Health Data Services (LHDS) PRD + PRP set, waves W0-W12 ([#5091](https://github.com/fgarofalo56/csa-inabox/issues/5091)) ([9e0061f](https://github.com/fgarofalo56/csa-inabox/commit/9e0061fffa3f9334e11abd84c6cd3da0b5a36b19))
+
+
+### Continuous Integration
+
+* **lhds:** add read-only Gov availability probe workflow (W0-3) ([#5092](https://github.com/fgarofalo56/csa-inabox/issues/5092)) ([7914192](https://github.com/fgarofalo56/csa-inabox/commit/79141929f54b6a7981329d2ce436732f366de05a))
+* **lhds:** probe PostgreSQL in all three Gov regions and surface OfferRestricted ([#5094](https://github.com/fgarofalo56/csa-inabox/issues/5094)) ([a010a61](https://github.com/fgarofalo56/csa-inabox/commit/a010a6177ab2c8cab141cd798f11e7a5ba09d331))
+
+
+### Miscellaneous
+
+* **deps:** monthly dependabot cadence; hold aiohttp with the stale copilot lock ([#5063](https://github.com/fgarofalo56/csa-inabox/issues/5063)) ([af2e8f0](https://github.com/fgarofalo56/csa-inabox/commit/af2e8f06c097fb9b59c7fde9ee3e71926439a963))
+* **prp:** adopt legacy PRPs into the index, retire superseded umbrellas ([#5097](https://github.com/fgarofalo56/csa-inabox/issues/5097)) ([0ddcf05](https://github.com/fgarofalo56/csa-inabox/commit/0ddcf059f4026a380c1362a811901546478c3b0d))
+* **prp:** index from tracked PRPs only; LHDS docs stop naming the private advisory id ([#5120](https://github.com/fgarofalo56/csa-inabox/issues/5120)) ([a88bc9c](https://github.com/fgarofalo56/csa-inabox/commit/a88bc9c200abde4f74b93744957eaf24c41acb0b))
+* **prp:** move index docs out of active/, ship canvas PRP, rebuild INDEX ([#5096](https://github.com/fgarofalo56/csa-inabox/issues/5096)) ([5801a93](https://github.com/fgarofalo56/csa-inabox/commit/5801a93eb079bf8e194020e2f792f2798a8dd70d))
+
+## [0.113.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.1...csa-inabox-v0.113.0) (2026-10-21)
+
+
+### Features
+
+* **governance:** W0 measurement spike for governance autopilot ([#5016](https://github.com/fgarofalo56/csa-inabox/issues/5016)) ([8261467](https://github.com/fgarofalo56/csa-inabox/commit/8261467cf4a5dcb9a94e4f4fa29a0fc6576b1939))
+* **governance:** W1 Copilot visibility fixes + governance_inventory read tool ([#5042](https://github.com/fgarofalo56/csa-inabox/issues/5042)) ([92242c5](https://github.com/fgarofalo56/csa-inabox/commit/92242c5b2eee4e623d5f220ea11485a81553db24))
+
+
+### Bug Fixes
+
+* **ci:** nightly UAT surfaces its real failure, can file its issue, and stands down when the estate is declared paused ([#5045](https://github.com/fgarofalo56/csa-inabox/issues/5045)) ([#5050](https://github.com/fgarofalo56/csa-inabox/issues/5050)) ([491b414](https://github.com/fgarofalo56/csa-inabox/commit/491b4145f550fdce76addf72aafdad54d2065227))
+* **console:** set runtime heap ceiling to 1536 MiB and log process memory every 60 s ([#5057](https://github.com/fgarofalo56/csa-inabox/issues/5057)) ([fd8c9bf](https://github.com/fgarofalo56/csa-inabox/commit/fd8c9bf17be2998b70ffedeeb5e0a853be6ee84a))
+* **console:** stop the read-warmer exhausting the Console UAMI ARM read quota ([#5041](https://github.com/fgarofalo56/csa-inabox/issues/5041)) ([e8484fe](https://github.com/fgarofalo56/csa-inabox/commit/e8484fea803217f685afe87ec50b91e57b5eb604))
+* **deps:** bump certifi to 2026.10.19 in the eight remaining pip locks (GHSA-6q48-6c7w-9gw2) ([#5049](https://github.com/fgarofalo56/csa-inabox/issues/5049)) ([65a10f2](https://github.com/fgarofalo56/csa-inabox/commit/65a10f23e415a82ece6e6d75a977495eeb40728b))
+* **deps:** bump next 15.5.24 -&gt; 15.5.27 in fiab-console (GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p) ([#5047](https://github.com/fgarofalo56/csa-inabox/issues/5047)) ([f6703f2](https://github.com/fgarofalo56/csa-inabox/commit/f6703f267746467d663ae136efa2cd10018a429a))
+* **deps:** console security bumps with CVE floors in both pnpm homes ([#5018](https://github.com/fgarofalo56/csa-inabox/issues/5018)) ([2998abf](https://github.com/fgarofalo56/csa-inabox/commit/2998abf5acb738cbd4b1eb6c938ce6cc62d7ba2b))
+* **deps:** vitest ^4.1.11 in loom-sdk, loom-cli, fiab-label-propagation (GHSA-82fw-gwwq-j7x9) ([#5019](https://github.com/fgarofalo56/csa-inabox/issues/5019)) ([80176ff](https://github.com/fgarofalo56/csa-inabox/commit/80176ffb7a36887816f88c9605f68f2ba54d3a6b))
+* **estate:** a throttled ARM read is not a verdict - retry, hold state, share one fan-out ([#5039](https://github.com/fgarofalo56/csa-inabox/issues/5039)) ([057173e](https://github.com/fgarofalo56/csa-inabox/commit/057173e4320c4ce89fd03ada868be0c612e8b814))
+* **eventstream:** stop leaking Stream Analytics jobs (delete path + UAT cascade) ([#5044](https://github.com/fgarofalo56/csa-inabox/issues/5044)) ([1d41e22](https://github.com/fgarofalo56/csa-inabox/commit/1d41e228a5161f1bed26581bd58efb86445f772a))
+* **msal-bootstrap:** an unreadable app list is not an empty one (no duplicate app) ([#5032](https://github.com/fgarofalo56/csa-inabox/issues/5032)) ([19d3d3c](https://github.com/fgarofalo56/csa-inabox/commit/19d3d3cc71a43c596c96728da1c9b98c149f1ed4))
+
+
+### Documentation
+
+* **prp:** record the live Commercial W0 measurement and the private-endpoint finding ([#5040](https://github.com/fgarofalo56/csa-inabox/issues/5040)) ([77c41d7](https://github.com/fgarofalo56/csa-inabox/commit/77c41d73b0256d06f5d94e1819a9c23c93f6434c))
+
+
+### Miscellaneous
+
+* **deps:** hold the Azure/login 2 -&gt; 3 major ([#5060](https://github.com/fgarofalo56/csa-inabox/issues/5060)) ([b788377](https://github.com/fgarofalo56/csa-inabox/commit/b7883777e8f1df2d4e5468b3880a7b18e25bd60a))
+* **deps:** ignore arrow/parquet major bumps for loom-directlake ([#5048](https://github.com/fgarofalo56/csa-inabox/issues/5048)) ([789a221](https://github.com/fgarofalo56/csa-inabox/commit/789a22195c9eeaaeca4f50f268d5057409af80fd))
+
 ## [0.112.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.0...csa-inabox-v0.112.1) (2026-10-19)
 
 

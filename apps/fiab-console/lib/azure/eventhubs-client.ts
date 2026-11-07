@@ -23,7 +23,7 @@
  * via eventhubsConfigGate() and the navigator shows a single honest infra-gate.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -115,7 +115,7 @@ export function eventHubsNamespaceResourceId(): string {
 async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
+  return armCountedFetch(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -1217,7 +1217,7 @@ export async function listStreamingResourcesViaGraph(
     guard++;
     const body: Record<string, unknown> = { subscriptions, query: kql };
     if (skipToken) body.options = { $skipToken: skipToken };
-    const r = await fetchWithTimeout(`${ARG_URL}?api-version=${ARG_API}`, {
+    const r = await armCountedFetch(`${ARG_URL}?api-version=${ARG_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -1340,7 +1340,7 @@ export async function putSchemaVersion(
   const t = await credential.getToken(EVENTHUBS_DATA_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire Event Hubs data-plane token');
   const url = `${ehSchemaRegistryBase()}/$schemagroups/${encodeURIComponent(group)}/schemas/${encodeURIComponent(name)}?api-version=${SR_API}`;
-  const r = await fetchWithTimeout(url, {
+  const r = await armCountedFetch(url, {
     method: 'PUT',
     headers: {
       authorization: `Bearer ${t.token}`,

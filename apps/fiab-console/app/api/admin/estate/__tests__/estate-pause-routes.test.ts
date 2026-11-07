@@ -70,7 +70,17 @@ vi.mock('@/lib/estate/pause-orchestrator', async (importOriginal) => {
   };
 });
 
+// #5099 - Resource Graph tag discovery is a THIRD network edge (armPost). Unmocked,
+// it reaches a real credential chain: in CI that hung past the 5 s test timeout.
+// Default: a complete, empty answer, so every case above keeps its population.
+const discoverByEstateTag = vi.fn();
+vi.mock('@/lib/estate/pause-tag-discovery', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/estate/pause-tag-discovery')>();
+  return { ...real, discoverByEstateTag: (...a: unknown[]) => discoverByEstateTag(...a) };
+});
+
 import { armPowerReading, type EstatePauseSnapshot, type EstatePowerState } from '@/lib/estate/pause-state';
+import { emptyTagStatus } from '@/lib/estate/pause-tag-discovery';
 import { previewToken } from '@/lib/estate/pause-orchestrator';
 import { clearStateCache, __setStateCacheClock } from '@/lib/estate/estate-state-cache';
 
@@ -241,6 +251,11 @@ beforeEach(() => {
   loadPauseSnapshot.mockResolvedValue(null);
   resolveDeployManifest.mockReturnValue(manifestFixture());
   createArmActuator.mockResolvedValue(fakeActuator().actuator);
+  discoverByEstateTag.mockResolvedValue({
+    discovered: [],
+    readFailures: [],
+    status: emptyTagStatus({ queried: true, pages: 1 }),
+  });
   // Discovery reads delegate to the CURRENT fake actuator's readTags (set per
   // test via createArmActuator.mockResolvedValue), preserving the single-mock
   // call ordering the scope cases below count on.

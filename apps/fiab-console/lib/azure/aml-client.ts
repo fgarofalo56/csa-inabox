@@ -43,7 +43,7 @@
  * no-fabric-dependency.md).
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -179,7 +179,7 @@ async function amlFetch(
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${apiVersion ?? ML_API}${extra}`;
-  return fetchWithTimeout(
+  return armCountedFetch(
     url,
     {
       ...rest,
@@ -222,7 +222,7 @@ async function pagedList(path: string, label: string): Promise<any[]> {
       // RESPONSE BODY and the same expression mints an ARM token for it. Pin it
       // to `armBase()` — boundary-correct in every sovereign cloud — and fail
       // closed rather than fetching.
-      ? await fetchWithTimeout(
+      ? await armCountedFetch(
           resolveSameOriginUrl(next, armBase(), 'the ARM token'),
           { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
           timeoutMs,
@@ -641,7 +641,7 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
   while (budget.claimPage()) {
     const res = await budget.runPage(async (timeoutMs) =>
       next
-        ? fetchWithTimeout(
+        ? armCountedFetch(
             // SECURITY (GHSA-4gvx-9p49-p43g) — response-body URL + ARM token.
             resolveSameOriginUrl(next, armBase(), 'the ARM token'),
             { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
@@ -792,7 +792,7 @@ export async function getCiJobLog(jobName: string, capBytes = 200_000): Promise<
     if (!token?.token) return null;
     const base = `${host}/artifact/v2.0/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}`
       + `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}`;
-    const listRes = await fetchWithTimeout(
+    const listRes = await armCountedFetch(
       `${base}/artifacts/prefix/contentinfo/ExperimentRun/dcid.${encodeURIComponent(jobName)}`,
       { headers: { authorization: `Bearer ${token.token}` } },
     );
@@ -804,7 +804,7 @@ export async function getCiJobLog(jobName: string, capBytes = 200_000): Promise<
       || arts.find((a) => /driver_log/i.test(a.path || ''))
       || arts.find((a) => /^user_logs\/.*\.txt$/i.test(a.path || ''));
     if (!pick?.contentUri) return null;
-    const logRes = await fetchWithTimeout(pick.contentUri, {});
+    const logRes = await armCountedFetch(pick.contentUri, {});
     if (!logRes.ok) return null;
     const text = await logRes.text();
     if (!text.trim()) return null;

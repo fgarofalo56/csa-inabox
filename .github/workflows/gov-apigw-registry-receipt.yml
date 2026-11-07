@@ -1,0 +1,99 @@
+name: gov-apigw-registry-receipt
+
+# W1-7 GCC-High receipt for the Loom API Gateway Plane (PRPs/active/loom-api-gateway-plane/
+# apigw-W01-gateway-registry-observe.md). The Gov console is reachable only from Actions
+# (cloud-parity.md), so the registry round trip runs here:
+#
+#   resource_id EMPTY  -> DISCOVER only: lists every APIM the Console identity can see in Gov
+#                         and registers nothing (deploy-integrity.md R5: offer, never assume).
+#   resource_id GIVEN  -> register that one service in observe mode, sync it, then compare the
+#                         inventory counts Loom stored with the counts ARM returns
+#                         (scripts/measure/apiplane/registry-probe.mjs). The run id is the receipt.
+#
+# Manual dispatch only: it writes a registry record into the Gov console's Cosmos, so it is never
+# triggered by a push or a schedule. Observe mode changes nothing in the APIM itself.
+on:
+  workflow_dispatch:
+    inputs:
+      resource_id:
+        description: 'APIM service name (or full resource id) to register + probe. Leave EMPTY to only list discovered candidates.'
+        type: string
+        required: false
+        default: ''
+      display_name:
+        description: 'Optional display name for the registration'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BASE: https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us
+
+jobs:
+  receipt:
+    name: Registry receipt (Gov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Azure login (Gov sub) - deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Fetch SESSION_SECRET (never printed)
+        run: |
+          set -euo pipefail
+          J=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret -o json)
+          SS=$(echo "$J" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('value') or '')")
+          KVURL=$(echo "$J" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('keyVaultUrl') or '')")
+          if [ -z "$SS" ] && [ -n "$KVURL" ]; then
+            SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r')
+          fi
+          case "$SS" in https://*) SS=$(az keyvault secret show --id "$SS" --query value -o tsv | tr -d '\r');; esac
+          [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
+          echo "::add-mask::$SS"
+          echo "SS=$SS" >> "$GITHUB_ENV"
+
+      - name: Resolve automation identity (derive from the Gov console's tenant-admin binding)
+        env:
+          EXPLICIT_OID: ${{ vars.LOOM_GOV_AUTOMATION_OID }}
+          CONSOLE_APP: ${{ env.APP }}
+          CONSOLE_RG: ${{ env.RG }}
+        run: node scripts/ci/resolve-automation-oid.mjs
+
+      - name: Which console is this
+        run: |
+          set -euo pipefail
+          curl -fsS "$BASE/build-marker.txt" | head -c 200 || { echo "::error::could not read /build-marker.txt from the Gov console"; exit 1; }
+          echo
+
+      - name: Discover, register, sync and probe
+        env:
+          OID: ${{ env.LOOM_AUTOMATION_OID }}
+          ARM_ENDPOINT: https://management.usgovcloudapi.net
+          RESOURCE_ID: ${{ inputs.resource_id }}
+          DISPLAY_NAME: ${{ inputs.display_name }}
+        run: node scripts/measure/apiplane/registry-receipt.mjs

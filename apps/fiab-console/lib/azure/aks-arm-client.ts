@@ -18,7 +18,7 @@
  * Needs "Azure Kubernetes Service Cluster Admin" (or Contributor) on the
  * cluster — granted in container-platform.bicep for the AKS path.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -105,7 +105,7 @@ function clusterPath(c: AksConfig): string {
 }
 
 async function armFetch(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetchWithTimeout(`${ARM}${path}`, {
+  const res = await armCountedFetch(`${ARM}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${await token()}`,

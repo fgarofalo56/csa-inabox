@@ -19,7 +19,7 @@
  * UAMI needs `Cognitive Services Contributor` (deployments + keys) at the
  * account scope; `Reader` is enough for the read-only tabs.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -91,7 +91,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion || CS_API}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: { ...(rest.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -160,7 +160,7 @@ async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[]
     seen.add(next);
     if (Date.now() > deadline) break;
     const tok = await token();
-    const res = await fetchWithTimeout(next, {
+    const res = await armCountedFetch(next, {
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     });
     const page = await readJson<{ value?: T[]; nextLink?: string }>(res);
@@ -702,7 +702,7 @@ export async function chatCompletion(
   // top-level `data_sources` array (the Python SDK passes the same via
   // extra_body). When present the response carries `message.context.citations`.
   if (params.dataSources && params.dataSources.length) body.data_sources = params.dataSources;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -777,7 +777,7 @@ async function evalsFetch(acct: CsAccount, path: string, init: RequestInit = {})
   const tok = await dataPlaneToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_EVALS_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -882,7 +882,7 @@ async function uploadOpenAIFile(acct: CsAccount, fileName: string, content: stri
   form.append('purpose', purpose);
   form.append('file', new Blob([content], { type: 'application/jsonl' }), fileName || 'dataset.jsonl');
   const url = `${endpoint}/openai/v1/files?api-version=${AOAI_EVALS_API}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     // NB: do NOT set content-type — fetch sets the multipart boundary itself.
     headers: { authorization: `Bearer ${tok}`, 'aoai-evals': 'preview' },
@@ -1097,7 +1097,7 @@ async function ftFetch(acct: CsAccount, path: string, init: RequestInit = {}): P
   const tok = await dataPlaneToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_FT_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -1215,7 +1215,7 @@ async function batchFetch(acct: CsAccount, path: string, init: RequestInit = {})
   const tok = await dataPlaneToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}/openai/batches${path}${sep}api-version=${AOAI_BATCH_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -1272,7 +1272,7 @@ export async function getFileContent(fileId: string, selector?: AccountSelector)
   const endpoint = await aoaiEndpoint(acct);
   const tok = await dataPlaneToken();
   const url = `${endpoint}/openai/v1/files/${encodeURIComponent(fileId)}/content`;
-  const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${tok}` } });
+  const res = await armCountedFetch(url, { headers: { authorization: `Bearer ${tok}` } });
   const text = await res.text();
   if (!res.ok) {
     throw new CsError(res.status, text, `Download file failed (${res.status}): ${text.slice(0, 240)}`);
@@ -1307,7 +1307,7 @@ export async function generateImage(
   if (params.size) body.size = params.size;
   if (params.quality) body.quality = params.quality;
   if (params.style) body.style = params.style;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1335,7 +1335,7 @@ export async function transcribeAudio(
   const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/audio/transcriptions?api-version=${AOAI_AUDIO_API}`;
   const form = new FormData();
   form.append('file', audio, fileName || 'audio.wav');
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}` },
     body: form,

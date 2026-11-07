@@ -139,7 +139,7 @@ export function adminTools(): ToolSpec[] {
       inputSchema: {
         gateId: z.string().describe('Gate id from the gate registry (GET /api/admin/gates).'),
         values: z
-          .record(z.string())
+          .record(z.string(), z.string())
           .describe("envVar -> value map; every key must be one of the gate's own registered settings."),
         apply: applyArg,
       },

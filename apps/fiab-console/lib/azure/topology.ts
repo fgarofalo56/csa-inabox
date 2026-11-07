@@ -51,7 +51,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 import { getDomainsStore, type LoomDomain } from './domains-client';
 import { workspacesContainer } from './cosmos-client';
 import { trimEdges } from '@/lib/util/trim';
@@ -377,7 +377,7 @@ export async function assertItemCreateReachable(target: DeployTarget): Promise<D
     `${encodeURIComponent(target.resourceGroup)}?api-version=2021-04-01`;
   let res: Response;
   try {
-    res = await fetchWithTimeout(url, {
+    res = await armCountedFetch(url, {
       headers: { authorization: `Bearer ${token.token}`, 'content-type': 'application/json' },
     });
   } catch (e: any) {

@@ -8,6 +8,8 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: vi.fn() }));
 const jsonGet = vi.fn();
+// #5099 phase C: the always-on section also reads through jsonGet, so the cadence is counted on the STATE route only.
+const stateReads = () => jsonGet.mock.calls.filter((c) => c[0] === '/api/admin/estate/state').length;
 vi.mock('@/lib/components/admin-scaling/json-get', () => ({ jsonGet: (...a: unknown[]) => jsonGet(...a) }));
 
 import { EstatePowerPanel } from '../estate-power-panel';
@@ -57,19 +59,19 @@ describe('EstatePowerPanel polling', () => {
     jsonGet.mockResolvedValue(resuming());
     mount();
     await settle();
-    expect(jsonGet).toHaveBeenCalledTimes(1);
+    expect(stateReads()).toBe(1);
     await tick(20_000);
-    expect(jsonGet).toHaveBeenCalledTimes(3);
+    expect(stateReads()).toBe(3);
   });
 
   it('a HIDDEN tab sends NO reads however long it stays hidden (breaks at 7 if the poll ignores document.hidden)', async () => {
     jsonGet.mockResolvedValue(resuming());
     mount();
     await settle();
-    expect(jsonGet).toHaveBeenCalledTimes(1);
+    expect(stateReads()).toBe(1);
     setHidden(true);
     await tick(60_000);
-    expect(jsonGet).toHaveBeenCalledTimes(1);
+    expect(stateReads()).toBe(1);
   });
 
   it('returning to the tab reads IMMEDIATELY once, then resumes the cadence', async () => {
@@ -78,29 +80,29 @@ describe('EstatePowerPanel polling', () => {
     await settle();
     setHidden(true);
     await tick(30_000);
-    expect(jsonGet).toHaveBeenCalledTimes(1);
+    expect(stateReads()).toBe(1);
     setHidden(false);
     await settle();
-    expect(jsonGet).toHaveBeenCalledTimes(2);
+    expect(stateReads()).toBe(2);
     await tick(10_000);
-    expect(jsonGet).toHaveBeenCalledTimes(3);
+    expect(stateReads()).toBe(3);
   });
 
   it('while the last read reported throttling it backs off 10 -> 20 -> 40 -> 60 s (reads at t=0,20,60,120 only)', async () => {
     jsonGet.mockResolvedValue(resuming({ throttled: 2 }));
     mount();
     await settle(); // t=0: read #1, streak 1 -> next delay 20 s
-    expect(jsonGet).toHaveBeenCalledTimes(1);
+    expect(stateReads()).toBe(1);
     await tick(19_999);
-    expect(jsonGet).toHaveBeenCalledTimes(1); // breaks at 2 if the base 10 s cadence is kept
+    expect(stateReads()).toBe(1); // breaks at 2 if the base 10 s cadence is kept
     await tick(1); // t=20 s: read #2, streak 2 -> 40 s
-    expect(jsonGet).toHaveBeenCalledTimes(2);
+    expect(stateReads()).toBe(2);
     await tick(39_999);
-    expect(jsonGet).toHaveBeenCalledTimes(2);
+    expect(stateReads()).toBe(2);
     await tick(1); // t=60 s: read #3, streak 3 -> 60 s cap
-    expect(jsonGet).toHaveBeenCalledTimes(3);
+    expect(stateReads()).toBe(3);
     await tick(60_000); // t=120 s: read #4
-    expect(jsonGet).toHaveBeenCalledTimes(4);
+    expect(stateReads()).toBe(4);
   });
 
   it('the back-off resets to 10 s as soon as a read is not throttled', async () => {
@@ -110,9 +112,9 @@ describe('EstatePowerPanel polling', () => {
     mount();
     await settle(); // read #1 throttled -> next in 20 s
     await tick(20_000); // read #2 clean -> next in 10 s
-    expect(jsonGet).toHaveBeenCalledTimes(2);
+    expect(stateReads()).toBe(2);
     await tick(10_000);
-    expect(jsonGet).toHaveBeenCalledTimes(3);
+    expect(stateReads()).toBe(3);
   });
 
   it('a throttled read shows a calm INFO bar with the retry time - not the red error bar - and no failure wording', async () => {

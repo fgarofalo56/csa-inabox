@@ -339,6 +339,39 @@ export const CONVERGE_ROLE_ASSIGNMENT = path.resolve(
 const EXISTING_ASSIGNMENT_RE =
   /existing role assignment is\s+([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
+/** Every blocking assignment the message names, not only the first (Gov run 42167265779 named THREE at once). */
+const EXISTING_ASSIGNMENT_RE_ALL = new RegExp(EXISTING_ASSIGNMENT_RE.source, 'gi');
+
+/**
+ * The most strays one remediation pass will converge. This is the one DESTRUCTIVE action in the lane, so the blast
+ * radius is bounded: past the cap the remainder is reported, never silently included.
+ */
+export const MAX_CONVERGE_PER_PASS = 8;
+
+/**
+ * Run ONE remediation pass: each argv in order, STOPPING at the first failure so nothing is deleted after something this
+ * code could not establish. `spawn` is injectable so the stop-at-first-failure rule is testable without Gov access.
+ * The stdio is deliberately inherited for stdout (the child owns that publication boundary, #3861) and piped for stderr.
+ *
+ * @param {string[][]} argvs
+ * @param {typeof spawnSync} [spawn]
+ * @returns {{ok:boolean, converged:number, last:object|null}} ok only when at least one ran and EVERY one succeeded
+ */
+export function runRemediationPass(argvs, spawn = spawnSync) {
+  let last = null;
+  let converged = 0;
+  for (const argv of argvs) {
+    last = spawn(argv[0], argv.slice(1), {
+      stdio: ['inherit', 'inherit', 'pipe'],
+      encoding: 'utf8',
+      shell: false,
+    });
+    if (!(last.status === 0 && !last.error)) return { ok: false, converged, last };
+    converged += 1;
+  }
+  return { ok: converged > 0, converged, last };
+}
+
 /**
  * What the PLATFORM can do about this failure itself (auto-bind-by-default §5).
  * Pure: returns the plan, does not execute it. `null` when there is nothing the
@@ -368,18 +401,39 @@ export function planRemediation(diagnosis, stderr, opts = {}) {
           'away on something this code never established.',
       };
     }
-    const name = hit[1].toLowerCase();
+    // ALL the distinct blocking assignments, de-duplicated across the dashed and undashed spellings of one id.
+    const seen = new Set();
+    const found = [];
+    for (const m of String(stderr ?? '').matchAll(EXISTING_ASSIGNMENT_RE_ALL)) {
+      const n = m[1].toLowerCase();
+      const key = n.replace(/-/g, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(n);
+    }
+    const names = found.slice(0, MAX_CONVERGE_PER_PASS);
+    const deferred = found.length - names.length;
+    const name = names[0];
+    const argvFor = (n) => [
+      process.execPath,
+      CONVERGE_ROLE_ASSIGNMENT,
+      '--assignment-name',
+      n,
+      ...(opts.subscription ? ['--subscription', String(opts.subscription)] : []),
+      '--apply',
+    ];
+    const many =
+      names.length > 1
+        ? `ARM named ${found.length} conflicting assignments (${names.map((n) => `${n.slice(0, 8)}…`).join(', ')}); each is converged on its own and the pass STOPS at the first one the converger cannot prove belongs to a managed identity. ` +
+          (deferred > 0 ? `${deferred} more were NOT converged in this pass (cap ${MAX_CONVERGE_PER_PASS}); they remain and need another run. ` : '')
+        : '';
     return {
       kind: 'converge-role-assignment',
       assignmentName: name,
-      argv: [
-        process.execPath,
-        CONVERGE_ROLE_ASSIGNMENT,
-        '--assignment-name',
-        name,
-        ...(opts.subscription ? ['--subscription', String(opts.subscription)] : []),
-        '--apply',
-      ],
+      assignmentNames: names,
+      deferred,
+      argv: argvFor(name),
+      argvs: names.map(argvFor),
       // THE CLAIM HERE MUST BE THE ONE THE CONVERGER ACTUALLY PROVES (#4112,
       // deploy-integrity.md R7). This sentence used to read "a user-assigned
       // managed identity in this subscription", which was true when written and
@@ -392,6 +446,7 @@ export function planRemediation(diagnosis, stderr, opts = {}) {
       // `scripts/ci/__tests__/deploy-retry.test.mjs` pins the two together, so a
       // narrowing of either side fails rather than silently re-opening the gap.
       why:
+        many +
         `The grant is already in place under assignment ${name.slice(0, 8)}…, which is NOT the deterministic name ` +
         'the template computes, so ARM refuses the create forever. The converger proves the stray belongs to a ' +
         'MANAGED IDENTITY — user- or system-assigned — whose owning resource is in a subscription this deployment ' +
@@ -893,19 +948,16 @@ async function main() {
         // inherited-stream surface is ENUMERATED` in this script's suite, so a
         // SECOND one cannot appear silently. The child's stderr is `pipe`d and
         // reaches the log only through ghAnnotate() below, which redacts.
-        const rem = spawnSync(plan.argv[0], plan.argv.slice(1), {
-          stdio: ['inherit', 'inherit', 'pipe'],
-          encoding: 'utf8',
-          shell: false,
-        });
-        if (rem.status === 0 && !rem.error) {
-          ghAnnotate('notice', `deploy-retry: remediation succeeded (${plan.kind}); retrying once.`);
+        // One remediation PASS may converge several strays (plan.argvs); see runRemediationPass for the stop rule.
+        const pass = runRemediationPass(plan.argvs ?? [plan.argv]);
+        if (pass.ok) {
+          ghAnnotate('notice', `deploy-retry: remediation succeeded (${plan.kind}, ${pass.converged} converged); retrying once.`);
           continue; // one extra attempt, deliberately outside the retry budget
         }
         ghAnnotate(
           'warning',
-          `deploy-retry: the platform attempted the remediation (${plan.kind}) and it FAILED. ` +
-            `Falling back to reporting it. ${redact(rem.stderr ?? '')}`,
+          `deploy-retry: the platform attempted the remediation (${plan.kind}) and it FAILED after ${pass.converged} converged. ` +
+            `Falling back to reporting it. ${redact(pass.last?.stderr ?? '')}`,
         );
       } else if (plan) {
         ghAnnotate('warning', `deploy-retry: ${plan.why}`);
@@ -984,6 +1036,7 @@ async function main() {
                   message: redact(l.message),
                   resourceType: l.resourceType,
                   resourceName: l.resourceName,
+                  via: l.via ?? null,
                 })),
               },
             }

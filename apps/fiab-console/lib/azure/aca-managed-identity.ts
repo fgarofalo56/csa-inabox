@@ -58,7 +58,7 @@ import {
 // from here avoids a direct `@azure/core-auth` dependency (which is not hoisted
 // for tsc resolution in this workspace).
 import type { AccessToken, GetTokenOptions, TokenCredential } from '@azure/identity';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 
 /** ACA / App Service managed-identity metadata API version that returns the
  *  `expires_on` (Unix-seconds) shape the raw endpoint speaks. */
@@ -123,7 +123,7 @@ export class AcaManagedIdentityCredential implements TokenCredential {
     if (clientId) params.set('client_id', clientId);
     const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}${params.toString()}`;
 
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'GET',
       headers: {
         // Primary header the ACA MI endpoint requires; Metadata:true is a

@@ -44,6 +44,9 @@ import { readRuntimeFailure, readRuntimeValue } from '@/lib/azure/runtime-produc
 export type { Avail, ServiceAvailability } from '@/lib/admin/env-checks';
 
 export * from './types';
+// API Gateway Plane gate family (W1-6): per-gateway state, not env-var presence,
+// so it is exported beside GATES rather than inside it (see api-gateway.ts).
+export * from './api-gateway';
 import {
   type GateDef,
   type GateFixit,
@@ -61,6 +64,7 @@ import { CATALOG_GOVERNANCE_GATE_META } from './catalog-governance';
 import { AI_COPILOT_GATE_META } from './ai-copilot';
 import { SECURITY_GATE_META } from './security';
 import { OBSERVABILITY_GATE_META } from './observability';
+import { HEALTH_GATE_META } from './health';
 
 // ── the merged per-gate enrichment (R30: per-domain fragments, same shape) ──
 // Every ENV_CHECKS id MUST have an entry in exactly one domain fragment
@@ -76,6 +80,7 @@ export const GATE_META: Record<string, GateMeta> = {
   ...AI_COPILOT_GATE_META,
   ...SECURITY_GATE_META,
   ...OBSERVABILITY_GATE_META,
+  ...HEALTH_GATE_META,
 };
 
 // ── registry composition ─────────────────────────────────────────────────────
