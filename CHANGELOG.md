@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.121.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.2...csa-inabox-v0.121.0) (2026-11-07)
+
+
+### Features
+
+* **ci:** move CI onto the in-VNet Azure runners, behind a one-variable flip ([#4492](https://github.com/fgarofalo56/csa-inabox/issues/4492)) ([4d2f7cc](https://github.com/fgarofalo56/csa-inabox/commit/4d2f7cc436a9a96e1a0e100e8ede83150fab9c35))
+
+
+### Tests
+
+* **gov:** compare parsed hostnames in the ARM-host test (CodeQL url-substring alerts) ([#5257](https://github.com/fgarofalo56/csa-inabox/issues/5257)) ([aa7cc82](https://github.com/fgarofalo56/csa-inabox/commit/aa7cc8288690db37466f658d047aeb96249cecef))
+
 ## [0.120.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.1...csa-inabox-v0.120.2) (2026-11-07)
 
 
