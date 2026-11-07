@@ -393,7 +393,13 @@ param aiSearchLocation = 'usgovarizona'
 // defaults aasEnabled=true for Commercial day-one). The semantic-model surfaces
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
 param aasEnabled = false
-param adxEnabled = true
+// ADX is OFF in GCC-High for now: a CAPACITY gap, not a design choice. Measured 2026-11-06 with
+// gov-adx-capacity-probe (a real create): all five candidate SKUs in usgovarizona (E8as_v5+1TB_PS, E8a_v4, E4a_v4,
+// E16a_v4, L8as_v3) were refused 'Currently there are no available resources for the cluster' (run 42314565395);
+// usgovvirginia refused L8as_v3 earlier (run 42157975744); usgovtexas does not offer any of them (run 42320095670).
+// Re-enable (true) once the probe shows an accepted SKU; adxConfig below is kept so that flip is one line. Until then
+// the Gov Eventhouse / KQL surfaces are unavailable: a tracked cloud-parity defect (cloud-parity.md), not done.
+param adxEnabled = false
 // ADX placement. usgovvirginia offers only 5 ADX SKUs (gov-adx-sku-probe run 41880903882, 2026-11-04), not the
 // admin-plane GCC-High default Standard_E8as_v5+1TB_PS, and a fresh Standard_L8as_v3 there was refused for capacity
 // (Gov run 42157975744). usgovarizona offers 24 SKUs including that default, so the SKU override is dropped and the
