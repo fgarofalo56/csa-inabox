@@ -118,7 +118,7 @@ env:
 jobs:
   precheck:
     name: Verify GCC secrets are configured
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -158,6 +158,7 @@ jobs:
     name: Estate pause gate
     needs: precheck
     if: needs.precheck.outputs.configured == 'true'
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     uses: ./.github/workflows/estate-pause-gate.yml
     secrets: inherit
     with:

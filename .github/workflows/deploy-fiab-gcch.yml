@@ -174,7 +174,7 @@ env:
 jobs:
   precheck:
     name: Verify Gov secrets are configured
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -231,7 +231,7 @@ jobs:
   # merely change what the image phase does.
   pause-declaration:
     name: Is the GCC-High estate DECLARED paused?
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       declared: ${{ steps.read.outputs.declared_paused }}
     steps:
@@ -316,6 +316,9 @@ jobs:
     # not nested inside the existing `||` — a guard one disjunct away from the
     # top is inert on exactly the trigger it exists for
     # (gcch-standdown-completeness.test.mjs round 4 names that exact bypass).
+    needs: [precheck, pause-declaration, build-gov-images]
+    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true'
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     needs: [precheck, pause-declaration, build-gov-images, estate-gate]
     # Estate stand-down (#5111): this lane has no schedule path (the conjunct above),
     # so the fail-open `!= 'true'` branch is the live one; the schedule branch is

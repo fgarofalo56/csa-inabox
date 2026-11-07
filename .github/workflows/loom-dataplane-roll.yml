@@ -290,6 +290,10 @@ jobs:
     # workflow_run keep proceeding). `!cancelled()` lets this run after a needed
     # job that was skipped or failed.
     if: >-
+      github.event_name != 'workflow_run'
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push')
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
       !cancelled()
       && (github.event_name != 'workflow_run'
           || (github.event.workflow_run.conclusion == 'success'

@@ -6,6 +6,45 @@
 # every one of the seven workflows that target the ACA runner as using an
 # "unknown" label. Declaring it here is the correct fix; baselining seven real
 # workflows to hide a configuration gap is not.
+#
+# THIS LIST IS COMMERCIAL-ONLY, AND THAT IS A DECLARED GAP, NOT AN OVERSIGHT.
+# `loom-aca` is one fleet, deployed once, in the Commercial DMLZ subscription's
+# cae-csa-loom-centralus environment under the Commercial identity
+# uami-loom-ci. There is no Gov / GCC / GCC-High / IL5 / DoD label here because
+# there is no sovereign fleet.
+#
+# It matters because `vars.CI_RUNNER` — the variable that routes `runs-on:` —
+# has no BOUNDARY dimension. It does have a SCOPE dimension, and an earlier
+# revision of this comment denied that: it said the variable was "a single
+# repo-wide value" with no scope at all. GitHub resolves `vars.*` with
+# ENVIRONMENT PRECEDENCE inside a job that declares an `environment:`, and 19
+# of the converted jobs do — `deploy-fiab-il5.yml:deploy-validate` takes
+# `environment: il5-deploy`, `deploy-fiab-gcch.yml:deploy-validate` takes
+# `environment: gcc-high-deploy`. Setting CI_RUNNER on one of THOSE routes that
+# boundary's deploy onto this Commercial fleet while repository scope stays
+# empty. That form is now checked, at every one of the nine environments, by
+# .github/workflows/ci-runner-var-guard.yml via
+# scripts/ci/check-ci-runner-scopes.sh.
+#
+# What remains true, and is the declared gap: repository scope is boundary-blind
+# by construction. Re-measured 2026-09-26 at PR #4492's head efda6b114 by a
+# PyYAML walk over each job's `runs-on` VALUE: 171 jobs read that variable, and
+# 54 of them, in 36 files, sit in a workflow that takes a sovereign action
+# (`az cloud set --name AzureUSGovernment`, an AZURE_GOV_*/AZURE_GCC_* secret, a
+# .usgovcloudapi endpoint, or a gov-* filename). Setting the variable at
+# repository scope routes those 54 onto THIS Commercial fleet.
+#
+# THAT FIGURE IS SCOPE-SENSITIVE, so quote the scope with it. 54/36 is the count
+# when the needles classify the WORKFLOW (the wording above) and the converted
+# jobs inside it are then counted. Applying the same needles to each job's own
+# subtree gives 43 jobs in the SAME 36 files. The file count is identical either
+# way; the job count is not.
+#
+# So: adding a label here is not cosmetic. A second entry is the thing that
+# would let a boundary-aware expression exist at all. Full statement of the
+# exposure, with the measurement method:
+# platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep, the
+# "SOVEREIGN BOUNDARY EXPOSURE" block.
 self-hosted-runner:
   labels:
     - loom-aca
