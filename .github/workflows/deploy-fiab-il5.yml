@@ -169,9 +169,6 @@ jobs:
 
   deploy-validate:
     name: Deploy + validate CSA Loom in IL5
-    needs: [precheck, build-gov-images]
-    if: always() && needs.precheck.outputs.configured == 'true'
-    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     needs: [precheck, build-gov-images, estate-gate]
     # No schedule trigger exists, so the fail-open `!= 'true'` branch is the live
     # one; the schedule branch keeps the expression identical in every lane.
