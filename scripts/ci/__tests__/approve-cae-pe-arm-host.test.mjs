@@ -45,9 +45,13 @@ test('the list and the approve PUT both go to the ACTIVE cloud ARM host, never m
   const { r, calls } = run();
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   // Positive: both verbs reached the Gov host. Breaks if either URL is hardcoded back.
-  assert.match(calls, new RegExp(`rest --method get --url ${GOV}${CAE}/privateEndpointConnections`));
-  assert.match(calls, new RegExp(`rest --method put --url ${GOV}${CONN}`));
-  assert.ok(!calls.includes('management.azure.com'), `a call still used management.azure.com:\n${calls}`);
+  const urls = calls.split('\n').filter((l) => l.startsWith('rest ')).map((l) => new URL(l.split(' --url ')[1].split(' ')[0]));
+  const byMethod = (m) => calls.split('\n').filter((l) => l.startsWith(`rest --method ${m} `)).map((l) => new URL(l.split(' --url ')[1].split(' ')[0]));
+  assert.ok(byMethod('get').length >= 1 && byMethod('put').length === 1, `expected >=1 GET and exactly 1 PUT:\n${calls}`);
+  // Parsed hostnames, not substrings: every ARM call must target the Gov host, none the public one.
+  for (const u of urls) assert.equal(u.hostname, new URL(GOV).hostname, `call went to ${u.hostname}:\n${calls}`);
+  assert.ok(byMethod('get')[0].pathname.startsWith(`${CAE}/privateEndpointConnections`));
+  assert.equal(byMethod('put')[0].pathname, CONN);
 });
 
 test('an unreadable cloud endpoint fails closed instead of defaulting to a host', () => {
