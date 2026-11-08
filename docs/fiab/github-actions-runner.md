@@ -156,7 +156,7 @@ loudly and exits non-zero** — it never silently skips.
 
 > **Runner version pin.** The image pins the runner version + a `sha256sum -c`
 > checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` in
-> `platform/runners/github-actions/Dockerfile` (currently `v2.337.0`); the
+> `platform/runners/github-actions/Dockerfile` (currently `v2.338.2`); the
 > Dockerfile owns the default and the provision script passes neither unless you
 > override both. The build fails loudly on a mismatch. Bump both together and
 > confirm the SHA256 against the [release page](https://github.com/actions/runner/releases)
