@@ -25,6 +25,8 @@
 //   pairedLocation, adminEntraGroupId, vnetAddressPrefix, egressMode
 //   ('firewall'|'loadBalancer'), postgresHa, useAvailabilityZones, kubernetesVersion,
 //   acrLoginServer, extraAllowedFqdns, extraDnsLinkVnetIds, tlsCertificateSecretUri,
+//     wafClientRateLimitPerMinute (default 6000; 0 drops the WAF per-address rule, the documented
+//     Gov escape if the rule type is rejected there - UNVERIFIED in Gov),
 //   auditRetentionDays, logRetentionDays, postgres ('enabled'|'disabled': per-stamp
 //   override of postgresQuotaAvailable).
 // controlPlaneConfig keys:
@@ -118,6 +120,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
     extraAllowedFqdns: healthConfig.?extraAllowedFqdns ?? []
     extraDnsLinkVnetIds: healthConfig.?extraDnsLinkVnetIds ?? []
     tlsCertificateSecretUri: string(healthConfig.?tlsCertificateSecretUri ?? '')
+    wafClientRateLimitPerMinute: int(healthConfig.?wafClientRateLimitPerMinute ?? 6000)
     auditRetentionDays: int(healthConfig.?auditRetentionDays ?? 2190)
     logRetentionDays: int(healthConfig.?logRetentionDays ?? 90)
     tags: tags

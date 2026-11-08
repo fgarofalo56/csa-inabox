@@ -62,4 +62,9 @@ Exit 0 = every check passed, 1 = the gateway answered wrongly (defect),
 2 = unmeasured (bad config, no response, or the positive control failed; this is
 not a claim the edge is broken). Run it per cloud: Commercial and GCC-High each
 need their own receipt. The WAF per-address rule is untested in Azure Government;
-if the rule type is rejected there, set `wafClientRateLimitPerMinute` to 0.
+if the rule type is rejected there, set `healthConfig.wafClientRateLimitPerMinute` to 0 in
+the boundary's `health-params/*-health.bicepparam` (health.bicep passes it to the stamp
+ingress; 0 drops the rule). The default is 6000 on every boundary, so Gov is not given a
+lesser product by default; the 0 is an escape taken only on a recorded rejection.
+Status: the 429 + `Retry-After` and the Gov WAF rule are compiled and structurally
+tested (`scripts/ci/__tests__/lhds-edge-policy.test.mjs`) but never exercised.
