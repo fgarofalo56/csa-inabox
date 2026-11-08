@@ -130,7 +130,7 @@ jobs:
           U: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
         run: |
           if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
-            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "configured=false" >> "$GITHUB_OUTPUT"
             MISSING=""
             [[ -z "$C" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_ID"
             [[ -z "$S" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_SECRET"
@@ -147,7 +147,7 @@ jobs:
             echo "::warning::AZURE_GCC_* secrets not configured — skipping. Missing:${MISSING}"
             echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md. NOTE: this run will conclude SUCCESS having deployed NOTHING; that is why the scheduled path fails instead."
           else
-            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
   # ESTATE STAND-DOWN (PRP-02 step 6, #5111). Supported-in-code, never exercised
@@ -158,7 +158,6 @@ jobs:
     name: Estate pause gate
     needs: precheck
     if: needs.precheck.outputs.configured == 'true'
-    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     uses: ./.github/workflows/estate-pause-gate.yml
     secrets: inherit
     with:
@@ -639,7 +638,7 @@ jobs:
         run: |
           az deployment sub what-if \
             --name csa-loom-gcc-ci-${{ github.run_id }} \
-            --location $AZURE_LOCATION \
+            --location "$AZURE_LOCATION" \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--subscription "$CSA_LOOM_TARGET_SUBSCRIPTION"} \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/gcc.bicepparam \
@@ -898,14 +897,16 @@ jobs:
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full')
         run: |
           ADMIN_SUB=$(az account show --query id -o tsv)
-          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
-          # dlz_sub ONLY when a DISTINCT DLZ subscription was named (#3143) —
-          # same reasoning as deploy-fiab-commercial.yml. Defaulting to
-          # $ADMIN_SUB asserted a single-subscription layout the deploy had not
-          # established, and now that the callee DISCOVERS the landing zone that
-          # assertion would narrow discovery to the wrong subscription.
-          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}" >> "$GITHUB_OUTPUT"
-          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
+          {
+            echo "admin_sub=$ADMIN_SUB"
+            # dlz_sub ONLY when a DISTINCT DLZ subscription was named (#3143) —
+            # same reasoning as deploy-fiab-commercial.yml. Defaulting to
+            # $ADMIN_SUB asserted a single-subscription layout the deploy had not
+            # established, and now that the callee DISCOVERS the landing zone that
+            # assertion would narrow discovery to the wrong subscription.
+            echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-}"
+            echo "region=$AZURE_LOCATION"
+          } >> "$GITHUB_OUTPUT"
 
       # deploy-integrity forbids "a deploy workflow that exits 0 having produced no
       # artifact". gcc.bicepparam deliberately never sets `deployAppsEnabled`
