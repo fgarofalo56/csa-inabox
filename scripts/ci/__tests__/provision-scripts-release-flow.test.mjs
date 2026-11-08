@@ -80,7 +80,16 @@ case "$1 $2" in
     exit "\${STUB_BUILD_RC:-0}" ;;
 esac
 case "$1 $2 $3" in
-  "containerapp job show") exit 1 ;;
+  "containerapp job show")
+    # assert_identity_is_exactly_runner (#4492) reads the attached identities back
+    # with a keys( query; answer it like ARM would. $STUB_JOB_IDENTITIES
+    # overrides (newline-separated; set-but-empty = none attached). Every other
+    # job show is the existence probe and says "not found".
+    case "$*" in
+      *"keys("*) printf '%s\\n' "\${STUB_JOB_IDENTITIES-$RUNNER_UAMI_ID}"; exit 0 ;;
+    esac
+    echo "(ResourceNotFound) The Resource 'Microsoft.App/jobs/fixture' was not found." >&2
+    exit 1 ;;
   "containerapp env show") echo "/subscriptions/fixture/resourceGroups/rg-fixture/providers/Microsoft.App/managedEnvironments/cae-fixture"; exit 0 ;;
   "containerapp secret show") echo "fixture-session-value"; exit 0 ;;
 esac
@@ -137,6 +146,7 @@ exec bash "$HERE/scripts/csa-loom/${script}"
     GITHUB_PAT: 'fixture-not-a-token',
     SUB: '00000000-0000-0000-0000-000000000000',
     ACR: 'acrfixture.azurecr.io',
+    RUNNER_UAMI_ID: '/subscriptions/fixture/resourceGroups/rg-fixture/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-runner-fixture',
     CONSOLE_UAMI_ID: '/subscriptions/fixture/resourceGroups/rg-fixture/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-fixture',
     LOOM_URL: 'https://loom.fixture.invalid',
     LOOM_AUTOMATION_OID: '11111111-1111-1111-1111-111111111111',
@@ -174,6 +184,27 @@ test('provision: build OK -> step 3 runs and CREATES the job; lease released exa
   assert.equal(r.acquires, 1);
   // 2 here = the EXIT trap was not cleared after the verified inline release.
   assert.equal(r.releases, 1, 'released inline once; the trap must be cleared after it');
+});
+
+test('provision: identity guard has teeth -- two identities (console added) or none -> FATAL, non-zero', () => {
+  // Breaks if assert_identity_is_exactly_runner stops counting: a readback of
+  // runner + console (n=2) or of nothing (n=0) must exit non-zero.
+  const idBase = '/subscriptions/fixture/resourceGroups/rg-fixture/providers/Microsoft.ManagedIdentity/userAssignedIdentities/';
+  const runner = `${idBase}uami-runner-fixture`;
+  const consoleId = `${idBase}uami-fixture`;
+  const two = run(PROVISION, { env: { STUB_JOB_IDENTITIES: `${runner}\n${consoleId}` } });
+  assert.notEqual(two.status, 0, why(two));
+  assert.match(two.stderr, /carries 2 user-assigned identities; it must carry exactly 1/, why(two));
+  const none = run(PROVISION, { env: { STUB_JOB_IDENTITIES: ' ' } });
+  assert.notEqual(none.status, 0, why(none));
+  // DISCLOSED: the script's own n=0 FATAL message is unreachable. Under set -e
+  // the grep -c on an empty readback exits 1 and kills the script silently, so
+  // only "non-zero" can be pinned for the empty case (reported on #5263).
+  assert.equal(none.stderr.trim(), '', 'n=0 dies silently today; replace with the FATAL match once the script says why');
+  // Positive pair: exactly the runner identity passes, so the FATALs above are
+  // the guard firing and not the stub or script being broken another way.
+  const ok = run(PROVISION, { env: { STUB_JOB_IDENTITIES: runner } });
+  assert.equal(ok.status, 0, why(ok));
 });
 
 test('provision: builds and deploys the image REPOSITORY the live job pulls (gh-actions-runner)', () => {
@@ -215,14 +246,15 @@ test('provision: build FAILS -> exits with the build rc and a FATAL naming step 
   assert.equal(r.releases, 1, 'the registry is still re-locked on a failed build');
 });
 
-test('provision: release UNVERIFIED -> FATAL naming step 2/3, non-zero, job untouched, trap retries once', () => {
+test('provision: release UNVERIFIED -> FATAL naming step 2/3, non-zero, job untouched, exactly one release attempt', () => {
   const r = run(PROVISION, { releaseRc: 1 });
   assert.equal(r.status, 1, why(r));
   assert.match(r.stderr, /\[FATAL\] step 2\/3: the ACR firewall lease release could not verify acrfixture re-locked \(build rc=0\)/, why(r));
   assert.match(r.az, /^acr build /m, 'positive control: the build ran first');
   assert.doesNotMatch(r.az, /^containerapp /m, 'never deploy over an unverified re-lock');
-  // inline attempt + the still-armed EXIT trap's retry
-  assert.equal(r.releases, 2, why(r));
+  // release_acr_lease sets LEASE_HELD=0 on a verified-failed re-lock so the EXIT
+  // trap does NOT retry (see its comment): exactly the one inline attempt.
+  assert.equal(r.releases, 1, why(r));
 });
 
 // ── deploy-loom-uat-job.sh ──────────────────────────────────────────────────
