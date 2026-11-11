@@ -84,6 +84,18 @@ test('item 5 wiring: healthConfig.wafClientRateLimitPerMinute reaches the WAF cu
   assert.match(ingress, /customRules: wafRateLimitRules/);
 });
 
+test('WAF body-size default is inside the ARM range 8..2048 KB (run 43067631148 rejected 2000000)', () => {
+  // Literals lifted from ingress.bicep. Breaks on 2000000 (the KB/MB mix-up that failed the
+  // Commercial apply), on 4000000 as the @maxValue, or on any default above 2048.
+  const def = Number(ingress.match(/^param wafMaxRequestBodyKb int = (\d+)$/m)?.[1]);
+  const max = Number(ingress.match(/@maxValue\((\d+)\)\s*\nparam wafMaxRequestBodyKb\b/)?.[1]);
+  assert.ok(Number.isInteger(def) && def >= 8 && def <= 2048, `wafMaxRequestBodyKb default ${def} is outside ARM 8..2048`);
+  assert.ok(Number.isInteger(max) && max <= 2048, `wafMaxRequestBodyKb @maxValue ${max} lets a caller exceed ARM 2048`);
+  // Positive pin: large DICOM uploads are still allowed, via the upload limit.
+  assert.match(ingress, /fileUploadLimitInMb: wafFileUploadLimitMb/);
+  assert.match(ingress, /maxRequestBodySizeInKb: wafMaxRequestBodyKb/);
+});
+
 test('WAF rule groups by client address only (a token claim is not a WAF key)', () => {
   assert.match(ingress, /variableName: 'ClientAddr'/);
   assert.doesNotMatch(ingress, /groupByVariables:[^\]]*(RequestHeader|GeoMatch)/);

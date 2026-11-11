@@ -377,6 +377,10 @@ jobs:
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
         run: |
           set -uo pipefail
+          # The runner shell is `bash -e`, and `set -uo pipefail` does not clear -e. Without
+          # this, a failing `az deployment sub create` ends the script ON THAT LINE, the RC
+          # classifier below never runs and apply.err is never printed (run 43067631148).
+          set +e
           CP_ARG=()
           if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
           az deployment sub create --name "lhds-${GITHUB_RUN_ID}" --location "$HUB_LOCATION" \
@@ -385,16 +389,43 @@ jobs:
             --query properties.outputs -o json > temp/outputs.json 2> temp/apply.err
           RC=$?
           if [ "$RC" != "0" ]; then
-            if grep -qiE 'AuthorizationFailed|does not have authorization|LinkedAuthorizationFailed' temp/apply.err; then
-              echo "::error::PERMISSION: the deploy principal lacks a role this template needs (it creates resource groups and writes role assignments). Grant Owner or Contributor plus User Access Administrator on the subscription. Detail: $(grep -iE 'Authorization' temp/apply.err | head -n 2 | head -c 500)"
-            elif grep -qiE 'QuotaExceeded|SkuNotAvailable|OfferRestricted|NotAvailableForSubscription|InsufficientCapacity|ZonalAllocationFailed' temp/apply.err; then
-              echo "::error::QUOTA/CAPACITY: the region refused a SKU or quota (PostgreSQL Flexible is offer-restricted in several regions; AKS node pools need regional vCPU quota). Run az postgres flexible-server list-skus and az vm list-usage for the stamp region, then set healthConfig.location. Detail: $(grep -iE 'Quota|Sku|Offer|Capacity' temp/apply.err | head -n 2 | head -c 500)"
-            elif grep -qiE 'InvalidTemplate|InvalidParameter|BCP[0-9]+|InvalidTemplateDeployment' temp/apply.err; then
-              echo "::error::TEMPLATE/PARAMETER defect, not transient (a retry cannot help). Detail: $(head -c 700 temp/apply.err)"
-            elif grep -qiE 'timed out|Max retries|Connection|ServiceUnavailable|TooManyRequests|RetryableError' temp/apply.err; then
+            echo "::group::az deployment sub create stderr (exit $RC)"
+            cat temp/apply.err
+            echo "::endgroup::"
+            # apply.err on a failed nested deployment only says DeploymentFailed. The real
+            # error codes live on the failed operations of the nested deployments, so walk them
+            # (bounded depth) and classify on stderr plus those operations.
+            : > temp/ops.txt
+            walk_ops() { # $1 = group ("" for subscription scope), $2 = deployment name, $3 = depth
+              local OPS
+              if [ -z "$1" ]; then
+                OPS=$(az deployment operation sub list -n "$2" -o json 2>> temp/ops.err)
+              else
+                OPS=$(az deployment operation group list -g "$1" -n "$2" -o json 2>> temp/ops.err)
+              fi
+              [ -n "$OPS" ] || return 0
+              echo "$OPS" | jq -r '.[] | select(.properties.provisioningState=="Failed" and .properties.targetResource.resourceType!="Microsoft.Resources/deployments") | "FAILED-OPERATION " + (.properties.targetResource.resourceType // "?") + " " + (.properties.targetResource.resourceName // "?") + " " + (.properties.statusMessage | tostring | .[0:600])' >> temp/ops.txt 2>/dev/null
+              [ "$3" -lt 4 ] || return 0
+              echo "$OPS" | jq -r '.[] | select(.properties.provisioningState=="Failed" and .properties.targetResource.resourceType=="Microsoft.Resources/deployments") | (.properties.targetResource.id | capture("resourceGroups/(?<g>[^/]+)/").g // "") + " " + .properties.targetResource.resourceName' 2>/dev/null \
+                | while read -r G N; do
+                    [ -n "$N" ] && walk_ops "$G" "$N" $(( $3 + 1 ))
+                  done
+            }
+            walk_ops "" "lhds-${GITHUB_RUN_ID}" 0
+            echo "::group::failed operations of lhds-${GITHUB_RUN_ID} (nested)"
+            if [ -s temp/ops.txt ]; then cat temp/ops.txt; else echo "none readable (operation listing failed or empty: $(head -c 300 temp/ops.err 2>/dev/null))"; fi
+            echo "::endgroup::"
+            cat temp/apply.err temp/ops.txt > temp/classify.txt 2>/dev/null
+            if grep -qiE 'AuthorizationFailed|does not have authorization|LinkedAuthorizationFailed' temp/classify.txt; then
+              echo "::error::PERMISSION: the deploy principal lacks a role this template needs (it creates resource groups and writes role assignments). Grant Owner or Contributor plus User Access Administrator on the subscription. Detail: $(grep -iE 'Authorization' temp/classify.txt | head -n 2 | head -c 500)"
+            elif grep -qiE 'QuotaExceeded|SkuNotAvailable|OfferRestricted|NotAvailableForSubscription|InsufficientCapacity|ZonalAllocationFailed|AvailabilityZoneNotSupported|Version should be in' temp/classify.txt; then
+              echo "::error::QUOTA/CAPACITY/REGION: the stamp region refused a SKU, quota or availability zone (PostgreSQL Flexible is offer-restricted in several regions; AKS zones differ per region; node pools need regional vCPU quota). Run az postgres flexible-server list-skus and az vm list-skus --zone for the stamp region, then set the params file location or healthConfig.location. Detail: $(grep -iE 'Quota|Sku|Offer|Capacity|Zone|Version should' temp/classify.txt | head -n 3 | head -c 700)"
+            elif grep -qiE 'InvalidTemplate|InvalidParameter|ParameterOutOfRange|InvalidMaxRequestBody|out of range|BCP[0-9]+|InvalidTemplateDeployment' temp/classify.txt; then
+              echo "::error::TEMPLATE/PARAMETER defect, not transient (a retry cannot help). Detail: $(grep -iE 'InvalidTemplate|InvalidParameter|ParameterOutOfRange|InvalidMaxRequestBody|out of range|BCP' temp/classify.txt | head -n 3 | head -c 900)"
+            elif grep -qiE 'timed out|Max retries|Connection|ServiceUnavailable|TooManyRequests|RetryableError' temp/classify.txt; then
               echo "::error::TRANSIENT: ARM did not complete the deployment. Check the deployment lhds-${GITHUB_RUN_ID} in the portal for what was created, then re-run with allow_existing_hub=true."
             else
-              echo "::error::UNCLASSIFIED deployment failure: $(head -c 700 temp/apply.err)"
+              echo "::error::UNCLASSIFIED deployment failure: $(head -c 700 temp/classify.txt)"
             fi
             exit 1
           fi
