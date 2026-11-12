@@ -389,7 +389,7 @@ jobs:
             --query properties.outputs -o json > temp/outputs.json 2> temp/apply.err
           RC=$?
           if [ "$RC" != "0" ]; then
-            echo "::group::az deployment sub create stderr (exit $RC)"
+            echo "::group::subscription-scope deployment stderr (exit $RC)"
             cat temp/apply.err
             echo "::endgroup::"
             # apply.err on a failed nested deployment only says DeploymentFailed. The real
