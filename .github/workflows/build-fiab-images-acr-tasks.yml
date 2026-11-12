@@ -322,14 +322,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
-          if [[ "$INPUT" == "all" ]]; then
+          # Single source of truth for every image build context. BOTH "all" and
+          # an explicit apps list read this, so a matrix entry's ctx/file (e.g.
+          # loom-health-cp needs the REPO ROOT as context) is never re-derived.
             # loom-uat is deliberately NOT in "all": it is a ~2 GB Playwright
             # image whose only consumers are the loom-uat job and the default-ON
             # loom-synthetic-monitor job, so rebuilding it on every console push
             # would add ~10 min to each one for no benefit. It IS in the
             # from-scratch app phase (full-app-deploy-commercial.yml), and it can
             # be built on demand here with `apps: loom-uat`.
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"},{"name":"loom-health-cp","ctx":".","file":"./apps/loom-health-cp/Dockerfile","watch":["platform/fiab/bicep/modules/health"]}]'
+          DEFAULT_APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"},{"name":"loom-health-cp","ctx":".","file":"./apps/loom-health-cp/Dockerfile","watch":["platform/fiab/bicep/modules/health"]}]'
+          if [[ "$INPUT" == "all" ]]; then
+            APPS="$DEFAULT_APPS"
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
@@ -348,7 +352,13 @@ jobs:
               APP="$(echo "$APP" | tr -d '[:space:]')"
               [ -z "$APP" ] && continue
               FILE=""
-              if [ "$APP" = "loom-uat" ]; then
+              # The default matrix is authoritative: reuse its ctx/file verbatim
+              # so selecting one app builds exactly what "all" builds for it.
+              MENTRY=$(jq -c --arg n "$APP" '[.[] | select(.name == $n)] | .[0] // empty' <<< "$DEFAULT_APPS")
+              if [ -n "$MENTRY" ]; then
+                CTX=$(jq -r '.ctx' <<< "$MENTRY")
+                FILE=$(jq -r '.file // ""' <<< "$MENTRY")
+              elif [ "$APP" = "loom-uat" ]; then
                 # The Playwright UAT / synthetic-journey runner is a SECOND image
                 # out of the console context (Dockerfile.uat) — there is no
                 # ./apps/loom-uat directory. It is what the default-ON
