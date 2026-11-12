@@ -100,3 +100,18 @@ test('WAF rule groups by client address only (a token claim is not a WAF key)', 
   assert.match(ingress, /variableName: 'ClientAddr'/);
   assert.doesNotMatch(ingress, /groupByVariables:[^\]]*(RequestHeader|GeoMatch)/);
 });
+
+test('agw subnet is delegated to Microsoft.Network/applicationGateways (run 43150191558)', () => {
+  // Breaks if the delegations block is removed from snet-agw, or its serviceName is changed
+  // (Azure then rejects the gateway with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation).
+  // The block is sliced from the snet-agw header to the next resource, so the delegation on
+  // snet-postgres cannot satisfy it.
+  const network = read(`${H}/network.bicep`);
+  const start = network.indexOf("name: 'snet-agw'");
+  assert.ok(start >= 0, 'network.bicep no longer declares snet-agw');
+  const end = network.indexOf('\nresource ', start);
+  const block = network.slice(start, end);
+  assert.match(block, /serviceName: 'Microsoft\.Network\/applicationGateways'/);
+  // Positive pin: the NSG association is still on the same subnet.
+  assert.match(block, /networkSecurityGroup: \{ id: agwNsg\.id \}/);
+});
