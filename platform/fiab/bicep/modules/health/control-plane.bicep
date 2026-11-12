@@ -191,14 +191,16 @@ resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
   parent: database
   name: c.name
   properties: {
-    resource: {
+    // defaultTtl is OMITTED (union with {}), never null(): ARM forwards a null() to the
+    // Cosmos RP as an explicit value, which it rejects (BadRequest "One of the specified
+    // inputs is invalid", deploy-health run 43321878414). Cosmos accepts only -1 or a positive int.
+    resource: union({
       id: c.name
       partitionKey: {
         paths: ['/id']
         kind: 'Hash'
       }
-      defaultTtl: c.defaultTtl == 0 ? null : c.defaultTtl
-    }
+    }, c.defaultTtl == 0 ? {} : { defaultTtl: c.defaultTtl })
   }
 }]
 
