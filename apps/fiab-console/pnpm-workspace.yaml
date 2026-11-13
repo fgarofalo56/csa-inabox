@@ -186,3 +186,10 @@ overrides:
   # fork IPC and thread transferList calls, isolation, and recycling. Remove
   # once Vitest's own range selects a patched version without this override.
   'vitest>tinypool': '2.1.2'
+  # GHSA-cg2g-xh64-v4q7 (CRITICAL, SAFE_FOR_TEMPLATES bypass), patched in
+  # 3.4.17. Transitive only: monaco-editor@0.57.0 (the latest release) pins
+  # dompurify EXACTLY at 3.4.15, so no parent bump can move it. It tripped the
+  # Trivy CRITICAL gate in gov-build-images (Build loom-uat). The <4 ceiling
+  # keeps the floor from silently widening into a major. Remove once
+  # monaco-editor pins >=3.4.17 itself.
+  dompurify: '>=3.4.17 <4'
