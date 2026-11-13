@@ -197,10 +197,10 @@ test('provision: identity guard has teeth -- two identities (console added) or n
   assert.match(two.stderr, /carries 2 user-assigned identities; it must carry exactly 1/, why(two));
   const none = run(PROVISION, { env: { STUB_JOB_IDENTITIES: ' ' } });
   assert.notEqual(none.status, 0, why(none));
-  // DISCLOSED: the script's own n=0 FATAL message is unreachable. Under set -e
-  // the grep -c on an empty readback exits 1 and kills the script silently, so
-  // only "non-zero" can be pinned for the empty case (reported on #5263).
-  assert.equal(none.stderr.trim(), '', 'n=0 dies silently today; replace with the FATAL match once the script says why');
+  // Breaks if an empty readback dies silently again (grep -c exit 1 under
+  // set -e): stderr would be empty and these matches would fail.
+  assert.match(none.stderr, /carries 0 user-assigned identities; it must carry exactly 1/, why(none));
+  assert.match(none.stderr, /identity assign/, 'n=0 message must be actionable');
   // Positive pair: exactly the runner identity passes, so the FATALs above are
   // the guard firing and not the stub or script being broken another way.
   const ok = run(PROVISION, { env: { STUB_JOB_IDENTITIES: runner } });
