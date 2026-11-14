@@ -139,6 +139,15 @@ const REVIEWED_IMAGES = {
   // published by the Trino project itself, so it is the same Apache-2.0 codebase,
   // not a third-party redistribution under different terms.
   'trinodb/trino': 'Apache-2.0',
+  // github.com/hapifhir/hapi-fhir-jpaserver-starter — Apache-2.0 (LICENSE; GitHub
+  // license API spdx_id Apache-2.0, read 2026-11-14). LHDS W2-1 FHIR engine, the
+  // image is published by the HAPI project. Its bundled JDK/OS layers are base
+  // layers (see BASE_IMAGE_PREFIXES), not reviewed here.
+  'hapiproject/hapi': 'Apache-2.0',
+  // github.com/carlossg/docker-maven — Apache-2.0 (LICENSE, read 2026-11-14);
+  // packages Apache Maven (Apache-2.0). BUILD-STAGE ONLY in apps/loom-health-fhir:
+  // it compiles the plugin jar and is not copied into the shipped runtime image.
+  'maven': 'Apache-2.0',
 };
 
 /**
