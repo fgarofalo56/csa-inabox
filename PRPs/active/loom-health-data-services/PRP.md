@@ -9,144 +9,187 @@ review: required
 orchestrator_model: sonnet
 implementer_model: sonnet
 created: 2026-10-22
+started: 2026-10-24
 ---
-# PRP: Loom Health Data Services (LHDS) — master
+# PRP: Loom Health Data Services (LHDS) — program hub
+
+**Status (2026-11-14): ACTIVE.** W00 merged; W01 merged, not deployed (first Commercial stamp applied 2026-11-12/13, control plane deployed but not functional); W02a W2-1 merged (#5290), not deployed, docs PR #5292 open; everything from W02b on is backlog; W13 (class-M characterisation) is blocked on an operator spend approval that has not been given.
 
 | Field | Value |
 |---|---|
-| Status | DRAFT — design complete; W0 (measurement spike, no product code) may start immediately; everything else waits for W0's receipt or takes the recommended defaults in `RISKS-AND-OPEN-DECISIONS.md` |
 | Created | 2026-10-22 |
-| Decision source | Operator mandate 2026-10-22 (verbatim in `README.md`) and operator decisions 1-8 |
-| Tracking issue | To be filed by the W0 session: "LHDS (PRP): Loom Health Data Services — W0 measurement spike" |
-| Related rules | every file in `.claude/rules/` — section 8 says how each is met |
-| Related programs | `governance-autopilot` (adds `backingStore`; LHDS adds rows), `per-workspace-spark-identity` and `apim-ai-gateway` (bicep collision rule), PRP-02 estate power (pause contract) |
-| Boundaries | Commercial, GCC-High (receipts); IL5, DoD supported-in-code via params (DoD needs the enum, D3); GCC supported-in-code only, never exercised |
-| Implemented by this PR | Nothing. Docs only |
+| Decision source | Operator mandate 2026-10-22 (`README.md`), decisions in `OPERATOR-DECISIONS-2026-10-22.md`, spend decision 2026-11-14 (section 7) |
+| Related rules | every file in `.claude/rules/` (section 6) |
+| Related programs | `governance-autopilot`, `per-workspace-spark-identity`, `apim-ai-gateway` / `loom-api-gateway-plane` (bicep collision rule), PRP-02 estate power (pause contract) |
+| Boundaries | Commercial, GCC-High (receipts); IL5, DoD supported-in-code, never exercised; GCC supported-in-code only, never exercised |
 
-Evidence convention: repo claims carry `file:line` measured on `origin/main`
-at `2f7694b0e` (2026-10-22); external claims carry a URL in `research/` with
-the retrieval date; anything not read in full is **UNVERIFIED**.
+Evidence convention: repo claims carry a path + symbol, measured on `origin/main`; external claims carry a URL in `research/` with the retrieval date; anything not read in full is **UNVERIFIED**. This hub holds order and state only. Each wave file holds its own 16 sections. Shared design context lives in `ARCHITECTURE.md`, `TEST-STRATEGY.md`, `CAPACITY-MODEL.md`, `OPERATIONS-AND-BCDR.md` and the ADRs, linked and never repeated.
 
-## 1. Goals
+## Goal
+A from-scratch, Azure-native health data platform (FHIR R4, DICOMweb, terminology, conversion, bulk export, de-identification, lakehouse sink) with no dependency on Azure Health Data Services or Fabric, the same capabilities in Commercial and GCC-High (`cloud-parity.md`), scaled by stamps (`CAPACITY-MODEL.md`), with provable tenant isolation, A-grade Loom surfaces and a never-a-certification evidence pack. Full goals G1-G6: `PRD.md`.
 
-G1. A from-scratch, Azure-native health data platform (FHIR R4, DICOMweb,
-terminology, conversion, bulk export, de-identification, lakehouse sink) with
-no dependency on Azure Health Data Services or Fabric, same capabilities in
-Commercial and Azure Government (`cloud-parity.md`).
-G2. Scale by stamps to all-VA / all-IHS with the arithmetic in
-`CAPACITY-MODEL.md` and measured receipts at 1 M patients per class-M stamp.
-G3. Proven OSS engines (HAPI FHIR, dcm4chee-arc-light) inside Loom-owned
-platform layers, each chosen by an ADR with a pass bar and a fallback.
-G4. Provable tenant isolation, per-tenant CMK, private-only network, immutable
-audit, consent/segmentation enforcement, PHI-free logs.
-G5. First-class Loom product surfaces (item types, editors, Copilot, gates,
-parity docs, greenfield + brownfield docs) at A-grade.
-G6. An evidence pack an agency assessor can use; never a certification claim.
+## Why
+Operator mandate 2026-10-22: AHDS is not available in Azure Government; Loom Gov and Loom Commercial need the same health capabilities up to all-VA / all-IHS scale.
 
-## 2. Non-goals
-`PRD.md` section 4.
+## Scope / Non-goals
+Scope: the waves in section 1. Non-goals: `PRD.md` section 4. Out of scope until a fresh operator approval: full-scale (class-M, 1 M and 10 M patient) characterisation, which is W13 alone.
 
-## 3. Waves overview
+## Acceptance criteria
+- [ ] Every wave file merged AND deployed-and-verified per cloud with a run id (`deploy-integrity.md` R2). Fails if any wave row in section 3 reads "merged" while its receipt line says "not deployed".
+- [ ] `python -S -E ~/.claude/kits/orchestrated-prp/prp_index.py check --root <repo>` exits 0. Fails on any wave file whose frontmatter `depends_on` names a stem that has no file.
+- [ ] The W12 evidence pack exists per cloud; no page claims certification or authorization (needle scan is a guard; review is the check).
+- [ ] W13 is either approved by the operator and done, or still blocked with its `blocked_by` text intact. It never runs by default.
 
-| Wave | File | Scope | Model notes | Review |
-|---|---|---|---|---|
-| W0 | `W00-measurement-spike.md` | Engine load tests, Gov availability closure, egress check, Synthea throughput, repo measurements, ADR fixing | Sonnet; **Opus** W0-7 decision pass | W0-3, W0-7 |
-| W1 | `W01-control-plane-identity-stamp.md` | Stamp + tenant bicep, control plane, authorization server, PDP v1, routing, `health-tenant`, estate power, DoD enum, docs | Sonnet; **Opus** W1-4 scope-mapping design | bicep, auth |
-| W2 | `W02-fhir-core.md` | HAPI per tenant, interceptors, outbox, scrubber, curated search, item/editor, Inferno | Sonnet | W2-2, W2-3, W2-8 |
-| W3 | `W03-dicom-core-dicomweb.md` | dcm4chee, Blob layout, gateway, change feed/tags/partitions, lifecycle, item/editor, viewer smoke, load | Sonnet | W3-1, W3-2, W3-3, W3-8 |
-| W4 | `W04-terminology.md` | Terminology service, bundled packages, licensed loader | Sonnet | none |
-| W5 | `W05-conversion-hl7v2-ccda.md` | FHIR-Converter, ingest pipeline, item/editor, VistA/RPMS specs | Sonnet | W5-2, W5-4 |
-| W6 | `W06-bulk-export-deid-lakehouse-sink.md` | `$export`/`$import`, de-id, Delta sink, DICOM export, `ImagingStudy`, items/editors | Sonnet; **Opus** W6-1 parallel export design | W6-1, W6-3, W6-4 |
-| W7 | `W07-search-performance-at-scale.md` | Class M at 1 M, index v2, reindex/bulk ops, quotas, subscriptions, 10 M characterisation | Sonnet; **Opus** W7-2 index design | W7-2, W7-3 |
-| W8 | `W08-consent-segmentation-audit.md` | Labels, consent PDP v2, break-glass, audit chain, SIEM, disclosures surface | Sonnet; **Opus** W8-2 policy design | W8-1..W8-4 |
-| W9 | `W09-viewer-editors-copilot.md` | OHIF viewer item, editors to A-grade, admin page, Copilot write tools, docs | Sonnet | W9-4 |
-| W10 | `W10-device-ingest.md` | MedTech-model device ingest | Sonnet | none |
-| W11 | `W11-hardening-dr-scale-out.md` | Chaos, restore, evacuation, failover, 1->3 stamps, MPI, upgrades, measured SLOs | Sonnet; **Opus** W11-3 evacuation design | W11-2, W11-3, W11-4 |
-| W12 | `W12-compliance-evidence-pack.md` | Evidence generator, control mappings, close-out | Sonnet; **Opus** W12-2 mapping pass | W12-1, W12-2 |
+## Read first
+`README.md`, `ARCHITECTURE.md` section 6 (per-cloud table), `TEST-STRATEGY.md` section 9 (per-wave receipts), `RISKS-AND-OPEN-DECISIONS.md`, `W0-RECEIPT.md` section 8 (W0 pass bars carried forward), `PRPs/reference/INTERLOCK.md` (bicep ledger, written by the orchestrator; may not exist yet).
 
-## 4. Dependency graph and run order
+## Owns
+`PRP.md`, `README.md`, `RISKS-AND-OPEN-DECISIONS.md`, and the wave files `W06a` .. `W13` of this directory. Lane A owns `W00`..`W05`, `W01b`, `CONTRACT-FREEZE-W2.md`.
+
+## Must NOT touch
+`PRPs/INDEX.md`, `PRPs/MASTER-INDEX.md`, `PRPs/REGISTER.md` (orchestrator-owned); the other lane's wave files.
+
+## Consumes
+Operator decisions (`OPERATOR-DECISIONS-2026-10-22.md`), the ADR set (`adr/ADR-001`..`ADR-018`), `.claude/rules/*.md`.
+
+## Provides
+The wave order, dependency graph, concurrency map and open-decision register that every wave session reads first.
+
+## Steps
+1. Open a fresh session per wave file, in the order of section 2. 2. Work only inside the file's Owns list. 3. Update the file's Execution state and section 3 of this hub in the wave's closing PR. 4. Anything merged but not rolled is reported as "merged, not deployed".
+
+## Validation
+`python -S -E ~/.claude/kits/orchestrated-prp/prp_index.py check --root E:/Repos/GitHub/csa-inabox` (exit 0). Per-wave receipts: the wave file's own Validation section. Common rules for every wave file are in section 5.
+
+## Rollback
+Per wave file; globally `healthEnabled=false` in `platform/fiab/bicep/health-params/*-health.bicepparam` stops new deploys; data stores are never deleted on rollback (crypto-shred is an explicit, confirmed offboarding job).
+
+## Docs to update
+`docs/fiab/health/**` per wave; the per-cloud table in `ARCHITECTURE.md` section 6 with run ids; this hub's section 3.
+
+## Wave / Blocked-by / Branch / Worktree
+Hub: `Wave: all · Blocked-by: none · Branch: docs/lhds-<topic> per docs PR · Worktree: E:/Repos/_lhds-hub`
+
+## Hot files
+This directory's docs only. `touches_bicep: no`.
+
+## Kickoff prompt
+```
+You are working on the LHDS program (E:/Repos/GitHub/csa-inabox, PRPs/active/loom-health-data-services/).
+Read PRP.md (this hub), then the wave file you were assigned, then the ADRs and docs it names.
+Stay inside the wave file's Owns list. Fresh worktree per the file's Wave/Branch line.
+Done = the wave file's Validation commands pass AND receipts per cloud; merged-not-deployed is reported in those words.
+Prove with: python -S -E ~/.claude/kits/orchestrated-prp/prp_index.py check --root .
+```
+
+## 1. Waves
+
+Wave number = execution tier, not the file stem. Files in the same tier with different files owned may run at the same time, subject to the bicep rule. Order values are this lane's assignment. > ASSUMPTION: lane A uses orders 1-9 for W00..W05; if lane A differs, the orchestrator renumbers. Branch convention `feat/lhds-<stem lowercased>`; lane A's file wins where it names a different branch.
+
+| Name | Order | depends_on | Wave no. | Concurrent with | Bicep? | Branch |
+|---|---|---|---|---|---|---|
+| W00-measurement-spike | 1 | [] | 0 | none | no | shipped (lane A file) |
+| W01-control-plane-identity-stamp | 2 | [W00-measurement-spike] | 1 | W01b | yes | main (in progress) |
+| W01b-close-deploy-receipts | 3 | [W00-measurement-spike] | 1 | W01 tail | see file | feat/lhds-w1b-close-receipts |
+| W02a-fhir-core-build | 4 | [W01b-close-deploy-receipts] | 2 | W03a, W10 | see file | feat/lhds-w2a-fhir-build |
+| W03a-dicom-core-a | 6 | [W01b-close-deploy-receipts] | 2 | W02a, W10 | see file | feat/lhds-w3a-dicom-core |
+| W04-terminology | 8 | [W02a-fhir-core-build] | 3 | W02b, W03b, W05 | see file | feat/lhds-w4-terminology |
+| W10-device-ingest | 14 | [W01b-close-deploy-receipts] | 2 | W02a, W03a | yes (tenant.bicep) | feat/lhds-w10-device-ingest |
+| W02b-fhir-core-ops | 5 | [W02a-fhir-core-build] | 3 | W04, W05 | see file | feat/lhds-w2b-fhir-ops |
+| W03b-dicom-core-b | 7 | [W03a-dicom-core-a, W02b-fhir-core-ops] | 3 | W04, W05 | see file | feat/lhds-w3b-dicom-ops |
+| W05-conversion-hl7v2-ccda | 9 | [W02a-fhir-core-build] (soft: W04 for enrichment acceptance) | 3 | W02b, W03b, W04 | see file | feat/lhds-w5-conversion |
+| W06a-bulk-export-import | 20 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 4 | W07, W08a | no | feat/lhds-w06a-bulk-export-import |
+| W07-search-performance-at-scale | 23 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 4 | W06a, W08a | yes (ingress.bicep) | feat/lhds-w07-search-performance |
+| W08a-labels-pdp | 24 | [W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology] | 4 | W06a, W07 | no | feat/lhds-w08a-labels-pdp |
+| W06b-deid | 21 | [W06a-bulk-export-import] | 5 | W06c, W08b | yes (engines.bicep) | feat/lhds-w06b-deid |
+| W06c-lakehouse-sink | 22 | [W06a-bulk-export-import] | 5 | W06b, W08b | yes (engines.bicep) | feat/lhds-w06c-lakehouse-sink |
+| W08b-breakglass-audit-siem | 25 | [W08a-labels-pdp] | 5 | W06b, W06c | yes (stamp.bicep) | feat/lhds-w08b-breakglass-audit |
+| W09a-viewer-copilot | 26 | [W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid] | 6 | W11a | no | feat/lhds-w09a-viewer-copilot |
+| W09b-editors-admin | 27 | [W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot] | 7 | none | no | feat/lhds-w09b-editors-admin |
+| W11a-chaos-dr | 28 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 6 | W09a | no | feat/lhds-w11a-chaos-dr |
+| W11b-hardening-bicep | 29 | [W11a-chaos-dr] | 8 | none | yes (stamp.bicep) | feat/lhds-w11b-hardening-bicep |
+| W12-compliance-evidence-pack | 30 | [W11b-hardening-bicep, W08b-breakglass-audit-siem] | 9 | none | no | feat/lhds-w12-evidence-pack |
+| W13-class-m-characterisation | 99 | [W12-compliance-evidence-pack, W07-search-performance-at-scale] | 10 | none | yes (sandbox params) | feat/lhds-w13-class-m (blocked) |
+
+## 2. Dependency graph, repairs and concurrency map
 
 ```
-W0 ──> W1 ──┬──> W2 ──> W4 ──> W5 ──┐
-            │                       ├──> W9 ──> W11 ──> W12
-            └──> W3 ─────┐          │
-                         ├──> W6 ──┬┴──> W8 ─┘
-            W2 ──────────┘         └──> W7 ──> W10
+W00 > W01 / W01b > { W02a, W03a, W10 } concurrent
+W02a > { W02b, W04, W05 } ; W03a + W02b > W03b
+{ W02b + W03b } > { W06a, W07, W08a } concurrent   (W08a also needs W04)
+W06a > { W06b, W06c } ; W08a > W08b
+W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c)
+{ W02b + W03b } > W11a > W11b ; { W11b + W08b } > W12 > W13 (blocked)
 ```
 
-Run order: W0; W1; then W2 and W3 in parallel (two lanes each, WIP <= 4);
-W4 and W5 after W2; W6 after W2 + W3; W7 and W8 after W6; W9 after W8 + W5;
-W10 after W7; W11 after W9; W12 last. FHIR core (W2) is first-to-ship; DICOM
-(W3) is a parallel track from the moment W1 lands (operator decision 3).
+**Dependency repairs recorded 2026-11-14.** The previous graph chained waves that do not share data. The repairs, each checked against the old per-item `Depends on` columns:
+- **W4 to W5 is a soft edge only (lane A's W05 file agrees).** W5-1 (converter), W5-4 (VistA/RPMS specs) and W5-5 (fixtures) need nothing from W4. Only W5-2's `$translate` enrich step needs W4-2. Lane A encodes that on the item, not the wave.
+- **W7 to W10 is false.** W10 needs the FHIR write path (W2) and the Event Hubs eventing already in `platform/fiab/bicep/modules/health/eventing.bicep` (W1). Nothing in W10 reads a W7 output. > ASSUMPTION: W10's live Observation receipt needs a deployed W02a FHIR image; its code and fixture items do not, so W10 starts at the same tier as W02a and its live-verify item waits for W02a to be deployed.
+- **W9's real data deps are W2/W3.** The viewer (W9-1) needs the DICOM viewer smoke from W3 (old W3-7), not W5 or W8. Copilot write tools (W9-4) need W6 export and de-id. The editor A-grade pass (W9-2) needs W4, W5 and W6 editors to exist. The old W8 edge into W9 is dropped: audit tabs are W08b's own surfaces.
+- **W11 does not need W9.** Chaos, restore, evacuation and failover exercise W2/W3 stamps. Only W11-7's admin-page panels need the page W09b builds, so that edit is a serialized integration step.
+- **W6 to W7 and W6 to W8 are dropped.** W7 and W8a need W2 + W3 (and W4 for labels), not W6.
 
-## 5. Lanes, WIP and the bicep collision rule
+**Concurrency map.**
+- After W01b: W02a, W03a and W10 may run at once; they own different files. W04 and W05 follow W02a (lane A's files encode that, so W04 cannot run beside W02a as first suggested). Code work may start before W01b's live receipts exist; only live verification waits. Their bicep PRs serialize behind the single bicep ledger (section 5).
+- W06a, W07 and W08a start after W02b + W03b and may run at once. W06b, W06c and W08b start in the next tier.
+- W09a, W09b, W11a, W11b and W12 are serial near the end: they converge on `apps/fiab-console/lib/editors/health/**`, `lib/copilot/health-tools.ts` and the admin page, and W11b/W08b hold bicep slots. W09a and W11a have no shared files and may overlap.
+- WIP <= 4 lanes at any time; ONE bicep-touching PR in flight across every program.
 
-- At most 4 concurrent lanes per wave; each wave file names its lanes.
-- `platform/fiab/bicep/**` is shared with spark-identity, apim-ai-gateway and
-  the drain: **one bicep-touching PR in flight at a time across programs**.
-  LHDS bicep lives in `modules/health/**`; the only shared edits are the
-  `main.bicep` health block, `admin-plane/main.bicep` env rows, the `boundary`
-  enum (D3, its own PR) and params. Each bicep item is a small PR.
-- Multi-owner files (`health-tools.ts`, `tenant.bicep`, `engines.bicep`,
-  editor files) are edited additively in the order the wave tables give.
-- No deploy-affecting merge while a deploy path is red (`deploy-integrity.md`
-  R1).
-
-## 6. Cost rules (from `MASTER-INDEX.md` / `finish-2026-10`)
-
-Fresh session per wave; Sonnet default; Opus only for the named steps above;
-lean briefs (`temp/brief_common.md`, `temp/review_protocol.md`); one reviewer
-per round on sensitive paths, zero elsewhere on green CI, at most 3 rounds;
-PR bodies <= 3 KB; no sleep-polling (queue PRs in `temp/automerge_queue.txt`).
-Azure spend per wave is estimated in each wave file; W0 is capped (Q2).
-
-## 7. Verification and "done"
-
-A wave is done only on deployed-and-verified receipts per cloud (never on
-merge: "merged, not deployed" is the phrase), with the receipt list in
-`TEST-STRATEGY.md` section 9, mutation evidence for tests that claim to catch
-defects, and the per-cloud table in `ARCHITECTURE.md` section 6 updated with
-run ids. The PRP is done when W12-4's close-out holds and every leftover is a
-filed issue.
-
-## 8. How each die-hard rule is met
-
-| Rule | How |
-|---|---|
-| `no-vaporware.md` | Every item has a real-backend verify command and a receipt; honest gates only for the two genuine ones (licence, tenant consent) plus platform-blocking gates that state the true blocker; bicep sync per `LOOM-INTEGRATION.md` section 5 |
-| `no-fabric-dependency.md` | No Fabric or Power BI dependency; Fabric HDS is a UX reference only; AHDS is a model only |
-| `cloud-parity.md` | Every wave ships Commercial + GCC-High with Actions receipts; IL5/DoD are params, listed as supported-in-code until exercised; GCC never claimed; per-cloud table in every status |
-| `auto-bind-by-default.md` | `health-tenant` create provisions stamp/tenant resources, names match, self-healing readback; editors never open on a bind form |
-| `deploy-integrity.md` | R1 broken deploy preempts; R2 merged != done; R3 deploy SHA on the admin page; R4/R5/R8 greenfield + brownfield walkthroughs with discovery/offer/validate; R6/R7 truthful classified failures |
-| `ui-parity.md` | Parity doc per item type against the AHDS blades / Fabric HDS; zero missing before A |
-| `ux-baseline.md` | G1 browser E2E receipts, G2 Fix-it + registry, G3 SplitPane, badges, first-open; section 7 checklists attached |
-| `web3-ui.md` | Loom tokens, shared primitives, side-by-side screenshots |
-| `assertion-design.md` | Every verify names the value that breaks it; mutation receipts on defect-catching tests; positive controls on absence assertions |
-| `session-end.md`, `task-tracking.md` | Native task list in-session; GitHub issues across sessions; close only on deployed-and-verified |
-
-## 9. Rollback
-Per wave file; globally `healthEnabled=false` in params stops new deploys;
-data stores are never deleted on rollback (crypto-shred is an explicit,
-confirmed offboarding job).
-
-## 10. Decisions needed
-`RISKS-AND-OPEN-DECISIONS.md` D1-D27 and Q1-Q10; execution proceeds on
-defaults.
-
-## Execution state
+## 3. Execution state
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | `W00-measurement-spike.md` (W0-3 #5092/#5094; W0-1/2/4/5 DEV function proof #5107, pass bars deferred to W7 on operator Q2 2026-10-24; W0-6 #5093; W0-7 decision #5118) | 2026-10-24 |
-| W01-control-plane-identity-stamp | in-progress | main | sonnet | `W01-control-plane-identity-stamp.md` (merged, not deployed: W1-1 #5122, W1-3 service #5121, W1-4 design #5127, W1-5 Rego v1 #5125; W1-3 bicep #5126 = c39c7a42f; W1-2 tenant bicep #5130 = 66668f51c, W1-4 server #5131 = 47147f167, deploy-health.yml param/hub fix #5132 = d6a284504; W1-5 finish #5137 = d8d5cff17, W1-7 #5139 = dcc211152 (not A-grade), W1-8 TS half #5138 = 7e51b25ac, W1-8 DoD bicep half #5146 = a31e9c45f (supported-in-code only, never exercised), W1-6 routing #5145 = 76301d1f9 (gaps #5149), W1-9 docs #5148 = 97ce3e5cb; all merged, not deployed, nothing exercised in any cloud (#5151); remaining W1-4 wiring + Inferno SMART, W1-5 per-stamp data + bundle publishing, W1-6 gaps, W1-7 A-grade, and the DEV What-If + synthetic tenant receipt. Live stamps on the DEV profile in both clouds, operator 2026-10-24; What-If UNMEASURED while the estate is paused and the Gov ADX is stopped, #5123; 2026-10-27 all six W1 follow-up PRs merged, not deployed: #5154 = a13d13fe1, #5155 = 4a5bb2fca, #5156 = caacd0c2c, #5157 = 1c68d160e, #5158 = 26ffc2bfd, #5159 = bdccdd5ed; open: #5160 #5161 #5162 #5163 #5134, plus the live receipts (DEV What-If, synthetic tenant, Inferno SMART, edge probe, W1-7 browser walk, Gov), nothing exercised in any cloud (#5151); 2026-10-28 merged, not deployed: W1-2 ARM adapter wiring #5170 = 089ff80e7 (#5162; synthetic create-then-destroy receipt UNMEASURED), W1-7 health-tenant autoBindOnCreate #5172 = b9decb4a8 (#5161; no browser E2E or clean-create receipt); base repair #5174 = 1e58004dc (vitest pinned back to 3.2.7 + vite override sync; main was red on the roll gate from 733a1719b); new open: #5171 (loom-health-cp image build context), #5177 (#5172 follow-ups), #5178 (vitest 5 migration); 2026-11-03 merged, not deployed: #5160 root openid-configuration #5213 = 6d3819439, #5177 session + bind-error log #5214 = c82973685 (browser E2E and clean-create receipt UNMEASURED), #5134 auth review follow-ups #5216 = 09f761112 (independent review APPROVE; resolve-time JWKS private-address check open as #5217), #5149 edge probe #5215 = 76b5aa0b1 (probe only ever run against stub gateways, 403/429 UNMEASURED on a real APIM, #5149 stays open), #5171 image build context #5212 = 73b45dc55 (no real az acr build run); still open: #5163, #5151, #5123 and every live receipt; nothing exercised in any cloud; W02/W03 held until a W01 deploy or What-If receipt exists, operator 2026-11-03; 2026-11-05/06 merged, not deployed: #5224 PDP bundle publishing = 2c2543b3c (independent review APPROVE; never run on a live stamp; environment health-pdp-publish created 2026-11-04), and the GCC-High deploy-lane repairs that every W01 Gov receipt depends on: #5227 ADX SKU = b0092799c, #5229 = 4c5dbd43f, #5232 = b0b144704, #5234 = d1635ada6, #5235 = 596952216, #5236 = ef85cd6fb, #5237 = 6c1f29c30, #5238 = fe48794b3, #5239 = 6b4b78e63, #5240 = 432bc5837 (guards, failure chains, adopted-lake RG scope, classifier, AI Search region, Gov Job images, ADX name, ACR preflight); Gov receipts: a Bicep what-if of the ADMIN-PLANE template ran against GCC-High (65 to create, 198 to modify, run 42068753274) which is NOT a receipt for the health control plane (a separate deploy unit, deploy-health.yml); Provision never completed in any run through run 42286933702 (partial applies, estate state UNREAD); 2026-11-07: the admin-plane Provision SUCCEEDED for the first time (run 42341756803, after #5247-#5265: ADX off in gcc-high.bicepparam because every SKU was capacity-refused in usgovarizona and none offered in usgovtexas, budget api version #5251, ARM host in approve-cae-private-endpoints #5255, sub-scope RBAC Administrator granted to the deploy SP), smoke 3/8 with 8 apps not running (mcp-bridge entrypoint.sh, mirroring Kafka config, activator, mcp, direct-lake-shim, setup-orchestrator, presidio x2; #5123 comment 6711106576); still the admin-plane template only, so NOT a receipt for the health control plane (deploy-health.yml has not run in Gov); estate PAUSED 2026-11-07 (run 42404749643, 6 resources), pause declaration restored to 2026-11-24 (#5266); main CI red from #5253 (vitest) and #5263 (#4492 fallout); #5163 Entra bootstrap merged, not exercised: #5223 = 0d6f0c6a6 (needs the deploy identity's Graph grants, and a re-run after every deploy-health run since that re-renders the allowlist env var; #5163 stays open); nothing from W01 exercised in GCC-High (Commercial: see 2026-11-12/13 below); 2026-11-08 merged, not deployed: W1-6 WAF per-address knob wiring + APIM quota fragment test #5277 = f0358ba69 (Refs #5149, all five boxes stay open; never run against a real APIM or WAF); 2026-11-12/13 FIRST COMMERCIAL DEPLOY RECEIPTS (deploy-health, estate pause overridden by the operator, stamp dev01 in rg-csa-loom-health-dev01-centralus, DMLZ): the stamp APPLIED (run 43154633226 on ad28affbd; AKS Running, Postgres Flexible Ready, App Gateway Running, 32 resources, read back from ARM) after applying exposed defects the green what-ifs could not see (what-if does not expand nested modules): eastus2 had no Postgres offer and no AKS zone 1, so Commercial moved to centralus, WAF maxRequestBodySizeInKb 2000000 vs ARM max 2048, the apply classifier unreachable under bash -e, #5281 = f9ab8170d, snet-agw missing the applicationGateways delegation #5284 = ad28affbd, apps-filter dropped the repo-root build context #5285 = 70afe6988, lowercased platform compared to a camel-case literal so containerApps could never deploy #5286 = b28bf5ea2, Cosmos defaultTtl null() rejected on 7 of 9 containers #5287 = 66c4b89ae; guardrails lane-review dates re-dated #5283 = 4e65e2cd2, board #5269 = 35d848483; the CONTROL PLANE then DEPLOYED (run 43333990195 on 66c4b89ae; Container App loom-health-cp internal ingress, 9 Cosmos containers) but is NOT FUNCTIONAL: the replica crash-looped (NotRunning, restartCount 2) on missing LOOM_HEALTH_CP_ISSUER_URL, LOOM_HEALTH_CP_FHIR_BASE_URL, LOOM_HEALTH_CP_AS_CLIENT_ID (authServerMissing; no deploy-time source, no FHIR edge exists until W02, no placeholders invented); the crash-looping revision loom-health-cp--sa9hxnp was DEACTIVATED (0 replicas, reversible with az containerapp revision activate); Entra apps created by the operator-approved session: loom-health-cp (audience, client id 94269270-7428-4ea7-a177-8cfcd8208c67) and loom-health-cp-as (authorization server, client id fbce6421-6302-4b4d-b4fc-6bc4f47dc341), no credentials, federated credential and app roles NOT yet added (#5223 bootstrap not run); NOT established: any health route, auth, FHIR or DICOM behaviour, GCC-High apply (its Postgres offer, zones and NetworkIsolation are unmeasured), a Commercial image-build roll of the estate; Cosmos posture is public-network-access-enabled-aad-only; the stamp is billing; the old rg-csa-loom-health-dev01-eastus2 group still holds one empty WORM audit storage account that could not be deleted (CMK identity removed by the first delete attempt; needs the identity restored or an Azure support case); receipts on #5151; W02/W03: the hold condition (a W01 deploy receipt exists) is now met, release is the operator decision, trail in #5233 and #5241) | 2026-11-13 |
-| W02-fhir-core | in-progress | main | sonnet | `W02-fhir-core.md` (2026-11-14; W02 hold released by the operator 2026-11-13; W2-1 HAPI image #5290 = ea1a38d72, merged, not deployed: Commercial ACR build run 43631747096 on that SHA: build + push, Trivy gate on the pushed image and cosign keyless sign all succeeded (read from the jobs API), Gov steps skipped so GCC-High UNEXERCISED, no SBOM step seen; spring-webmvc CVE-2026-47884/47890 remain under a time-boxed .trivyignore exception, #5291; W2-2 / W2-3 / W2-5 next, W2-2 and W2-3 need a required review) | 2026-11-14 |
-| W03-dicom-core-dicomweb | todo | | sonnet | `W03-dicom-core-dicomweb.md` | 2026-10-22 |
-| W04-terminology | todo | | sonnet | `W04-terminology.md` | 2026-10-22 |
-| W05-conversion-hl7v2-ccda | todo | | sonnet | `W05-conversion-hl7v2-ccda.md` | 2026-10-22 |
-| W06-bulk-export-deid-lakehouse-sink | todo | | sonnet | `W06-bulk-export-deid-lakehouse-sink.md` | 2026-10-22 |
-| W07-search-performance-at-scale | todo | | sonnet | `W07-search-performance-at-scale.md` | 2026-10-22 |
-| W08-consent-segmentation-audit | todo | | sonnet | `W08-consent-segmentation-audit.md` | 2026-10-22 |
-| W09-viewer-editors-copilot | todo | | sonnet | `W09-viewer-editors-copilot.md` | 2026-10-22 |
-| W10-device-ingest | todo | | sonnet | `W10-device-ingest.md` | 2026-10-22 |
-| W11-hardening-dr-scale-out | todo | | sonnet | `W11-hardening-dr-scale-out.md` | 2026-10-22 |
-| W12-compliance-evidence-pack | todo | | sonnet | `W12-compliance-evidence-pack.md` | 2026-10-22 |
+| W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | W0-7 #5118; DEV proof #5107; pass bars carried to W13 | 2026-11-14 |
+| W01-control-plane-identity-stamp | in-progress | main | sonnet | W1 items merged, not deployed (#5122..#5287); detail in W01 file | 2026-11-14 |
+| W01b-close-deploy-receipts | todo | | sonnet | W01 deploy receipts on #5151; cp crash-loops, auth vars missing | 2026-11-14 |
+| W02a-fhir-core-build | in-progress | | sonnet | W2-1 merged #5290, merged not deployed; docs PR #5292 open | 2026-11-14 |
+| W02b-fhir-core-ops | todo | | sonnet | | 2026-11-14 |
+| W03a-dicom-core-a | todo | | sonnet | | 2026-11-14 |
+| W03b-dicom-core-b | todo | | sonnet | | 2026-11-14 |
+| W04-terminology | todo | | sonnet | | 2026-11-14 |
+| W05-conversion-hl7v2-ccda | todo | | sonnet | | 2026-11-14 |
+| W06a-bulk-export-import | todo | | sonnet | | 2026-11-14 |
+| W06b-deid | todo | | sonnet | | 2026-11-14 |
+| W06c-lakehouse-sink | todo | | sonnet | Q7 open (isolation fix deploy unconfirmed) | 2026-11-14 |
+| W07-search-performance-at-scale | todo | | sonnet | small-scale only; Class-M moved to W13 | 2026-11-14 |
+| W08a-labels-pdp | todo | | sonnet | | 2026-11-14 |
+| W08b-breakglass-audit-siem | todo | | sonnet | | 2026-11-14 |
+| W09a-viewer-copilot | todo | | sonnet | | 2026-11-14 |
+| W09b-editors-admin | todo | | sonnet | | 2026-11-14 |
+| W10-device-ingest | todo | | sonnet | | 2026-11-14 |
+| W11a-chaos-dr | todo | | sonnet | | 2026-11-14 |
+| W11b-hardening-bicep | todo | | sonnet | Gov second region unfunded (Q1/Q2) | 2026-11-14 |
+| W12-compliance-evidence-pack | todo | | sonnet | | 2026-11-14 |
+| W13-class-m-characterisation | blocked | | sonnet | spend NOT approved 2026-11-14 | 2026-11-14 |
+
+Nothing in the table is exercised in any cloud beyond the Commercial dev01 stamp apply on #5151. IL5 and DoD are supported-in-code, never exercised; GCC is never exercised (`cloud-parity.md`).
+
+## 4. Open decisions that gate waves
+
+Full register: `RISKS-AND-OPEN-DECISIONS.md` section 5 (owner and decide-by lines live there). Gating now: Q7 (lakehouse isolation, W06c), Q8 (Gov Trivy/cosign lane #4584, first Gov image), the W1-4 Entra manual steps (before W02a live verify), and the Class-M spend approval (W13 only).
+
+## 5. Common rules for every wave file
+
+- **Bicep.** One bicep-touching PR in flight across all programs. LHDS bicep lives in `platform/fiab/bicep/modules/health/**` behind its own entrypoint `platform/fiab/bicep/health.bicep` (own 4 MiB ARM budget). Hot files, one owner per wave: `health.bicep`, `platform/fiab/bicep/health-params/*.bicepparam`, `engines.bicep`, `stamp.bicep`, `tenant.bicep`, `.github/workflows/build-fiab-images-acr-tasks.yml` (matrix row only), `apps/fiab-console/lib/copilot/health-tools.ts`, `apps/fiab-console/lib/gates/registry/*`.
+- **Done** = deployed-and-verified receipts per cloud (Gov via a GitHub Actions run id, never local `az`); until then the phrase is "merged, not deployed" (`deploy-integrity.md` R2). No deploy-affecting merge while a deploy path is red (R1).
+- **Assertions** name the value that would break them; any test claimed to catch a defect shows a mutation run on a sandbox copy (`assertion-design.md`).
+- **UI** items need a live in-browser E2E (G1), Fix-it for any gate (G2), `SplitPane` (G3), and a parity doc at `docs/fiab/parity/<slug>.md` (`ui-parity.md`).
+- **Cloud claims** name which clouds were verified (`cloud-parity.md`); IL5/DoD/GCC are supported-in-code until a run exists.
+- **Cost.** Fresh session per wave file, Sonnet unless the item says Opus, <= 3 review rounds, PR bodies <= 3 KB.
+
+## 6. How each die-hard rule is met
+
+| Rule | How |
+|---|---|
+| `no-vaporware.md` | Every item has a real-backend verify command and a receipt; honest gates only where the platform genuinely cannot act (licence, tenant consent) |
+| `no-fabric-dependency.md` | No Fabric or Power BI dependency; Fabric HDS is a UX reference only; AHDS is a model only |
+| `cloud-parity.md` | Every wave ships Commercial + GCC-High receipts; IL5/DoD/GCC marked supported-in-code, never exercised |
+| `auto-bind-by-default.md` | `health-tenant` create provisions stamp/tenant resources; names match; self-healing readback; no bind form |
+| `deploy-integrity.md` | R1 broken deploy preempts; R2 merged is not done; R3 deploy SHA on the admin page; R4/R5/R8 greenfield + brownfield docs; R6/R7 truthful failures |
+| `ui-parity.md`, `ux-baseline.md`, `web3-ui.md` | Parity doc per item type; G1-G3; Loom tokens and shared primitives |
+| `assertion-design.md` | Named breaking value per assertion; mutation receipts |
+| `session-end.md`, `task-tracking.md` | Native task list in-session; GitHub issues across sessions; close only on deployed-and-verified |
+
+## 7. Spend decision (operator, 2026-11-14)
+
+The W07 Class-M load test (about $25k per month for about 3 weeks) is NOT approved. W07 runs its code items plus a SMALL-SCALE functional test under the existing $4k cap (`OPERATOR-DECISIONS-2026-10-22.md` Q2). Full-scale characterisation is W13: blocked, last in order, requested only after all other work is done and verified. There is no default spend.

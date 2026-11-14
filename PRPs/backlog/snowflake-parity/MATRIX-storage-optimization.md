@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-11-14 - do not use. Replaced by [`MATRIX-storage.md`](./MATRIX-storage.md).** First-pass matrix from 2026-08-24; its pre-correction claims are overturned by the replacement (see PRP.md hub and W0-arbitration-and-housekeeping.md item W0.E).
+
 # Parity matrix — Storage layout & query optimization
 
 **Parent:** [`PRP.md`](./PRP.md) · Measured 2026-08-24 · **14 rows**

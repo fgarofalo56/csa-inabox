@@ -1,7 +1,8 @@
 # LHDS — Risks, open decisions (D1-D27) and operator-only questions
 
 Execution proceeds on the **recommended default** unless the operator answers
-before the wave that depends on it starts. Nothing here blocks W0.
+before the wave that depends on it starts. W0 is complete; the items that gate
+waves still to run carry an owner and a decide-by line in section 5.
 
 ## 1. Decisions with recommended defaults
 
@@ -66,6 +67,22 @@ before the wave that depends on it starts. Nothing here blocks W0.
 | R10 | 45-min CI budget broken by engine tests | M / M | Engine suites nightly, not PR CI |
 | R11 | Bicep collisions with spark-identity / apim / drain programs | H / M | One bicep PR in flight; LHDS bicep is in its own `modules/health/` tree; only `main.bicep` wiring and params are shared |
 | R12 | Operator decisions unanswered stall a wave | M / L | Defaults above; waves proceed on defaults |
+
+## 5. Open decisions that gate waves (owner and decide-by)
+
+> ASSUMPTION: where no owner or date was recorded, owner = operator and
+> decide-by = before the dependent wave starts. Nothing here was answered by
+> the operator; each row states the default that applies if nobody answers.
+
+| # | Decision | Gates | Owner | Decide-by | Default if unanswered |
+|---|---|---|---|---|---|
+| Q7 | Is the private lakehouse workspace-isolation fix deployed on every estate the sink will run on? (`health-lakehouse-isolation` gate; do not quote the advisory in public files) | W06c enablement (code may land behind the gate) | operator | before W06c starts | Sink stays disabled by the gate |
+| Q8 | Trivy/cosign on the Gov image lanes (#4584): include that lane fix? It is a shared workflow outside LHDS ownership | The first Gov image roll of any wave (earliest W02a on GCC-High) | operator | before the first GCC-High image roll | Commercial proceeds; Gov image roll blocked on #4584 and the `health-gov-image-gate` gate |
+| W1-4 Entra manual steps | Federated credential and app roles (`HealthCP.Reader` and the authorization-server roles) on the Entra apps `loom-health-cp` and `loom-health-cp-as`, the deploy identity's Graph grants, then a re-run of the #5163 bootstrap after each `deploy-health` run; plus the three auth env vars the control plane lacks (issuer URL, FHIR base URL, AS client id) | Control plane becoming functional (W01b) and every live-verify item from W02a on | operator | before W02a's live verify, ideally during W01b | Control plane stays deactivated; live receipts stay unmeasured |
+| Class-M spend | Approve about $25k/mo for about 3 weeks of class-M characterisation | W13 only | operator | only after every other wave is done and verified | NOT approved 2026-11-14: W13 stays blocked, no spend |
+
+Q2 note (2026-11-14): the W0 budget answer ($4k, DEV evidence) stands. W07's
+small-scale functional run uses that same cap; W07's class-M items moved to W13.
 
 ## 4. What could not be established in this planning pass
 
