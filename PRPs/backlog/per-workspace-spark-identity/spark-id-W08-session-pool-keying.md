@@ -12,7 +12,7 @@ branch: feat/spark-id-w08-pool
 ---
 # W08: Per-workspace warm session pool
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Key the warm Livy session pool by workspace so a session created under one workspace identity is never reused by another.

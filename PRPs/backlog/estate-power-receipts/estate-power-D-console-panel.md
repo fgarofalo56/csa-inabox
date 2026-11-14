@@ -13,7 +13,7 @@ branch: chore/estate-power-d-panel-g1
 ---
 # Lane D: console Estate Power panel G1 walk and parity doc
 
-Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). New per-lane issues: to be created by orchestrator.
+Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). Program tracker: #5298 (created 2026-11-14).
 
 ## Goal
 Verify the console Estate Power panel end to end in a real browser on Commercial (and GCC-High if lane B shows it reachable), and bring `docs/fiab/parity/estate-power.md` to zero missing rows.

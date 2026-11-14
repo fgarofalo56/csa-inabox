@@ -5,7 +5,7 @@
 | Status | REFERENCE DESIGN (not a PRP; the executable PRPs are `PRP.md` and the `gov-W*.md` files in this directory). W0 (#5016) and W1 (#5042) are merged; W2..W10 not started. Section 6 below is the original item table, superseded by `PRP.md` for sequencing |
 | Created | 2026-10-16 |
 | Decision source | Operator request 2026-10-16: Copilot must be able to act on the registered data-governance tools; scans must be set up for users; objects must be enrolled in Purview and the governance tools and be automatically classified, tagged and labeled; "it should just be part of the way Loom is integrated" |
-| Tracking issue | TRACKING ISSUE: to be created by orchestrator (none exists as of 2026-11-14) |
+| Tracking issue | TRACKING ISSUE: #5296 (tracker, created 2026-11-14) |
 | Related rules | `.claude/rules/auto-bind-by-default.md`, `no-vaporware.md`, `no-fabric-dependency.md`, `cloud-parity.md`, `deploy-integrity.md`, `ux-baseline.md`, `web3-ui.md`, `ui-parity.md`, `assertion-design.md`, `session-end.md`, `task-tracking.md` |
 | Related programs | `finish-2026-10/PRP-02-estate-power.md` (pause contract, section 5.5), `per-workspace-spark-identity` and `apim-ai-gateway` (bicep collision, section 6.3), Workspace identity program I1-I9 |
 | Boundaries | Commercial, GCC-High, IL5, DoD. GCC is supported-in-code only and has never been exercised (`cloud-parity.md`, "Supported-in-code is not ever-exercised"); this PRP does not change that and does not claim a GCC receipt |

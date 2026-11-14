@@ -12,7 +12,7 @@ branch: feat/spark-id-w05-scoper
 ---
 # W05: SparkLakeScoper (ABAC + ACL) and per-workspace Synapse RBAC
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave. W05 here also covers original W06.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts). W05 here also covers original W06.
 
 ## Goal
 A `spark-lake` backend in `workspace-grants.ts` that writes path-scoped storage grants (ABAC or ACL behind one interface) and Synapse Compute Operator on each pool for `uami-ws-<id>`.

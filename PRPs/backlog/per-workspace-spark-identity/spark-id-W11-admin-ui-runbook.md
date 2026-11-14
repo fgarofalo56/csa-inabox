@@ -12,7 +12,7 @@ branch: feat/spark-id-w11-ui
 ---
 # W11: Admin UI and runbook
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 The workspace identity panel shows the spark-lake binding, scoper kind, root count, last heal time and a Re-bind action; the runbook documents all three mode states.

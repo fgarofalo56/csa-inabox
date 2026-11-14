@@ -13,7 +13,7 @@ issues: [5016, 5042]
 
 # PRP (hub): Governance Autopilot - zero-touch Purview enrollment, scanning, classification and labeling, plus Copilot governance tools
 
-TRACKING ISSUE: to be created by orchestrator (none exists as of 2026-11-14; do not invent a number). Work-item issues are filed from the wave files below.
+TRACKING ISSUE: #5296 (tracker, created 2026-11-14). Work-item issues are filed from the wave files below.
 
 Reference design (shared context, not repeated here): `DESIGN.md` in this directory. Measurement receipt: `W0-RECEIPT.md` (this directory).
 The old single-file PRP was ~99 KB and could not run in one session; it is now this hub plus 13 wave PRPs. DESIGN.md section 6 is superseded by the table below.

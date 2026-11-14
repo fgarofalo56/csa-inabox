@@ -13,7 +13,7 @@ branch: chore/estate-power-a-commercial-receipts
 ---
 # Lane A: Commercial receipts-only run
 
-Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). New per-lane issues: to be created by orchestrator.
+Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). Program tracker: #5298 (created 2026-11-14).
 
 ## Goal
 Produce one dated, complete Commercial receipt set (Pause with per-resource readback, Resume with readback and a healthy console, and one UNATTENDED idle auto-pause cron firing) against current main, and record it as the closing evidence for the Commercial half of #4876/#4243.

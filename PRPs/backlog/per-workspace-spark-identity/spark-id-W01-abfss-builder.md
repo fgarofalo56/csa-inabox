@@ -12,7 +12,7 @@ branch: feat/spark-id-w01-abfss
 ---
 # W01: abfss builder consolidation
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Route every DFS hostname through `lakehouse-abfss.ts` so Gov suffixes work and no file hard-codes `.dfs.core.windows.net`.

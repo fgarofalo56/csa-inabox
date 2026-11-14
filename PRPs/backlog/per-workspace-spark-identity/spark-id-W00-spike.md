@@ -12,7 +12,7 @@ branch: spike/spark-identity-w00
 ---
 # W00: Measurement spike (live Synapse, four boundaries)
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Replace the design assumptions about Synapse passthrough, batch identity, ABAC availability and submitter-host limits with measurements, and record a go/no-go on ABAC (b1) vs ACL (b2) per boundary.

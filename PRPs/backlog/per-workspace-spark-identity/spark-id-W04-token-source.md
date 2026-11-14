@@ -12,7 +12,7 @@ branch: feat/spark-id-w04-token
 ---
 # W04: Token source for uami-ws-<id> (separate submitter host)
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Obtain a dev-endpoint token as `uami-ws-<id>` in every boundary via a separate Spark-submitter host (Q2=B), within the attachment limits W00 measured.

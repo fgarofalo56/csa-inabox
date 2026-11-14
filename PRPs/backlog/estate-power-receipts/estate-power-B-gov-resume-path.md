@@ -13,7 +13,7 @@ branch: feat/estate-power-b-gov-resume
 ---
 # Lane B: GCC-High (Gov) resume path and receipt (#4235)
 
-Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). New per-lane issues: to be created by orchestrator.
+Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). Program tracker: #5298 (created 2026-11-14).
 
 ## Goal
 Prove that the GCC-High estate can be paused and resumed through GitHub Actions with the same readback discipline as Commercial, and retire the stale statement that Gov has no resume path.

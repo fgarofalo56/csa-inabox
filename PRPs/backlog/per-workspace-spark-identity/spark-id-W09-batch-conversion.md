@@ -12,7 +12,7 @@ branch: feat/spark-id-w09-batch
 ---
 # W09: Batch conversion to per-workspace sessions
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Convert class U/W batch submits (rows 10-12, 15, 22) to per-workspace sessions; platform fixed-code batches stay on the Synapse MSI (Q3=C).

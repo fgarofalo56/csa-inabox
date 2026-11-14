@@ -12,7 +12,7 @@ branch: feat/spark-id-w02-client
 ---
 # W02: Client layer takes explicit credential and workspace context
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Let every Livy/batch call carry a credential and a workspace context (or an explicit `platform` tag), with no behaviour change while the mode is off.

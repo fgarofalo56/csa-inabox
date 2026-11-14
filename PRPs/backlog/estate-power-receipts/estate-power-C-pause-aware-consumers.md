@@ -13,7 +13,7 @@ branch: chore/estate-power-c-consumers
 ---
 # Lane C: pause-aware consumer lanes, verified
 
-Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). New per-lane issues: to be created by orchestrator.
+Program: [estate-power-receipts](PRP.md) · TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN, 2026-11-14). Program tracker: #5298 (created 2026-11-14).
 
 ## Goal
 Show, per consumer workflow and per boundary, that a declared or detected pause makes the lane stand down visibly (skipped at 0 deploy steps) and that an unreadable state fails closed on schedule.

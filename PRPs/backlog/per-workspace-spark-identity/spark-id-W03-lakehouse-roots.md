@@ -12,7 +12,7 @@ branch: feat/spark-id-w03-roots
 ---
 # W03: Route-level root resolution for class W routes
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Each lakehouse Spark route resolves its workspace and root from the item id so each submit carries a workspace context.

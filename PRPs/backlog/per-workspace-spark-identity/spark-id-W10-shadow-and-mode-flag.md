@@ -12,7 +12,7 @@ branch: feat/spark-id-w10-shadow
 ---
 # W10: Shadow evaluator and LOOM_SPARK_IDENTITY_MODE
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Introduce `LOOM_SPARK_IDENTITY_MODE` (off | shadow | enforce), the shadow evaluator that logs path/scope mismatches for every submit, and the enforce allowlist.

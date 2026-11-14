@@ -14,7 +14,7 @@ created: 2026-10-02
 
 Hub for 12 wave PRPs (`spark-id-W00` .. `spark-id-W12`; original W5+W6 are merged into W05, so there is no W06 file). Design, inventory of
 the 27 Spark call sites, platform constraints, options and decisions Q1-Q10 live in [REFERENCE.md](REFERENCE.md); do not restate them.
-TRACKING ISSUE: to be created by orchestrator per wave.
+TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 Status correction 2026-11-14: the previous frontmatter said both `status: backlog` and `shipped: 2026-10-02`. That was wrong. Nothing
 is shipped: no W0 receipt, no spike report and no GitHub issue exist, and the product flag and ratchets are absent (see "What exists").

@@ -12,7 +12,7 @@ branch: feat/spark-id-w12-narrow
 ---
 # W12: Narrow shared grants (phase 4)
 
-Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: to be created by orchestrator per wave.
+Program: [per-workspace-spark-identity](PRP.md) · Shared context: [REFERENCE.md](REFERENCE.md) · TRACKING ISSUE: #5297 (program tracker, created 2026-11-14; per-wave issues filed when each wave starts).
 
 ## Goal
 Add `synapseMsiStorageScope` and `consoleSparkStorageScope` (`account` | `platform-paths`) and narrow the Synapse MSI and Console Spark-lane data roles to platform paths, per boundary, only after enforce is complete in that boundary.
