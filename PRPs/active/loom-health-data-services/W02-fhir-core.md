@@ -51,7 +51,7 @@ feature flag `LOOM_HEALTH_FHIR_ENABLED`.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W2-1 | todo | | sonnet | | 2026-10-22 |
+| W2-1 | merged | feat/lhds-w2-1-hapi-image | sonnet | #5290 = ea1a38d72, merged, not deployed (no consumer until bicep W2-6). Local docker build, offline verify-image.sh and node tests pass; Commercial ACR build run 43631747096: build + push, Trivy gate on the pushed image and cosign keyless sign succeeded (jobs API), so builder reach to the upstream hosts is proven for Commercial; Gov steps skipped, GCC-High UNEXERCISED; no SBOM step seen. 2 of 4 CRITICALs patched; spring-webmvc CVE-2026-47884/47890 remain under a time-boxed .trivyignore exception (#5291: re-pin HAPI on Spring Boot 4, then remove it). Merged with --admin over the repo-level CI_RUNNER shadow check (red on main too, 403 reading environments). | 2026-11-14 |
 | W2-2 | todo | | sonnet | | 2026-10-22 |
 | W2-3 | todo | | sonnet | | 2026-10-22 |
 | W2-4 | todo | | sonnet | | 2026-10-22 |
