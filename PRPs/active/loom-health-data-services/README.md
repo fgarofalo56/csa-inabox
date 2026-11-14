@@ -1,8 +1,9 @@
 # Loom Health Data Services (LHDS) — PRD + PRP set
 
-**Status (2026-10-22): DRAFT, design complete, docs only.** No product code
-exists. W0 (measurement spike) may start in a fresh session; every later wave
-waits for W0's receipt or runs on the recommended defaults.
+**Status (2026-11-14): ACTIVE.** Design is complete; W00 is merged; W01 and
+W02a W2-1 are merged, not deployed (the first Commercial stamp was applied
+2026-11-12/13 and its control plane is not yet functional). Wave order, state
+and the dependency repairs live in `PRP.md`; this README is the reading guide.
 
 **Public repo rules**: no PHI, no secrets, no real patient data, synthetic data
 only (Synthea, public CC-BY DICOM sets, synthetic DICOM), never a credential
@@ -38,7 +39,11 @@ claimed as certification.
 6. `SECURITY-AND-COMPLIANCE.md` — threat model, control mappings, evidence list.
 7. `OPERATIONS-AND-BCDR.md`, `TEST-STRATEGY.md`, `LOOM-INTEGRATION.md`.
 8. `RISKS-AND-OPEN-DECISIONS.md` — D1-D27 with defaults, Q1-Q10 for the operator.
-9. `PRP.md` — master PRP; then the wave files `W00-*.md` .. `W12-*.md`.
+9. `PRP.md` — program hub (wave table, concurrency map, state); then the wave
+   files `W00-*.md` .. `W13-*.md`. Large waves are split into `a`/`b`/`c`
+   files (for example `W06a-bulk-export-import.md`) so each fits one session.
+   `W13-class-m-characterisation.md` is blocked: full-scale spend is not
+   approved (2026-11-14).
 10. `research/` — cited source notes per topic (URLs, retrieval dates, UNVERIFIED tags).
 
 ## Headline decisions
@@ -70,7 +75,7 @@ claimed as certification.
 ## Index tooling note
 
 `prp_index.py` reads PRP directories exactly one level deep, so the wave files
-sit beside `PRP.md` (named `W00-` .. `W12-`) rather than in a `waves/`
+sit beside `PRP.md` (named `W00-` .. `W13-`) rather than in a `waves/`
 subfolder, which the tool would silently ignore. `PRPs/INDEX.md` is generated
 by `prp_index.py build` and checked by `check`; this README carries no
 frontmatter on purpose (a `README.md` with frontmatter would be read as a

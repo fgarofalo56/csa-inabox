@@ -65,10 +65,10 @@ param requestTimeoutSeconds int = 300
 @maxValue(1000000)
 param wafClientRateLimitPerMinute int = 6000
 
-@description('Max request body the WAF accepts, in KB (DICOM STOW-RS multipart bodies are large).')
+@description('Max request body INSPECTED by the WAF, in KB. ARM accepts 8 to 2048 (measured: run 43067631148 rejected 2000000 with ApplicationGatewayFirewallInvalidMaxRequestBodySizeInKb). Large DICOM STOW-RS uploads are governed by wafFileUploadLimitMb, not this.')
 @minValue(8)
-@maxValue(4000000)
-param wafMaxRequestBodyKb int = 2000000
+@maxValue(2048)
+param wafMaxRequestBodyKb int = 2048
 
 @description('Max file upload in MB (STOW-RS instances). Application Gateway WAF v2 caps this at 4000.')
 @minValue(1)

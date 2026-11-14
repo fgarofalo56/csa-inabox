@@ -128,8 +128,11 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
 }
 
 // ── Control plane (apps/loom-health-cp) ───────────────────────────────────────
-var cpPlatformRaw = toLower(string(controlPlaneConfig.?controlPlane ?? (effectiveBoundary == 'IL5' ? 'aks' : 'containerApps')))
-var cpValidPlatform = contains(['containerApps', 'aks'], cpPlatformRaw)
+// cpPlatformInput keeps the caller value for messages; cpPlatformRaw is its lowercase form and
+// must only be compared against lowercase literals (a lowered value never equals 'containerApps').
+var cpPlatformInput = string(controlPlaneConfig.?controlPlane ?? (effectiveBoundary == 'IL5' ? 'aks' : 'containerApps'))
+var cpPlatformRaw = toLower(cpPlatformInput)
+var cpValidPlatform = contains(['containerapps', 'aks'], cpPlatformRaw)
 // An unrecognised value is NOT coerced into a deployment: cpDeploy requires cpValidPlatform
 // and the skip reason names the value.
 var cpPlatform = cpPlatformRaw == 'aks' ? 'aks' : 'containerApps'
@@ -141,7 +144,7 @@ var cpEnvironmentId = string(controlPlaneConfig.?environmentId ?? '')
 var cpAcrKnown = !empty(cpAcrName) && !empty(cpAcrLoginServer) && !empty(cpAcrResourceGroup)
 var cpHostable = cpPlatform == 'aks' || !empty(cpEnvironmentId)
 var cpDeploy = healthDeploy && !empty(cpAudiences) && cpValidPlatform && cpAcrKnown && cpHostable
-var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed ? 'stamp not deployed: PostgreSQL unavailable in this region (healthConfig.postgres)' : (empty(cpAudiences) ? 'controlPlaneConfig.audiences is empty: the service refuses to start without an accepted token audience' : (!cpValidPlatform ? 'controlPlaneConfig.controlPlane must be containerApps or aks, got ${cpPlatformRaw}' : (!cpAcrKnown ? 'controlPlaneConfig needs acrName, acrLoginServer and acrResourceGroup' : (!cpHostable ? 'containerApps path needs controlPlaneConfig.environmentId; set controlPlane=aks to use the stamp cluster' : '')))))
+var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed ? 'stamp not deployed: PostgreSQL unavailable in this region (healthConfig.postgres)' : (empty(cpAudiences) ? 'controlPlaneConfig.audiences is empty: the service refuses to start without an accepted token audience' : (!cpValidPlatform ? 'controlPlaneConfig.controlPlane must be containerApps or aks, got ${cpPlatformInput}' : (!cpAcrKnown ? 'controlPlaneConfig needs acrName, acrLoginServer and acrResourceGroup' : (!cpHostable ? 'containerApps path needs controlPlaneConfig.environmentId; set controlPlane=aks to use the stamp cluster' : '')))))
 
 // Authorization server settings (W1-4). The signing key is created in the stamp vault unless
 // authSigningKeyId is supplied. The three values below have no deploy-time source (the public

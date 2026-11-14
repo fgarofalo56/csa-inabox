@@ -20,7 +20,12 @@ describe('control-plane.bicep authorization-server infra (W1-4)', () => {
     expect(cp).toContain("{ name: 'health-auth-replay', defaultTtl: -1 }");
     expect(cp).toContain("{ name: 'health-auth-grants', defaultTtl: -1 }");
     expect(cp).toContain("{ name: 'health-auth-config', defaultTtl: 0 }");
-    expect(cp).toContain('defaultTtl: c.defaultTtl == 0 ? null : c.defaultTtl');
+    // A 0 default TTL must OMIT the property (union with {}). The old `? null :` form made ARM forward
+    // an explicit null() that the Cosmos RP rejected on 7 of 9 containers (deploy-health run 43321878414).
+    // Input that breaks the first assertion: reverting to the null() ternary. Input that breaks the second:
+    // any `? null :` reintroduced on a container property.
+    expect(cp).toContain('c.defaultTtl == 0 ? {} : { defaultTtl: c.defaultTtl }');
+    expect(cp).not.toContain('defaultTtl: c.defaultTtl == 0 ? null');
   });
 
   it('sets the env names src/auth/config.ts reads (read from that file when it exists on this branch)', () => {
