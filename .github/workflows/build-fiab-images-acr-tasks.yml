@@ -138,6 +138,9 @@ on:
       # pulls its image once healthEnabled=true. Without a producer that PUT fails
       # with MANIFEST_UNKNOWN. This lane builds for GCC-High/IL5 too (boundary input).
       - 'apps/loom-health-cp/**'
+      # loom-health-fhir is the LHDS FHIR engine image (W2-1: pinned HAPI + Loom
+      # plugin jar + baked US Core/validator). Context is its own directory.
+      - 'apps/loom-health-fhir/**'
       # The image compiles tenant.bicep from this directory (Dockerfile COPY, #5171).
       - 'platform/fiab/bicep/modules/health/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
@@ -331,7 +334,7 @@ jobs:
             # would add ~10 min to each one for no benefit. It IS in the
             # from-scratch app phase (full-app-deploy-commercial.yml), and it can
             # be built on demand here with `apps: loom-uat`.
-          DEFAULT_APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"},{"name":"loom-health-cp","ctx":".","file":"./apps/loom-health-cp/Dockerfile","watch":["platform/fiab/bicep/modules/health"]}]'
+          DEFAULT_APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"},{"name":"loom-health-cp","ctx":".","file":"./apps/loom-health-cp/Dockerfile","watch":["platform/fiab/bicep/modules/health"]},{"name":"loom-health-fhir","ctx":"./apps/loom-health-fhir"}]'
           if [[ "$INPUT" == "all" ]]; then
             APPS="$DEFAULT_APPS"
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
