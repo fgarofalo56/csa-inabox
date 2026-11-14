@@ -42,13 +42,16 @@ server ships against `validator.lock`. Package/validator bumps: edit the lock, r
 
 ## Known limits
 
-- **Trivy CRITICAL gate is NOT green on the pinned base** (measured 2026-11-14, `aquasec/trivy`
-  vuln scan of the built image, all four have a fixed version): `libbrotli1` CVE-2026-111497
-  (Debian layer), `opentelemetry-javaagent` CVE-2026-33701 (2.24.0, fix 2.26.1), and
-  `spring-webmvc` 6.2.19 in `main.war` CVE-2026-47884 / CVE-2026-47890 (fix 7.0.9). All four
-  come from upstream `hapiproject/hapi:latest`, which is the same digest we pin (v8.12.0-2), so a
-  base bump does not clear them. The workflow's gate will fail this image until the operator
-  either takes a time-boxed `.trivyignore` loan or we rebuild the affected layers; neither is done here.
+- **Trivy CRITICAL (measured 2026-11-14): 2 of the 4 base-image CVEs are patched here, 2 remain.**
+  Patched with pinned, sha256-checked layers (no `.trivyignore`): `libbrotli1` CVE-2026-111497
+  (`os-patch.lock`, fixed .deb overlaid with its dpkg status entry) and `opentelemetry-javaagent`
+  CVE-2026-33701 (`otel-agent.lock`, 2.26.1). **Still failing the gate:** `spring-webmvc` 6.2.19
+  in `main.war`, CVE-2026-47884 / CVE-2026-47890. The only fixed version is 7.0.9+ (Maven Central's
+  6.2.x line ends at 6.2.19). Swapping that one jar for 7.0.10 was tried: boot fails with
+  `NoClassDefFoundError: HttpMessageConverters$ServerBuilder`, because the rest of the server is
+  Spring Framework 6.2. Clearing it needs a HAPI starter built on Spring Boot 4 (a new W0 pin),
+  which is outside this image's ownership.
+
 
 - Terminology bindings are not checked by the baked validator (`-tx n/a`: there is no terminology
   server in the image). Profile structure, cardinality and invariants are.

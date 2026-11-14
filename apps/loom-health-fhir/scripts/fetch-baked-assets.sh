@@ -31,6 +31,19 @@ curl -fsSL --retry 3 -o "$OUT/validator/validator_cli.jar" "$URL"
 verify "$OUT/validator/validator_cli.jar" "$SHA" "validator_cli.jar $VER"
 echo "$VER" > "$OUT/validator/VERSION"
 
+# otel-agent.lock: patched OpenTelemetry Java agent that replaces the one shipped in the
+# base image (CVE-2026-33701, fixed in 2.26.1). Same key=value shape as validator.lock.
+mkdir -p "$OUT/agent"
+OVER=$(sed -n 's/^version=//p' "$LOCK_DIR/otel-agent.lock" | tr -d '[:cntrl:]')
+OURL=$(sed -n 's/^url=//p' "$LOCK_DIR/otel-agent.lock" | tr -d '[:cntrl:]')
+OSHA=$(sed -n 's/^sha256=//p' "$LOCK_DIR/otel-agent.lock" | tr -d '[:cntrl:]')
+if [ -z "$OVER" ] || [ -z "$OURL" ] || [ -z "$OSHA" ]; then
+  echo "ERROR: otel-agent.lock is missing version/url/sha256" >&2
+  exit 1
+fi
+curl -fsSL --retry 3 -o "$OUT/agent/opentelemetry-javaagent.jar" "$OURL"
+verify "$OUT/agent/opentelemetry-javaagent.jar" "$OSHA" "opentelemetry-javaagent $OVER"
+
 # packages.lock.tsv: name <TAB> version <TAB> sha256
 COUNT=0
 sed 's/[[:cntrl:]]*$//' "$LOCK_DIR/packages.lock.tsv" > "$OUT/packages.lock.lf"

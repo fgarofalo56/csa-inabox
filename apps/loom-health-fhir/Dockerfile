@@ -28,7 +28,7 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS tools
 WORKDIR /build
 
-COPY validator.lock packages.lock.tsv ./
+COPY validator.lock otel-agent.lock packages.lock.tsv ./
 COPY scripts/fetch-baked-assets.sh ./scripts/fetch-baked-assets.sh
 RUN sh ./scripts/fetch-baked-assets.sh /build /baked
 
@@ -41,6 +41,26 @@ RUN mvn -B -q -f plugin/pom.xml package \
 COPY check ./check
 RUN sh ./check/check-validator.sh /baked/validator/validator_cli.jar /baked/home /build/check
 
+# ---- os-patch stage: fixed libbrotli1 for the distroless base (CVE-2026-111497) ---
+# The base has no package manager, so the fixed .deb is downloaded here, checked
+# against the sha256 in os-patch.lock (apt also verifies the archive signature), and
+# unpacked; the runtime stage overlays the libraries and the dpkg status entry so
+# scanners see the fixed version. Digest = debian:13-slim.
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS ospatch
+COPY os-patch.lock /os-patch.lock
+RUN set -eu; \
+    PKG=$(sed -n 's/^package=//p' /os-patch.lock | tr -d '[:cntrl:]'); \
+    VER=$(sed -n 's/^version=//p' /os-patch.lock | tr -d '[:cntrl:]'); \
+    SUM=$(sed -n 's/^sha256=//p' /os-patch.lock | tr -d '[:cntrl:]'); \
+    apt-get update -qq; \
+    cd /tmp && apt-get download "$PKG=$VER"; \
+    echo "$SUM  ${PKG}_${VER}_amd64.deb" | sha256sum -c -; \
+    mkdir -p /out/status.d; \
+    dpkg-deb -x "${PKG}_${VER}_amd64.deb" /out/root; \
+    dpkg-deb -f "${PKG}_${VER}_amd64.deb" > "/out/status.d/$PKG"; \
+    dpkg-deb -e "${PKG}_${VER}_amd64.deb" /tmp/ctl; \
+    cp /tmp/ctl/md5sums "/out/status.d/$PKG.md5sums"
+
 # ---- runtime stage ---------------------------------------------------------
 # Digest = the W0-measured HAPI 8.12.0 image. Bump tag-equivalent and digest together
 # with the plugin pom's HAPI version (W2-3) and tests/image-contract.test.mjs.
@@ -50,6 +70,10 @@ COPY --from=tools /build/plugin/target/loom-health-fhir-plugin.jar /app/extra-cl
 COPY --from=tools /baked/packages /opt/loom/fhir/packages
 COPY --from=tools /baked/validator /opt/loom/fhir/validator
 COPY --from=tools /baked/home /opt/loom/fhir/home
+# Patched layers (no .trivyignore): libbrotli1 and the OpenTelemetry agent.
+COPY --from=ospatch /out/root/usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
+COPY --from=ospatch /out/status.d/ /var/lib/dpkg/status.d/
+COPY --from=tools /baked/agent/opentelemetry-javaagent.jar /app/opentelemetry-javaagent.jar
 
 LABEL org.opencontainers.image.title="Loom Health FHIR Engine (HAPI FHIR JPA)"
 LABEL org.opencontainers.image.source="https://github.com/fgarofalo56/csa-inabox"

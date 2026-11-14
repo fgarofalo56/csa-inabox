@@ -91,6 +91,22 @@ test('the build context named in the workflow matrix row contains every COPY sou
   assert.ok(copies >= 6, `expected to examine the Dockerfile's COPY sources, saw ${copies}`);
 });
 
+test('CVE patch locks are sha256-pinned and wired into the runtime stage', () => {
+  // BREAKS when: either lock loses its 64-hex sha256, the otel version drops below the fixed
+  // 2.26.1 (CVE-2026-33701), libbrotli1 drops below 1.1.0-2+deb13u1 (CVE-2026-111497), or a
+  // COPY overlaying the patched artifact is removed from the runtime stage.
+  const kv = (f) => Object.fromEntries(read(join(APP, f)).split('\n').filter(Boolean).map((l) => l.split('=')));
+  const otel = kv('otel-agent.lock');
+  assert.match(otel.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(otel.version, '2.26.1');
+  const os = kv('os-patch.lock');
+  assert.match(os.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(os.version, '1.1.0-2+deb13u1');
+  const runtime = stage('runtime');
+  assert.match(runtime, /COPY --from=tools \/baked\/agent\/opentelemetry-javaagent\.jar \/app\/opentelemetry-javaagent\.jar/);
+  assert.match(runtime, /COPY --from=ospatch \/out\/status\.d\/ \/var\/lib\/dpkg\/status\.d\//);
+});
+
 test('the plugin is an honest skeleton: no interceptor classes before W2-3', () => {
   // BREAKS when: a class other than LoomPlugin / package-info lands in the plugin without this
   // test (and the "skeleton" label, README and Dockerfile LABEL) being updated with it.
