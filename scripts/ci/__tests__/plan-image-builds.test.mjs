@@ -32,8 +32,8 @@ const names = MATRIX.map((a) => a.name);
 const SHA = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 
-test('lifted matrix is the 14-app default set (input: an app dropped from or added to APPS)', () => {
-  assert.equal(MATRIX.length, 14, `matrix has ${MATRIX.length} apps; update this pin AND the carry contract if it changed on purpose`);
+test('lifted matrix is the 15-app default set (input: an app dropped from or added to APPS)', () => {
+  assert.equal(MATRIX.length, 15, `matrix has ${MATRIX.length} apps; update this pin AND the carry contract if it changed on purpose`);
 });
 
 test('a file in EACH matrix context builds exactly that app plus the always-built console', () => {
@@ -41,7 +41,7 @@ test('a file in EACH matrix context builds exactly that app plus the always-buil
     const p = planBuild({ changedFiles: [`${ownerDirs(app)[0]}/src/x.ts`], matrix: MATRIX });
     const want = [...new Set([app.name, CONSOLE])].sort();
     assert.deepEqual([...p.build].sort(), want, `file under ${app.ctx}: must build ${want}, got ${p.build}`);
-    assert.equal(p.carry.length, 14 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
+    assert.equal(p.carry.length, 15 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
     assert.equal(p.mode, 'subset', `file under ${app.ctx}: mode must be subset`);
   }
 });
@@ -56,7 +56,7 @@ test('#5171: a root-context image owns its Dockerfile dir + declared watch dirs,
   // positive: the bicep dir the Dockerfile COPYs does rebuild it
   const bicep = planBuild({ changedFiles: ['platform/fiab/bicep/modules/health/tenant.bicep'], matrix: MATRIX });
   assert.ok(bicep.build.includes('loom-health-cp'), `a change to a COPYed dir must rebuild the image; build=${bicep.build}`);
-  assert.equal(bicep.carry.length, 12, 'only health-cp and the console are built');
+  assert.equal(bicep.carry.length, 13, 'only health-cp and the console are built: 15 apps - 2 built = 13 carried (breaks if the matrix is not 15)');
 });
 
 test('B1: the console is in the plan for a loom-unity-ONLY push (input: apps/loom-unity/x, no console path)', () => {
@@ -70,7 +70,7 @@ test('S2: console-embedded corpus paths alone still yield a plan WITH the consol
   for (const f of ['docs/fiab/x.md', 'PRPs/active/a.md', 'PRPs/completed/csa-loom-pillar/b.md', 'PRPs/archive/c.md']) {
     const p = planBuild({ changedFiles: [f], matrix: MATRIX });
     assert.deepEqual(p.build, [CONSOLE], `${f}: the corpus is baked into the console image; plan must build it, got ${p.build}`);
-    assert.equal(p.carry.length, 13, `${f}: the other 13 are carried`);
+    assert.equal(p.carry.length, 14, `${f}: the other 14 are carried`);
   }
 });
 
@@ -112,11 +112,11 @@ test('root build config forces ALL, a root README does not (inputs: package.json
   assert.deepEqual([...n.build].sort(), ['loom-console', 'loom-trino'], 'apps/loom-trino/package.json is that app only, not root config');
 });
 
-test('only unowned paths build JUST the console and carry the other 13 (input: docs + an unmatrixed app)', () => {
+test('only unowned paths build JUST the console and carry the other 14 (input: docs + an unmatrixed app)', () => {
   const p = planBuild({ changedFiles: ['docs/x.md', 'apps/fiab-dbt-runner/main.py'], matrix: MATRIX });
   assert.equal(p.mode, 'subset');
   assert.deepEqual(p.build, [CONSOLE], 'no matrix context changed, so only the always-built console');
-  assert.equal(p.carry.length, 13, 'every other app must still receive the new SHA tag');
+  assert.equal(p.carry.length, 14, 'every other app must still receive the new SHA tag');
   assert.ok(p.ignored.includes('apps/fiab-dbt-runner/main.py'), 'the unowned path is reported as ignored');
 });
 
@@ -199,7 +199,7 @@ test('CLI on a real repo: one-app commit builds one app; unknown/rewritten base 
     const p = plan(dir, c1, c2);
     assert.equal(p.mode, 'subset', `c1..c2 touched only apps/loom-trino: ${p.reason}`);
     assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-trino'], 'only loom-trino changed between c1 and c2 (+ always-built console)');
-    assert.equal(p.carry.length, 12);
+    assert.equal(p.carry.length, 13);
 
     const absent = plan(dir, 'c'.repeat(40), c2);
     assert.equal(absent.mode, 'all', 'a base sha that is not in the repo (force push) must build ALL');
@@ -263,7 +263,7 @@ test('workflow: carry_forward exists, re-tags and VERIFIES, and is awaited by ac
 
 test('workflow: the guard-read default matrix literal is still the first APPS=[...] line', () => {
   const first = /APPS='(\[[^']*\])'/.exec(wfText);
-  assert.ok(first && JSON.parse(first[1]).length === 14, 'check-build-trigger-covers-matrix reads this literal; the plan must not replace it');
+  assert.ok(first && JSON.parse(first[1]).length === 15, 'check-build-trigger-covers-matrix reads this literal; the plan must not replace it');
 });
 
 test('roll gate has NO carried-forward skip: every push run builds and rolls the console (B1)', () => {
