@@ -6,7 +6,10 @@
 
 using '../health.bicep'
 
-param location = 'eastus2'
+// centralus, not eastus2: in this subscription eastus2 is Postgres Flexible offer-restricted
+// (list-skus returns no editions) and AKS rejects zone 1 there (run 43067631148). centralus is
+// also where the hub rg-csa-loom-admin-centralus lives.
+param location = 'centralus'
 param boundary = 'Commercial'
 param healthEnabled = false
 param healthConfig = {

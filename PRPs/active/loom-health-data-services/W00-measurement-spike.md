@@ -1,6 +1,6 @@
 ---
 name: W00-measurement-spike
-status: backlog
+status: shipped
 priority: P1
 order: 1
 depends_on: []
@@ -8,6 +8,9 @@ review: none
 orchestrator_model: sonnet
 implementer_model: sonnet
 created: 2026-10-22
+started: 2026-10-22
+shipped: 2026-10-24
+pr: 5118
 ---
 # W0 — Measurement and decision spike (no product code)
 

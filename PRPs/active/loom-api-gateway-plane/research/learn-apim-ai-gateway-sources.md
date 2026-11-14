@@ -25,7 +25,7 @@ grounded in Learn, not memory). `ms.date` is the page's own stamp.
 - Anthropic-on-Foundry (`services.ai.azure.com`) availability in Government.
 - Azure Retail Prices API coverage for Government model SKUs.
 
-## Live estate facts quoted from `PRPs/backlog/apim-ai-gateway/PRP.md`
+## Live estate facts quoted from `PRPs/active/apim-ai-gateway/PRP.md`
 
 Measured there on 2026-09-11, **not re-measured here**: the Commercial estate
 runs one APIM `PremiumV2`, `capacity=1`, `virtualNetworkType=Internal`, in the

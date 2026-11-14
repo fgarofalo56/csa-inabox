@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12572535011997427948"
+      "templateHash": "7981312407403663268"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12026213727412293639"
+              "templateHash": "11928218579186331184"
             }
           },
           "definitions": {
@@ -29403,7 +29403,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16641723508121549843"
+                      "templateHash": "2229635893448148332"
                     }
                   },
                   "parameters": {
@@ -29569,6 +29569,11 @@
                                   "matchVariable": "RequestCookieNames",
                                   "selectorMatchOperator": "StartsWith",
                                   "selector": "loom_session"
+                                },
+                                {
+                                  "matchVariable": "QueryStringArgNames",
+                                  "selectorMatchOperator": "Equals",
+                                  "selector": "clientdata"
                                 }
                               ]
                             },
