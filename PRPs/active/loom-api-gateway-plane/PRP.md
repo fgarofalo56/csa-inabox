@@ -177,3 +177,12 @@ wave are filed as Q17+ in the risks file and wait for an answer.
 | W7 | todo | | sonnet | `apigw-W07-model-pools-deployments.md` | 2026-10-28 |
 | W8 | todo | | sonnet | `apigw-W08-cross-cloud-connections.md` | 2026-10-28 |
 | W9 | todo | | sonnet | `apigw-W09-approvals-copilot-hardening.md` | 2026-10-28 |
+
+## Relationship to apim-ai-gateway (#4442)
+
+`PRPs/active/apim-ai-gateway/` (hub `PRP.md`, waves `apim-W00 ... apim-WG`) is the data-plane sibling of this set, not a duplicate.
+This set greenlit #4442 on 2026-10-28 and adopted its Q5 answer (stay on PremiumV2; Premium classic in GCC-High/IL5). W0 here already
+measured `llm-token-limit` and `llm-emit-token-metric` authoring on Commercial and GCC-High; those receipts satisfy part of
+apim Wave 0. Edges: apigw-W07 W7-5 needs apim `WA` (N-endpoint pool) and `WB1` (default-ON, Commercial/GCC/DMLZ) merged. Shared hot
+files: `platform/fiab/bicep/modules/admin-plane/apim.bicep`, `.../admin-plane/main.bicep`, the boundary `params/*.bicepparam` files; one
+bicep PR in flight at a time across both programs, so apigw W1-2 / W7-5 and every apim bicep wave queue behind each other.

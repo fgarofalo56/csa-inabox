@@ -305,6 +305,17 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
               selectorMatchOperator: 'StartsWith'
               selector: 'loom_session'
             }
+            // Entra now appends `&clientdata=e|||microsoftonline.com|none` to the
+            // /auth/callback redirect. The raw pipes trip DRS 2.1 and sign-in dies
+            // on "The request is blocked" (measured 2026-11-10: 403 with the param,
+            // 200 without, on the Commercial and Gov Front Door hosts). Excluded by
+            // NAME only: the value is IdP telemetry the console never reads, and
+            // every other query arg stays scanned.
+            {
+              matchVariable: 'QueryStringArgNames'
+              selectorMatchOperator: 'Equals'
+              selector: 'clientdata'
+            }
           ]
         }
         {

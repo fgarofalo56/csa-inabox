@@ -76,6 +76,11 @@ param extraDnsLinkVnetIds array = []
 @description('Version-less Key Vault secret URI of the ingress TLS certificate. Empty = no TLS listener yet; port 80 only redirects.')
 param tlsCertificateSecretUri string = ''
 
+@description('Per-client-address requests per minute at the WAF (volumetric backstop; per-tenant quotas live in APIM). 0 disables the rule. Same default on every boundary; the rule type is UNVERIFIED in Azure Government, so a Gov What-If/deploy rejection is cleared by passing 0 via healthConfig.wafClientRateLimitPerMinute.')
+@minValue(0)
+@maxValue(1000000)
+param wafClientRateLimitPerMinute int = 6000
+
 @description('Audit blob retention in days applied as an Unlocked version-level immutability policy. 2190 = 6 years (45 CFR 164.316). Locking is irreversible and left to the operator.')
 param auditRetentionDays int = 2190
 
@@ -339,6 +344,7 @@ module ingress 'ingress.bicep' = {
     agwSubnetId: network.outputs.agwSubnetId
     backendIp: network.outputs.ingressIlbIp
     tlsCertificateSecretUri: tlsCertificateSecretUri
+    wafClientRateLimitPerMinute: wafClientRateLimitPerMinute
     keyVaultId: keyvault.outputs.vaultId
     minCapacity: p.agwMin
     maxCapacity: p.agwMax
