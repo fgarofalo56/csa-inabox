@@ -6,43 +6,96 @@
 
 | PRP | Priority | Progress | Items | Models | Review |
 |---|---|---|---|---|---|
-| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 11, in-progress 1, merged 1 | sonnet / sonnet | required |
+| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | n/a | no Execution state table | sonnet / sonnet | required |
+| [W01-control-plane-identity-stamp](active/loom-health-data-services/W01-control-plane-identity-stamp.md) | P1 | 9/9 (100%) | merged 9 | sonnet / sonnet | required |
+| [W01b-close-deploy-receipts](active/loom-health-data-services/W01b-close-deploy-receipts.md) | P1 | 0/5 (0%) | todo 5 | sonnet / sonnet | required |
+| [W02a-fhir-core-build](active/loom-health-data-services/W02a-fhir-core-build.md) | P1 | 1/4 (25%) | todo 3, merged 1 | sonnet / sonnet | required |
 | [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 1/10 (10%) | todo 9, merged 1 | sonnet / sonnet | none |
+| [apim-W00-prerequisite-measurements](active/apim-ai-gateway/apim-W00-prerequisite-measurements.md) | P1 | 1/4 (25%) | todo 3, merged 1 | opus / sonnet | none |
+| [apim-WA-multi-endpoint-pool](active/apim-ai-gateway/apim-WA-multi-endpoint-pool.md) | P1 | 0/4 (0%) | todo 4 | opus / sonnet | required |
+| [apim-WB1-default-on-commercial-gcc](active/apim-ai-gateway/apim-WB1-default-on-commercial-gcc.md) | P1 | 0/3 (0%) | todo 3 | opus / sonnet | required |
+| [apim-WC-sku-capacity-contract](active/apim-ai-gateway/apim-WC-sku-capacity-contract.md) | P1 | 0/3 (0%) | todo 3 | opus / sonnet | required |
+| [apim-WD-service-families-and-sovereign-spend-control](active/apim-ai-gateway/apim-WD-service-families-and-sovereign-spend-control.md) | P1 | 0/5 (0%) | todo 4, blocked 1 | opus / sonnet | required |
+| [apim-ai-gateway](active/apim-ai-gateway/PRP.md) | P2 | 0/9 (0%) | todo 8, blocked 1 | opus / sonnet | none |
+| [apim-WE-observability-and-safety-ownership](active/apim-ai-gateway/apim-WE-observability-and-safety-ownership.md) | P2 | 0/3 (0%) | todo 3 | opus / sonnet | none |
+| [apim-WF-gov-capable-semantic-cache](active/apim-ai-gateway/apim-WF-gov-capable-semantic-cache.md) | P2 | 0/3 (0%) | todo 3 | opus / sonnet | required |
+| [apim-WG-day-one-readiness](active/apim-ai-gateway/apim-WG-day-one-readiness.md) | P2 | 0/3 (0%) | todo 3 | opus / sonnet | required |
 
 ## Backlog
 
 | PRP | Priority | Order | Depends on | Blockers | Models | Review |
 |---|---|---|---|---|---|---|
-| [W00-measurement-spike](active/loom-health-data-services/W00-measurement-spike.md) | P1 | 1 | - | - | sonnet / sonnet | none |
-| [W01-control-plane-identity-stamp](active/loom-health-data-services/W01-control-plane-identity-stamp.md) | P1 | 2 | W00-measurement-spike | W00-measurement-spike (backlog) | sonnet / sonnet | required |
-| [W02-fhir-core](active/loom-health-data-services/W02-fhir-core.md) | P1 | 3 | W01-control-plane-identity-stamp | W01-control-plane-identity-stamp (backlog) | sonnet / sonnet | required |
-| [W03-dicom-core-dicomweb](active/loom-health-data-services/W03-dicom-core-dicomweb.md) | P1 | 4 | W01-control-plane-identity-stamp | W01-control-plane-identity-stamp (backlog) | sonnet / sonnet | required |
-| [W04-terminology](active/loom-health-data-services/W04-terminology.md) | P1 | 5 | W02-fhir-core | W02-fhir-core (backlog) | sonnet / sonnet | none |
-| [W05-conversion-hl7v2-ccda](active/loom-health-data-services/W05-conversion-hl7v2-ccda.md) | P1 | 6 | W02-fhir-core, W04-terminology | W02-fhir-core (backlog); W04-terminology (backlog) | sonnet / sonnet | required |
-| [W06-bulk-export-deid-lakehouse-sink](active/loom-health-data-services/W06-bulk-export-deid-lakehouse-sink.md) | P1 | 7 | W02-fhir-core, W03-dicom-core-dicomweb | W02-fhir-core (backlog); W03-dicom-core-dicomweb (backlog) | sonnet / sonnet | required |
-| [W07-search-performance-at-scale](active/loom-health-data-services/W07-search-performance-at-scale.md) | P1 | 8 | W06-bulk-export-deid-lakehouse-sink | W06-bulk-export-deid-lakehouse-sink (backlog) | sonnet / sonnet | required |
-| [W08-consent-segmentation-audit](active/loom-health-data-services/W08-consent-segmentation-audit.md) | P1 | 9 | W06-bulk-export-deid-lakehouse-sink | W06-bulk-export-deid-lakehouse-sink (backlog) | sonnet / sonnet | required |
-| [W09-viewer-editors-copilot](active/loom-health-data-services/W09-viewer-editors-copilot.md) | P1 | 10 | W08-consent-segmentation-audit, W05-conversion-hl7v2-ccda | W08-consent-segmentation-audit (backlog); W05-conversion-hl7v2-ccda (backlog) | sonnet / sonnet | none |
-| [W11-hardening-dr-scale-out](active/loom-health-data-services/W11-hardening-dr-scale-out.md) | P1 | 12 | W09-viewer-editors-copilot | W09-viewer-editors-copilot (backlog) | sonnet / sonnet | required |
-| [W12-compliance-evidence-pack](active/loom-health-data-services/W12-compliance-evidence-pack.md) | P1 | 13 | W11-hardening-dr-scale-out | W11-hardening-dr-scale-out (backlog) | sonnet / sonnet | required |
+| [W0-arbitration-and-housekeeping](backlog/snowflake-parity/W0-arbitration-and-housekeeping.md) | P1 | 1 | - | - | opus / sonnet | none |
+| [estate-power-A-commercial-receipts](backlog/estate-power-receipts/estate-power-A-commercial-receipts.md) | P1 | 1 | - | - | sonnet / sonnet | none |
+| [estate-power-receipts](backlog/estate-power-receipts/PRP.md) | P1 | 1 | - | - | sonnet / sonnet | none |
+| [W1-extraction-spine](backlog/snowflake-parity/W1-extraction-spine.md) | P1 | 2 | W0-arbitration-and-housekeeping | W0-arbitration-and-housekeeping (backlog) | opus / sonnet | required |
+| [estate-power-B-gov-resume-path](backlog/estate-power-receipts/estate-power-B-gov-resume-path.md) | P1 | 2 | estate-power-A-commercial-receipts | estate-power-A-commercial-receipts (backlog) | sonnet / sonnet | required |
+| [brain-scan-restore](backlog/loom-brain/brain-scan-restore.md) | P1 | 3 | - | - | sonnet / sonnet | none |
+| [W02b-fhir-core-ops](active/loom-health-data-services/W02b-fhir-core-ops.md) | P1 | 5 | W02a-fhir-core-build | W02a-fhir-core-build (active) | sonnet / sonnet | required |
+| [W03a-dicom-core-a](active/loom-health-data-services/W03a-dicom-core-a.md) | P1 | 6 | W01b-close-deploy-receipts | W01b-close-deploy-receipts (active) | sonnet / sonnet | required |
+| [W03b-dicom-core-b](active/loom-health-data-services/W03b-dicom-core-b.md) | P1 | 7 | W03a-dicom-core-a, W02b-fhir-core-ops | W03a-dicom-core-a (backlog); W02b-fhir-core-ops (backlog) | sonnet / sonnet | required |
+| [W04-terminology](active/loom-health-data-services/W04-terminology.md) | P1 | 8 | W02a-fhir-core-build | W02a-fhir-core-build (active) | sonnet / sonnet | none |
+| [W05-conversion-hl7v2-ccda](active/loom-health-data-services/W05-conversion-hl7v2-ccda.md) | P1 | 9 | W02a-fhir-core-build | W02a-fhir-core-build (active) | sonnet / sonnet | required |
+| [W06a-bulk-export-import](active/loom-health-data-services/W06a-bulk-export-import.md) | P1 | 20 | W02b-fhir-core-ops, W03b-dicom-core-b | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog) | sonnet / sonnet | required |
+| [W06b-deid](active/loom-health-data-services/W06b-deid.md) | P1 | 21 | W06a-bulk-export-import | W06a-bulk-export-import (backlog) | sonnet / sonnet | required |
+| [W06c-lakehouse-sink](active/loom-health-data-services/W06c-lakehouse-sink.md) | P1 | 22 | W06a-bulk-export-import | W06a-bulk-export-import (backlog) | sonnet / sonnet | required |
+| [W07-search-performance-at-scale](active/loom-health-data-services/W07-search-performance-at-scale.md) | P1 | 23 | W02b-fhir-core-ops, W03b-dicom-core-b | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog) | sonnet / sonnet | required |
 | [apigw-W02-publishing-plan-apply](active/loom-api-gateway-plane/apigw-W02-publishing-plan-apply.md) | P1 | 23 | apigw-W01-gateway-registry-observe | - | sonnet / sonnet | required |
+| [W08a-labels-pdp](active/loom-health-data-services/W08a-labels-pdp.md) | P1 | 24 | W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog); W04-terminology (backlog) | sonnet / sonnet | required |
 | [apigw-W03-identity-entitlements](active/loom-api-gateway-plane/apigw-W03-identity-entitlements.md) | P1 | 24 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [W08b-breakglass-audit-siem](active/loom-health-data-services/W08b-breakglass-audit-siem.md) | P1 | 25 | W08a-labels-pdp | W08a-labels-pdp (backlog) | sonnet / sonnet | required |
 | [apigw-W04-cost-centers-usage-pricing](active/loom-api-gateway-plane/apigw-W04-cost-centers-usage-pricing.md) | P1 | 25 | apigw-W01-gateway-registry-observe | - | sonnet / sonnet | none |
+| [W09a-viewer-copilot](active/loom-health-data-services/W09a-viewer-copilot.md) | P1 | 26 | W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog); W06a-bulk-export-import (backlog); W06b-deid (backlog) | sonnet / sonnet | required |
 | [apigw-W05-budgets-notifications](active/loom-api-gateway-plane/apigw-W05-budgets-notifications.md) | P1 | 26 | apigw-W04-cost-centers-usage-pricing | apigw-W04-cost-centers-usage-pricing (backlog) | sonnet / sonnet | required |
+| [W09b-editors-admin](active/loom-health-data-services/W09b-editors-admin.md) | P1 | 27 | W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot | W04-terminology (backlog); W05-conversion-hl7v2-ccda (backlog); W06c-lakehouse-sink (backlog); W08b-breakglass-audit-siem (backlog); W09a-viewer-copilot (backlog) | sonnet / sonnet | none |
 | [apigw-W06-mcp-publishing](active/loom-api-gateway-plane/apigw-W06-mcp-publishing.md) | P1 | 27 | apigw-W03-identity-entitlements | apigw-W03-identity-entitlements (backlog) | sonnet / sonnet | required |
+| [W11a-chaos-dr](active/loom-health-data-services/W11a-chaos-dr.md) | P1 | 28 | W02b-fhir-core-ops, W03b-dicom-core-b | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog) | sonnet / sonnet | required |
 | [apigw-W07-model-pools-deployments](active/loom-api-gateway-plane/apigw-W07-model-pools-deployments.md) | P1 | 28 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [W11b-hardening-bicep](active/loom-health-data-services/W11b-hardening-bicep.md) | P1 | 29 | W11a-chaos-dr | W11a-chaos-dr (backlog) | sonnet / sonnet | required |
 | [apigw-W08-cross-cloud-connections](active/loom-api-gateway-plane/apigw-W08-cross-cloud-connections.md) | P1 | 29 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [W12-compliance-evidence-pack](active/loom-health-data-services/W12-compliance-evidence-pack.md) | P1 | 30 | W11b-hardening-bicep, W08b-breakglass-audit-siem | W11b-hardening-bicep (backlog); W08b-breakglass-audit-siem (backlog) | sonnet / sonnet | required |
 | [apigw-W09-approvals-copilot-hardening](active/loom-api-gateway-plane/apigw-W09-approvals-copilot-hardening.md) | P1 | 30 | apigw-W03-identity-entitlements, apigw-W05-budgets-notifications | apigw-W03-identity-entitlements (backlog); apigw-W05-budgets-notifications (backlog) | sonnet / sonnet | none |
-| [per-workspace-spark-identity](backlog/per-workspace-spark-identity/PRP.md) | P2 | 1 | - | - | opus / sonnet | none |
+| [per-workspace-spark-identity](backlog/per-workspace-spark-identity/PRP.md) | P2 | 1 | - | - | opus / sonnet | required |
+| [brain-ownership](backlog/loom-brain/brain-ownership.md) | P2 | 1 | - | - | sonnet / sonnet | required |
+| [spark-id-W00-spike](backlog/per-workspace-spark-identity/spark-id-W00-spike.md) | P2 | 1 | - | - | opus / sonnet | required |
+| [brain-gov-parity](backlog/loom-brain/brain-gov-parity.md) | P2 | 2 | brain-scan-restore | brain-scan-restore (backlog) | sonnet / sonnet | required |
+| [estate-power-C-pause-aware-consumers](backlog/estate-power-receipts/estate-power-C-pause-aware-consumers.md) | P2 | 2 | estate-power-A-commercial-receipts | estate-power-A-commercial-receipts (backlog) | sonnet / sonnet | required |
+| [spark-id-W01-abfss-builder](backlog/per-workspace-spark-identity/spark-id-W01-abfss-builder.md) | P2 | 2 | spark-id-W00-spike | spark-id-W00-spike (backlog) | sonnet / sonnet | none |
 | [loom-brain](backlog/loom-brain/PRP.md) | P2 | 3 | - | - | opus / sonnet | none |
+| [estate-power-D-console-panel](backlog/estate-power-receipts/estate-power-D-console-panel.md) | P2 | 3 | estate-power-A-commercial-receipts | estate-power-A-commercial-receipts (backlog) | sonnet / sonnet | none |
+| [spark-id-W02-client-credential](backlog/per-workspace-spark-identity/spark-id-W02-client-credential.md) | P2 | 3 | spark-id-W00-spike | spark-id-W00-spike (backlog) | sonnet / sonnet | required |
+| [spark-id-W04-token-source](backlog/per-workspace-spark-identity/spark-id-W04-token-source.md) | P2 | 3 | spark-id-W00-spike | spark-id-W00-spike (backlog) | opus / sonnet | required |
+| [spark-id-W03-lakehouse-roots](backlog/per-workspace-spark-identity/spark-id-W03-lakehouse-roots.md) | P2 | 4 | spark-id-W01-abfss-builder, spark-id-W02-client-credential | spark-id-W01-abfss-builder (backlog); spark-id-W02-client-credential (backlog) | sonnet / sonnet | none |
+| [spark-id-W05-scoper-and-synapse-rbac](backlog/per-workspace-spark-identity/spark-id-W05-scoper-and-synapse-rbac.md) | P2 | 4 | spark-id-W00-spike, spark-id-W01-abfss-builder | spark-id-W00-spike (backlog); spark-id-W01-abfss-builder (backlog) | opus / sonnet | required |
 | [snowflake-parity](backlog/snowflake-parity/PRP.md) | P2 | 5 | - | - | opus / sonnet | none |
-| [apim-ai-gateway](backlog/apim-ai-gateway/PRP.md) | P2 | 6 | - | - | opus / sonnet | none |
-| [W10-device-ingest](active/loom-health-data-services/W10-device-ingest.md) | P2 | 11 | W07-search-performance-at-scale | W07-search-performance-at-scale (backlog) | sonnet / sonnet | none |
+| [spark-id-W07-auto-bind-reconciler](backlog/per-workspace-spark-identity/spark-id-W07-auto-bind-reconciler.md) | P2 | 5 | spark-id-W05-scoper-and-synapse-rbac, spark-id-W03-lakehouse-roots | spark-id-W05-scoper-and-synapse-rbac (backlog); spark-id-W03-lakehouse-roots (backlog) | sonnet / sonnet | required |
+| [spark-id-W08-session-pool-keying](backlog/per-workspace-spark-identity/spark-id-W08-session-pool-keying.md) | P2 | 5 | spark-id-W02-client-credential, spark-id-W04-token-source | spark-id-W02-client-credential (backlog); spark-id-W04-token-source (backlog) | sonnet / sonnet | required |
+| [spark-id-W09-batch-conversion](backlog/per-workspace-spark-identity/spark-id-W09-batch-conversion.md) | P2 | 6 | spark-id-W02-client-credential, spark-id-W03-lakehouse-roots, spark-id-W08-session-pool-keying | spark-id-W02-client-credential (backlog); spark-id-W03-lakehouse-roots (backlog); spark-id-W08-session-pool-keying (backlog) | sonnet / sonnet | required |
+| [spark-id-W10-shadow-and-mode-flag](backlog/per-workspace-spark-identity/spark-id-W10-shadow-and-mode-flag.md) | P2 | 6 | spark-id-W03-lakehouse-roots, spark-id-W07-auto-bind-reconciler | spark-id-W03-lakehouse-roots (backlog); spark-id-W07-auto-bind-reconciler (backlog) | sonnet / sonnet | required |
+| [spark-id-W11-admin-ui-runbook](backlog/per-workspace-spark-identity/spark-id-W11-admin-ui-runbook.md) | P2 | 7 | spark-id-W07-auto-bind-reconciler | spark-id-W07-auto-bind-reconciler (backlog) | sonnet / sonnet | none |
+| [spark-id-W12-narrow-shared-grants](backlog/per-workspace-spark-identity/spark-id-W12-narrow-shared-grants.md) | P2 | 8 | spark-id-W09-batch-conversion, spark-id-W10-shadow-and-mode-flag, spark-id-W11-admin-ui-runbook | spark-id-W09-batch-conversion (backlog); spark-id-W10-shadow-and-mode-flag (backlog); spark-id-W11-admin-ui-runbook (backlog) | opus / sonnet | required |
+| [W10-device-ingest](active/loom-health-data-services/W10-device-ingest.md) | P2 | 14 | W01b-close-deploy-receipts | W01b-close-deploy-receipts (active) | sonnet / sonnet | none |
 | [governance-autopilot](backlog/governance-autopilot/PRP.md) | P2 | 16 | - | - | opus / sonnet | none |
+| [gov-W2-ges-core](backlog/governance-autopilot/gov-W2-ges-core.md) | P2 | 17 | - | - | opus / sonnet | required |
+| [gov-W3-permissions-infra](backlog/governance-autopilot/gov-W3-permissions-infra.md) | P2 | 18 | gov-W2-ges-core | gov-W2-ges-core (backlog) | sonnet / sonnet | required |
+| [gov-W4-scan-orchestration](backlog/governance-autopilot/gov-W4-scan-orchestration.md) | P2 | 19 | gov-W2-ges-core | gov-W2-ges-core (backlog) | sonnet / sonnet | none |
+| [gov-W5a-triggers-and-reconcile-route](backlog/governance-autopilot/gov-W5a-triggers-and-reconcile-route.md) | P2 | 20 | gov-W2-ges-core, gov-W4-scan-orchestration | gov-W2-ges-core (backlog); gov-W4-scan-orchestration (backlog) | sonnet / sonnet | required |
+| [gov-W5b-reconcile-job-and-native-scanner](backlog/governance-autopilot/gov-W5b-reconcile-job-and-native-scanner.md) | P2 | 21 | gov-W5a-triggers-and-reconcile-route, gov-W3-permissions-infra | gov-W5a-triggers-and-reconcile-route (backlog); gov-W3-permissions-infra (backlog) | sonnet / sonnet | required |
+| [gov-W6a-label-policy-and-apply](backlog/governance-autopilot/gov-W6a-label-policy-and-apply.md) | P2 | 22 | gov-W2-ges-core, gov-W4-scan-orchestration | gov-W2-ges-core (backlog); gov-W4-scan-orchestration (backlog) | sonnet / sonnet | required |
+| [gov-W6b-classification-sync-and-lineage](backlog/governance-autopilot/gov-W6b-classification-sync-and-lineage.md) | P2 | 23 | gov-W2-ges-core, gov-W4-scan-orchestration | gov-W2-ges-core (backlog); gov-W4-scan-orchestration (backlog) | sonnet / sonnet | none |
+| [gov-W7a-copilot-governance-read-tools](backlog/governance-autopilot/gov-W7a-copilot-governance-read-tools.md) | P2 | 24 | gov-W2-ges-core | gov-W2-ges-core (backlog) | sonnet / sonnet | required |
+| [gov-W7b-copilot-governance-write-tools](backlog/governance-autopilot/gov-W7b-copilot-governance-write-tools.md) | P2 | 25 | gov-W7a-copilot-governance-read-tools, gov-W4-scan-orchestration, gov-W5a-triggers-and-reconcile-route, gov-W6a-label-policy-and-apply | gov-W7a-copilot-governance-read-tools (backlog); gov-W4-scan-orchestration (backlog); gov-W5a-triggers-and-reconcile-route (backlog); gov-W6a-label-policy-and-apply (backlog) | sonnet / sonnet | required |
+| [gov-W8a-enrollment-admin-api-and-page](backlog/governance-autopilot/gov-W8a-enrollment-admin-api-and-page.md) | P2 | 26 | gov-W2-ges-core | gov-W2-ges-core (backlog) | sonnet / sonnet | none |
+| [gov-W8b-item-chip-gates-parity-doc](backlog/governance-autopilot/gov-W8b-item-chip-gates-parity-doc.md) | P2 | 27 | gov-W8a-enrollment-admin-api-and-page, gov-W6b-classification-sync-and-lineage | gov-W8a-enrollment-admin-api-and-page (backlog); gov-W6b-classification-sync-and-lineage (backlog) | sonnet / sonnet | none |
+| [gov-W9-brownfield-adopt](backlog/governance-autopilot/gov-W9-brownfield-adopt.md) | P2 | 28 | gov-W2-ges-core, gov-W3-permissions-infra, gov-W5b-reconcile-job-and-native-scanner | gov-W2-ges-core (backlog); gov-W3-permissions-infra (backlog); gov-W5b-reconcile-job-and-native-scanner (backlog) | sonnet / sonnet | required |
+| [gov-W10-docs-and-e2e](backlog/governance-autopilot/gov-W10-docs-and-e2e.md) | P2 | 29 | gov-W7b-copilot-governance-write-tools, gov-W8b-item-chip-gates-parity-doc, gov-W9-brownfield-adopt | gov-W7b-copilot-governance-write-tools (backlog); gov-W8b-item-chip-gates-parity-doc (backlog); gov-W9-brownfield-adopt (backlog) | sonnet / sonnet | none |
 
 ## Blocked
 
-_none_
+| PRP | Priority | Blocked by | Folder |
+|---|---|---|---|
+| [apim-WB2-default-on-sovereign](active/apim-ai-gateway/apim-WB2-default-on-sovereign.md) | P1 | apim-WD deployed to GCC-High (spend control) and #4460 resolved | active |
+| [W13-class-m-characterisation](active/loom-health-data-services/W13-class-m-characterisation.md) | P3 | operator approval of full-scale spend, requested only after all other work is done and verified; NOT approved 2026-11-14 | active |
 
 ## Shipped
 
@@ -50,6 +103,7 @@ _none_
 |---|---|---|
 | [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | 2026-11-02 | #5191 |
 | [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | 2026-10-29 | #5188 |
+| [W00-measurement-spike](active/loom-health-data-services/W00-measurement-spike.md) | 2026-10-24 | #5118 |
 | [canvas-stacked-docks-minimap](shipped/canvas-stacked-docks-minimap/PRP.md) | 2026-10-23 | #5095 |
 
 ## Abandoned

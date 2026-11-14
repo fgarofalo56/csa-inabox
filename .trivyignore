@@ -152,3 +152,24 @@
 #
 # Do NOT add an entry here to make a build go green. Fix the image, or open the
 # gate's emergency valve (skip_supply_chain) with an incident note.
+
+# ── 2026-11-14: DISCLOSED, TIME-BOXED EXCEPTION — loom-health-fhir (#5291) ───
+# This is the ONLY active entry in this file. It is a loan, not a fix, and it was
+# approved by the operator (explicit decision, 2026-11-14). It exists because the
+# image cannot be made clean inside its own directory, not to turn a build green.
+#
+#   CVE-2026-47884, CVE-2026-47890 — spring-webmvc 6.2.19 inside main.war of
+#     apps/loom-health-fhir (PR #5290, LHDS W2-1, ADR-001: HAPI 8.12.0). Trivy
+#     ignore files cannot be scoped to one image or package, so these two IDs are
+#     ignored for every image; no other Loom image carries spring-webmvc.
+#   Why not fixed: the only fixed version is 7.0.9+; Maven Central's 6.2.x line
+#     ends at 6.2.19. Swapping in spring-webmvc 7.0.10 was tried and the server
+#     fails to boot with NoClassDefFoundError: HttpMessageConverters$ServerBuilder
+#     (the rest of the starter is Spring Framework 6.2).
+#   Exposure: the image has no consumer until bicep W2-6 deploys it.
+#   Burn-down (#5291): re-pin HAPI on a Spring Boot 4 starter, then DELETE these
+#     two lines. Expiry 2026-12-31 makes Trivy resume reporting them on that date.
+#     The two sibling CRITICALs on this image (libbrotli1, opentelemetry-javaagent)
+#     were fixed in the image, not listed here.
+CVE-2026-47884 exp:2026-12-31
+CVE-2026-47890 exp:2026-12-31

@@ -301,6 +301,15 @@ resource snetAgw 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   properties: {
     addressPrefix: agwPrefix
     networkSecurityGroup: { id: agwNsg.id }
+    // Required since 2025-05-05 for subscriptions registered for
+    // EnableApplicationGatewayNetworkIsolation (Commercial run 43150191558 failed with
+    // ApplicationGatewayNetworkIsolationRequiresSubnetDelegation without it).
+    delegations: [
+      {
+        name: 'application-gateway'
+        properties: { serviceName: 'Microsoft.Network/applicationGateways' }
+      }
+    ]
   }
   dependsOn: [snetPostgres]
 }

@@ -39,7 +39,7 @@ default is Q9, a scoped `apiplane-admin` capability from W1 (item W1-8).
 
 1. **Native rebuild in Loom** (TS BFF + Cosmos + Fluent v9), not a vendored
    Python service and not Mosaic-beside-Loom.
-2. **New PRD + PRP set**, sibling to `PRPs/backlog/apim-ai-gateway/` (#4442),
+2. **New PRD + PRP set**, sibling to `PRPs/active/apim-ai-gateway/` (#4442),
    and **#4442 is greenlit**: its default-ON APIM direction is confirmed.
 3. **Azure-hosted models, three API shapes**: Azure OpenAI, Foundry Models,
    Anthropic-on-Foundry. Bedrock, Vertex and SaaS endpoints are dated non-goals.
@@ -83,7 +83,7 @@ date (2026-10-28). Anything not read in full is marked **UNVERIFIED**. Mosaic
 behaviour is quoted from its ADRs and guides as retrieved; Mosaic's own "live
 verification still required" lists are carried forward, not assumed settled.
 
-## Relationship to `PRPs/backlog/apim-ai-gateway/` (#4442)
+## Relationship to `PRPs/active/apim-ai-gateway/` (#4442)
 
 That PRP is the **runtime gateway** epic: the multi-endpoint pool for Loom's
 own AI traffic, default-ON routing, SKU and capacity, LLM policies in

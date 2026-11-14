@@ -447,7 +447,18 @@ assert_identity_is_exactly_runner() {
     exit 1
   fi
 
-  n=$(printf '%s\n' "$attached" | grep -c '[^[:space:]]')
+  # awk, not `grep -c`: grep -c exits 1 on a zero count, and under `set -e` that
+  # killed the script SILENTLY on an empty readback so the n=0 FATAL below could
+  # never print (#5263; deploy-integrity R6/R7). awk always exits 0 and prints 0.
+  n=$(printf '%s\n' "$attached" | awk 'NF { c++ } END { print c + 0 }')
+
+  if [[ "$n" -eq 0 ]]; then
+    echo "[provision-gh-runner][FATAL] the job carries 0 user-assigned identities; it must carry exactly 1." >&2
+    echo "  The readback succeeded (az exit 0) and came back empty, so the identity assign" >&2
+    echo "  did not take effect. Required: $RUNNER_UAMI_ID" >&2
+    echo "  Fix: az containerapp job identity assign --user-assigned <that id> on the job, then re-run." >&2
+    exit 1
+  fi
   want=$(_lc "$RUNNER_UAMI_ID")
 
   if [[ "$n" -ne 1 ]]; then
