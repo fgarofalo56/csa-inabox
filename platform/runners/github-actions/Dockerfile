@@ -241,10 +241,12 @@ RUN set -euo pipefail; \
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -euo pipefail; \
-    # 1.60.0 = the lockfile's RESOLVED @playwright/test (package.json says ^1.48.0
-    # but pnpm-lock resolves 1.60.0). The baked chromium build revision must match
-    # the tests' playwright or it errors "Executable doesn't exist" at run time.
-    npx --yes playwright@1.60.0 install --with-deps chromium; \
+    # 1.64.1 = the console lockfile's RESOLVED @playwright/test (#5153). Keep this
+    # in step with apps/fiab-console's lockfile so the baked chromium revision is
+    # the one the specs launch. A trailing pin no longer breaks loom-ui-verify
+    # (the workflow installs the lockfile's revision into /ms-playwright when it
+    # is missing), but it costs a browser download per run until the image rolls.
+    npx --yes playwright@1.64.1 install --with-deps chromium; \
     chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 

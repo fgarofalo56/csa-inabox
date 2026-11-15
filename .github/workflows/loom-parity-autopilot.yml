@@ -153,10 +153,17 @@ jobs:
       - name: Install console dependencies
         run: pnpm -C apps/fiab-console install --frozen-lockfile
 
+      # The baked /ms-playwright browsers follow the runner Dockerfile's pin, not
+      # the console lockfile; skipping the install whenever the dir existed broke
+      # loom-ui-verify on a version drift (see the comment there). Always let the
+      # lockfile's playwright install into the baked path: no-op when it matches.
       - name: Install Playwright browsers (Chromium)
         run: |
+          pnpm -C apps/fiab-console exec playwright --version
           if [ -d "/ms-playwright" ]; then
-            echo "Browsers baked into the runner image — skipping install"
+            export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+            pnpm -C apps/fiab-console exec playwright install chromium
+            ls -1 /ms-playwright
           else
             pnpm -C apps/fiab-console exec playwright install --with-deps chromium
           fi
