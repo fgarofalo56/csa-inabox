@@ -82,10 +82,11 @@ Delete the sandbox stamp (deletion in the receipt); revert any param file; no pr
 `CAPACITY-MODEL.md`, `adr/ADR-001`..`ADR-004`, `TEST-STRATEGY.md` section 9, `README.md` status line.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 10 · Blocked-by: operator approval of full-scale spend (NOT approved 2026-11-14) and W12 · Branch: feat/lhds-w13-class-m · Worktree: E:/Repos/_lhds-w13`
+`Wave: 11 · Blocked-by: W12-compliance-evidence-pack, W07-search-performance-at-scale, and operator approval of full-scale spend (NOT approved 2026-11-14) · Branch: feat/lhds-w13-class-m · Worktree: E:/Repos/_lhds-w13`
 
 ## Hot files
 `platform/fiab/bicep/health-params/*.bicepparam` (new class-M file only). `touches_bicep: yes` (params only).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

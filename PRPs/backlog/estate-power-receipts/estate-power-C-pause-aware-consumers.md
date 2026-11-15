@@ -72,7 +72,7 @@ Resume the estate (`estate-power.yml action=resume`). If a wiring fix PR misbeha
 `docs/fiab/receipts/estate-power-consumers.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 2 · Blocked-by: A · Branch: chore/estate-power-c-consumers · Worktree: E:/Repos/_estate-c
+Wave: 2 · Blocked-by: estate-power-A-commercial-receipts · Branch: chore/estate-power-c-consumers · Worktree: E:/Repos/_estate-c
 
 ## Hot files
 Deploy workflows listed under Owns (gate lines only); `deploy-fiab-gcch.yml` shared with other programs: coordinate if open PRs touch it. touches_bicep: no.

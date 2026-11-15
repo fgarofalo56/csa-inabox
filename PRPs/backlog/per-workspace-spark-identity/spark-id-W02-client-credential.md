@@ -72,7 +72,7 @@ Revert the PR. The parameter is optional and defaults to the shared chain, so pa
 None until W11.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: W00 · Branch: feat/spark-id-w02-client · Worktree: E:/Repos/_spark-id-w02
+Wave: 3 · Blocked-by: spark-id-W00-spike · Branch: feat/spark-id-w02-client · Worktree: E:/Repos/_spark-id-w02
 
 ## Hot files
 `synapse-dev-client.ts`, `synapse-livy-client.ts` (this wave is the sole owner); touches_bicep: no.

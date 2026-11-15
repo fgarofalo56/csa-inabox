@@ -97,6 +97,7 @@ Wave: 3 · Blocked-by: apim-WB1-default-on-commercial-gcc · Branch: feat/apim-w
 ## Hot files
 `platform/fiab/bicep/main.bicep`, `platform/fiab/bicep/modules/admin-plane/main.bicep`, `platform/fiab/bicep/modules/admin-plane/apim.bicep`, 7 params. **Takes the bicep slot.** Exactly one bicep-touching PR may be in flight across apim-ai-gateway, `loom-api-gateway-plane` (apigw W1-2 / W7-5), LHDS and any other program (ledger: `PRPs/reference/INTERLOCK.md`). Before opening the PR, `gh pr list --state open --search "bicep in:title,body"` and confirm none is in flight; rebase on `main` after it merges.
 `touches_bicep: yes`
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

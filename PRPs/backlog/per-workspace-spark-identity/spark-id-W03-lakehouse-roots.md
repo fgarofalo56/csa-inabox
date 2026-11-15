@@ -65,7 +65,7 @@ Revert the PR; routes return to ad hoc resolution. No flag.
 None until W11.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 4 · Blocked-by: W01, W02 · Branch: feat/spark-id-w03-roots · Worktree: E:/Repos/_spark-id-w03
+Wave: 4 · Blocked-by: spark-id-W01-abfss-builder, spark-id-W02-client-credential · Branch: feat/spark-id-w03-roots · Worktree: E:/Repos/_spark-id-w03
 
 ## Hot files
 `apps/fiab-console/app/api/lakehouse/*` (sole owner this wave; W01 must be merged first); touches_bicep: no.

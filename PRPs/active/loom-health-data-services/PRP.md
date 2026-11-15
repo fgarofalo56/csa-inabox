@@ -93,33 +93,34 @@ Wave number = execution tier, not the file stem. Files in the same tier with dif
 | W01b-close-deploy-receipts | 3 | [W00-measurement-spike] | 1 | W01 tail | see file | feat/lhds-w1b-close-receipts |
 | W02a-fhir-core-build | 4 | [W01b-close-deploy-receipts] | 2 | W03a, W10 | see file | feat/lhds-w2a-fhir-build |
 | W03a-dicom-core-a | 6 | [W01b-close-deploy-receipts] | 2 | W02a, W10 | see file | feat/lhds-w3a-dicom-core |
-| W04-terminology | 8 | [W02a-fhir-core-build] | 3 | W02b, W03b, W05 | see file | feat/lhds-w4-terminology |
-| W10-device-ingest | 14 | [W01b-close-deploy-receipts] | 2 | W02a, W03a | yes (tenant.bicep) | feat/lhds-w10-device-ingest |
-| W02b-fhir-core-ops | 5 | [W02a-fhir-core-build] | 3 | W04, W05 | see file | feat/lhds-w2b-fhir-ops |
-| W03b-dicom-core-b | 7 | [W03a-dicom-core-a, W02b-fhir-core-ops] | 3 | W04, W05 | see file | feat/lhds-w3b-dicom-ops |
-| W05-conversion-hl7v2-ccda | 9 | [W02a-fhir-core-build] (soft: W04 for enrichment acceptance) | 3 | W02b, W03b, W04 | see file | feat/lhds-w5-conversion |
-| W06a-bulk-export-import | 20 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 4 | W07, W08a | no | feat/lhds-w06a-bulk-export-import |
-| W07-search-performance-at-scale | 23 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 4 | W06a, W08a | yes (ingress.bicep) | feat/lhds-w07-search-performance |
-| W08a-labels-pdp | 24 | [W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology] | 4 | W06a, W07 | no | feat/lhds-w08a-labels-pdp |
-| W06b-deid | 21 | [W06a-bulk-export-import] | 5 | W06c, W08b | yes (engines.bicep) | feat/lhds-w06b-deid |
-| W06c-lakehouse-sink | 22 | [W06a-bulk-export-import] | 5 | W06b, W08b | yes (engines.bicep) | feat/lhds-w06c-lakehouse-sink |
-| W08b-breakglass-audit-siem | 25 | [W08a-labels-pdp] | 5 | W06b, W06c | yes (stamp.bicep) | feat/lhds-w08b-breakglass-audit |
-| W09a-viewer-copilot | 26 | [W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid] | 6 | W11a | no | feat/lhds-w09a-viewer-copilot |
-| W09b-editors-admin | 27 | [W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot] | 7 | none | no | feat/lhds-w09b-editors-admin |
-| W11a-chaos-dr | 28 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 6 | W09a | no | feat/lhds-w11a-chaos-dr |
-| W11b-hardening-bicep | 29 | [W11a-chaos-dr] | 8 | none | yes (stamp.bicep) | feat/lhds-w11b-hardening-bicep |
-| W12-compliance-evidence-pack | 30 | [W11b-hardening-bicep, W08b-breakglass-audit-siem] | 9 | none | no | feat/lhds-w12-evidence-pack |
-| W13-class-m-characterisation | 99 | [W12-compliance-evidence-pack, W07-search-performance-at-scale] | 10 | none | yes (sandbox params) | feat/lhds-w13-class-m (blocked) |
+| W04-terminology | 8 | [W02a-fhir-core-build, W02b-fhir-core-ops] | 4 | W03b, W05 (health.ts appenders) | see file | feat/lhds-w4-terminology |
+| W10-device-ingest | 14 | [W01b-close-deploy-receipts, W05-conversion-hl7v2-ccda] | 5 | W06a, W07, W08a | yes (tenant.bicep) | feat/lhds-w10-device-ingest |
+| W02b-fhir-core-ops | 5 | [W02a-fhir-core-build] | 3 | none | see file | feat/lhds-w2b-fhir-ops |
+| W03b-dicom-core-b | 7 | [W03a-dicom-core-a, W02b-fhir-core-ops] | 4 | W04, W05 (health.ts appenders) | see file | feat/lhds-w3b-dicom-ops |
+| W05-conversion-hl7v2-ccda | 9 | [W02a-fhir-core-build, W02b-fhir-core-ops] (soft: W04 for enrichment acceptance) | 4 | W03b, W04 (health.ts appenders) | see file | feat/lhds-w5-conversion |
+| W06a-bulk-export-import | 20 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 5 | W07, W08a, W10 | no | feat/lhds-w06a-bulk-export-import |
+| W07-search-performance-at-scale | 23 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 5 | W06a, W08a, W10 | yes (ingress.bicep) | feat/lhds-w07-search-performance |
+| W08a-labels-pdp | 24 | [W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology] | 5 | W06a, W07, W10 | no | feat/lhds-w08a-labels-pdp |
+| W06b-deid | 21 | [W06a-bulk-export-import] | 6 | W06c, W08b | yes (engines.bicep) | feat/lhds-w06b-deid |
+| W06c-lakehouse-sink | 22 | [W06a-bulk-export-import] | 6 | W06b, W08b | yes (engines.bicep) | feat/lhds-w06c-lakehouse-sink |
+| W08b-breakglass-audit-siem | 25 | [W08a-labels-pdp] | 6 | W06b, W06c | yes (stamp.bicep) | feat/lhds-w08b-breakglass-audit |
+| W09a-viewer-copilot | 26 | [W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid] | 7 | W11a | no | feat/lhds-w09a-viewer-copilot |
+| W09b-editors-admin | 27 | [W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot, W10-device-ingest] | 8 | none | no | feat/lhds-w09b-editors-admin |
+| W11a-chaos-dr | 28 | [W02b-fhir-core-ops, W03b-dicom-core-b] | 6 | W06b, W06c, W08b | no | feat/lhds-w11a-chaos-dr |
+| W11b-hardening-bicep | 29 | [W11a-chaos-dr, W09b-editors-admin, W07-search-performance-at-scale] | 9 | none | yes (stamp.bicep) | feat/lhds-w11b-hardening-bicep |
+| W12-compliance-evidence-pack | 30 | [W11b-hardening-bicep, W08b-breakglass-audit-siem, W09b-editors-admin] | 10 | none | no | feat/lhds-w12-evidence-pack |
+| W13-class-m-characterisation | 99 | [W12-compliance-evidence-pack, W07-search-performance-at-scale] | 11 | none | yes (sandbox params) | feat/lhds-w13-class-m (blocked) |
 
 ## 2. Dependency graph, repairs and concurrency map
 
 ```
-W00 > W01 / W01b > { W02a, W03a, W10 } concurrent
-W02a > { W02b, W04, W05 } ; W03a + W02b > W03b
-{ W02b + W03b } > { W06a, W07, W08a } concurrent   (W08a also needs W04)
+W00 > W01 / W01b > { W02a, W03a } concurrent
+W02a > W02b ; W03a + W02b > W03b ; { W02a + W02b } > { W04, W05 }
+W05 > W10 (W10 also needs W01b)
+{ W02b + W03b } > { W06a, W07 } concurrent ; { W02b + W03b + W04 } > W08a
 W06a > { W06b, W06c } ; W08a > W08b
-W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c)
-{ W02b + W03b } > W11a > W11b ; { W11b + W08b } > W12 > W13 (blocked)
+W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c, W08b, W10)
+{ W02b + W03b } > W11a > W11b (also needs W07, W09b) ; { W11b + W08b + W09b } > W12 > W13 (blocked)
 ```
 
 **Dependency repairs recorded 2026-11-14.** The previous graph chained waves that do not share data. The repairs, each checked against the old per-item `Depends on` columns:
@@ -130,9 +131,9 @@ W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c)
 - **W6 to W7 and W6 to W8 are dropped.** W7 and W8a need W2 + W3 (and W4 for labels), not W6.
 
 **Concurrency map.**
-- After W01b: W02a, W03a and W10 may run at once; they own different files. W04 and W05 follow W02a (lane A's files encode that, so W04 cannot run beside W02a as first suggested). Code work may start before W01b's live receipts exist; only live verification waits. Their bicep PRs serialize behind the single bicep ledger (section 5).
-- W06a, W07 and W08a start after W02b + W03b and may run at once. W06b, W06c and W08b start in the next tier.
-- W09a, W09b, W11a, W11b and W12 are serial near the end: they converge on `apps/fiab-console/lib/editors/health/**`, `lib/copilot/health-tools.ts` and the admin page, and W11b/W08b hold bicep slots. W09a and W11a have no shared files and may overlap.
+- After W01b: W02a and W03a may run at once; they own different files. W10 moved to wave 5 (2026-11-14 pass 2): it edits `conversion-editor.tsx` and the conversion parity doc that W05 owns, so it depends on W05. W04 and W05 follow W02a and W02b (W02b owns the shared `lib/catalog/item-types/health.ts` and `lib/copilot/health-tools.ts`; later waves append as serialized integration steps) (lane A's files encode that, so W04 cannot run beside W02a as first suggested). Code work may start before W01b's live receipts exist; only live verification waits. Their bicep PRs serialize behind the single bicep ledger (section 5).
+- W06a, W07, W08a and W10 (wave 5) may run at once; W06a and W07 start after W02b + W03b, W08a also needs W04. W06b, W06c and W08b start in the next tier.
+- W09a, W09b, W11b and W12 are serial near the end (W11a runs beside W09a): they converge on `apps/fiab-console/lib/editors/health/**`, `lib/copilot/health-tools.ts` and the admin page, and W11b/W08b hold bicep slots. W09a and W11a have no shared files and may overlap.
 - WIP <= 4 lanes at any time; ONE bicep-touching PR in flight across every program.
 
 ## 3. Execution state

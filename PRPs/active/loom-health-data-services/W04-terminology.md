@@ -3,7 +3,7 @@ name: W04-terminology
 status: backlog
 priority: P1
 order: 8
-depends_on: [W02a-fhir-core-build]
+depends_on: [W02a-fhir-core-build, W02b-fhir-core-ops]
 review: none
 orchestrator_model: sonnet
 implementer_model: sonnet
@@ -35,7 +35,7 @@ Items W4-1..W4-4. Non-goals: bundling any licensed content (nothing licensed shi
 
 ## Owns
 `tools/health-terminology/**`; `apps/loom-health-terminology/**`; `platform/fiab/bicep/modules/health/engines-terminology.bicep` (NEW file; one `module` line in `health.bicep`); `apps/loom-health-cp/src/jobs/terminology-load-*.ts`; `lib/install/provisioners/health-terminology.ts`;
-`lib/editors/health/terminology-editor.tsx`; `app/api/health/[tenant]/terminology/**`; `docs/fiab/parity/health-terminology.md`, `docs/fiab/health/terminology.md`; one block each in `lib/gates/registry/health.ts`, `lib/copilot/health-tools.ts`, `lib/catalog/item-types/health.ts` (append, freeze order).
+`lib/editors/health/terminology-editor.tsx`; `app/api/health/[tenant]/terminology/**`; `docs/fiab/parity/health-terminology.md`, `docs/fiab/health/terminology.md`.
 
 > ASSUMPTION: a new `engines-terminology.bicep` rather than editing `engines.bicep` (listed in the old PRP), to avoid colliding with W2-2 and W5-1 on `engines.bicep`.
 
@@ -53,6 +53,9 @@ W2-2 engine config + tenant DB; PDP decision API; W01b stamp; W2-7's `health-too
 2. W4-2 workload + loader job + version pinning (one bicep PR, queued).
 3. W4-3 loader + licence gate.
 4. W4-4 item/editor after the W4-2 contract.
+
+### Integration step (serialized)
+- `apps/fiab-console/lib/gates/registry/health.ts` (owner `W01b-close-deploy-receipts`), `apps/fiab-console/lib/copilot/health-tools.ts` and `apps/fiab-console/lib/catalog/item-types/health.ts` (owner `W02b-fhir-core-ops`, now in `depends_on`): append one block each, freeze order. Concurrent appenders in wave 4 (W03b, W05) rebase on whichever merged first.
 
 ## Validation
 ```bash
@@ -73,10 +76,11 @@ Feature flag `LOOM_HEALTH_TERMINOLOGY_ENABLED=false`; packages are immutable art
 `docs/fiab/health/terminology.md` (notices), `docs/fiab/parity/health-terminology.md`, `adr/ADR-013` status, `docs/fiab/health/index.md` per-cloud table.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: W02a-fhir-core-build · Branch: feat/lhds-w4-terminology · Worktree: E:/Repos/_lhds-w4
+Wave: 4 · Blocked-by: W02a-fhir-core-build, W02b-fhir-core-ops · Branch: feat/lhds-w4-terminology · Worktree: E:/Repos/_lhds-w4
 
 ## Hot files
 `health.bicep` (one module line), `lib/gates/registry/health.ts`, `lib/copilot/health-tools.ts`, `lib/catalog/item-types/health.ts`, build matrix row. `touches_bicep: yes` (W4-2 only).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Fresh session, Sonnet. Read `PRPs/active/loom-health-data-services/W04-terminology.md`, `CONTRACT-FREEZE-W2.md`, `adr/ADR-013-terminology-service.md`, and `W02a-fhir-core-build.md`. Start with W4-1 (no dependency). Never bundle licensed content.

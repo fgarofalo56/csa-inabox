@@ -3,7 +3,7 @@ name: W10-device-ingest
 status: backlog
 priority: P2
 order: 14
-depends_on: [W01b-close-deploy-receipts]
+depends_on: [W01b-close-deploy-receipts, W05-conversion-hl7v2-ccda]
 review: none
 orchestrator_model: sonnet
 implementer_model: sonnet
@@ -34,7 +34,7 @@ In: W10-1, W10-2, W10-3, W10-4. Out: AI on telemetry, device registry UI beyond 
 `adr/ADR-018-device-ingest-and-engine-upgrades.md`, `research/ahds-feature-inventory.md` section 3, `platform/fiab/bicep/modules/health/eventing.bicep` and `tenant.bicep`, `CONTRACT-FREEZE-W2.md` (FHIR write contract), `AHDS-MODEL-MAP.md` (MedTech row).
 
 ## Owns
-`apps/loom-health-device-mapper/**`, the device block in `platform/fiab/bicep/modules/health/tenant.bicep` (one bicep PR), `apps/fiab-console/lib/editors/health/conversion-device-tabs.tsx` (new file), a one-line tab registration in `apps/fiab-console/lib/editors/health/conversion-editor.tsx` (serialized: only after W05-3 merges), `docs/fiab/parity/health-conversion-pipeline.md` (device rows), `tests/health/device/**`.
+`apps/loom-health-device-mapper/**`, the device block in `platform/fiab/bicep/modules/health/tenant.bicep` (one bicep PR), `apps/fiab-console/lib/editors/health/conversion-device-tabs.tsx` (new file), `tests/health/device/**`.
 
 ## Must NOT touch
 `apps/loom-health-converter/**` (W05), `engines.bicep`, FHIR plugin code (W02a/W02b).
@@ -55,6 +55,10 @@ Device-to-Observation mapper and the device tabs for the conversion item.
 | W10-3 | Device tabs on the conversion item (after W05-3) | W10-1, W5-3 | Sonnet | none (G1) | Playwright walk |
 | W10-4 | Live stream receipt against a deployed FHIR service | W10-1, W10-2, W02a deployed | Sonnet | none | Lag p95 <= 30 s |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/editors/health/conversion-editor.tsx`: a one-line tab registration, only after W05-3 merges. Owner: `W09b-editors-admin` for its A-grade pass (W09b now depends on this PRP); `W05-conversion-hl7v2-ccda` creates the file.
+- `docs/fiab/parity/health-conversion-pipeline.md`: device rows only. Owner: `W05-conversion-hl7v2-ccda` (now in `depends_on`).
+
 ## Validation
 ```
 cd apps/loom-health-device-mapper && npx vitest run
@@ -70,10 +74,11 @@ Feature flag; consumer group deleted; no data loss (Observations stay).
 `docs/fiab/health/index.md` (device feeds), `docs/fiab/parity/health-conversion-pipeline.md`, `adr/ADR-018` status.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 2 · Blocked-by: W01b-close-deploy-receipts (W10-4 also needs a deployed W02a) · Branch: feat/lhds-w10-device-ingest · Worktree: E:/Repos/_lhds-w10`
+`Wave: 5 · Blocked-by: W01b-close-deploy-receipts (W10-4 also needs a deployed W02a), W05-conversion-hl7v2-ccda · Branch: feat/lhds-w10-device-ingest · Worktree: E:/Repos/_lhds-w10`
 
 ## Hot files
 `platform/fiab/bicep/modules/health/tenant.bicep` (ledger), `conversion-editor.tsx` (W05). `touches_bicep: yes`.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

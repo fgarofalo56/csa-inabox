@@ -59,7 +59,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run lib/governance/brownfield
 Brownfield E2E receipt, Commercial + GCC-High (Actions run id)
@@ -77,6 +78,7 @@ Wave: 5 · Blocked-by: gov-W2-ges-core, gov-W3-permissions-infra, gov-W5b-reconc
 
 ## 15. Hot files
 deploy preflight (touches deploy path: touches_bicep yes if any param/module change). touches_bicep: yes
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## 16. Kickoff prompt
 ```

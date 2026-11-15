@@ -64,7 +64,7 @@ Revert the PR; pool returns to a single key. In-flight sessions finish under the
 None until W11.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 5 · Blocked-by: W02, W04 · Branch: feat/spark-id-w08-pool · Worktree: E:/Repos/_spark-id-w08
+Wave: 5 · Blocked-by: spark-id-W02-client-credential, spark-id-W04-token-source · Branch: feat/spark-id-w08-pool · Worktree: E:/Repos/_spark-id-w08
 
 ## Hot files
 `spark-session-pool.ts` sole owner; touches_bicep: no.

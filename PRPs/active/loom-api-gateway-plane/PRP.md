@@ -14,17 +14,17 @@ created: 2026-10-28
 
 | Field | Value |
 |---|---|
-| Status | DRAFT — design complete; W0 (measurement spike, no product code) may start immediately; everything else waits for W0's receipt. **Q9–Q16 and #4442 Q5 answered 2026-10-29** (`OPERATOR-DECISIONS-2026-10-29.md`); no open operator question remains before W0 |
+| Status | ACTIVE. W0 shipped (PR #5188). W1 merged (PR #5191, `387c3f629`) and contained in the Commercial live build `ea1a38d72` (measured 2026-11-14); its done receipt is unmet, gaps owned by `apigw-W01b-close-gaps`. W2 to W9 have no code, PR or branch; they are split into the single-session PRPs in section 3a. Operator decisions Q1-Q16 answered (`OPERATOR-DECISIONS-2026-10-28.md`, `-10-29.md`) |
 | Created | 2026-10-28 |
 | Decision source | Operator mandate 2026-10-28 (verbatim in `README.md`), operator decisions Q1–Q8 (`OPERATOR-DECISIONS-2026-10-28.md`) and Q9–Q16 + #4442 Q5 + sequencing (`OPERATOR-DECISIONS-2026-10-29.md`) |
 | Tracking issue | filed with this PR: "API & AI Gateway Plane (PRP): fold Mosaic into Loom — W0 measurement spike" |
 | Related rules | every file in `.claude/rules/` — section 8 says how each is met |
 | Related programs | `apim-ai-gateway` (#4442; greenlit 2026-10-28; W7 depends on its Waves A/B1; shares `apim.bicep`), `loom-health-data-services` (bicep collision rule; `health/apim-fragment.bicep` fragment pattern), `governance-autopilot`, `per-workspace-spark-identity` |
 | Boundaries | Commercial, GCC-High (receipts); IL5 supported-in-code via params (no deploy run); GCC supported-in-code only, never exercised |
-| Implemented by this PR | Nothing. Docs only |
+| Implemented by this PR | Nothing. Docs only (PRP re-split 2026-11-14) |
 
 Evidence convention: repo claims carry `file:line` measured on `origin/main`
-at `b9decb4a8` (2026-10-28); external claims carry a URL in `research/` with
+at `b9decb4a8` (2026-10-28; design-time pin, not re-measured since); external claims carry a URL in `research/` with
 the retrieval date; anything not read in full is **UNVERIFIED**. Per-wave
 `review` is set in each wave file's frontmatter and governs; this master's
 `review: none` carries no items of its own.
@@ -65,10 +65,49 @@ adoption.
 | W3 | `apigw-W03-identity-entitlements.md` | two runtime registrations in bootstrap; principals; grants; governed-access renderer (Opus design pass); keys and reveal; access requests on the F16 engine; marketplace Models / My access; `verify-model-access.mjs` | **required** | W2 |
 | W4 | `apigw-W04-cost-centers-usage-pricing.md` | cost centers with per-workspace auto-bind; diagnostics writer + Telemetry card; rollup job; pricing; Analytics; chargeback join; user Usage & cost | none | W1 (items W4-3+ need W3-4 for attribution) |
 | W5 | `apigw-W05-budgets-notifications.md` | budgets + forecast; named-value enforcement; notification engine; Graph email; Teams Workflows; preferences; digests | **required** | W4 |
-| W6 | `apigw-W06-mcp-publishing.md` | MCP registry + discovery; MCP publication + PRM; MCP grants; model caller + on-behalf; Loom's own agents through the gateway; REST → MCP | **required** | W3 (W6-4 needs W4-3) |
-| W7 | `apigw-W07-model-pools-deployments.md` | model pools; health and suggestions; per-pool access; reviewed model deployment; adoption of the day-one gateway; console principal under `platform` | **required** | W2; #4442 Waves A/B1 (external) for W7-5 |
+| W6 | `apigw-W06a/b/c-*.md` | MCP registry + discovery; MCP publication + PRM; MCP grants; model caller + on-behalf; Loom's own agents through the gateway; REST → MCP | **required** | W3 (W6-4 needs W4-3) |
+| W7 | `apigw-W07a/b/c-*.md` | model pools; health and suggestions; per-pool access; reviewed model deployment; adoption of the day-one gateway; console principal under `platform` | **required** | W2; #4442 Waves A/B1 (external) for W7-5 |
 | W8 | `apigw-W08-cross-cloud-connections.md` | management vault (opt-in); Azure connections; Government gateways via connection; disclosure; verifier | **required** | W2 |
 | W9 | `apigw-W09-approvals-copilot-hardening.md` | scheduled approval policies; advisory AI; Copilot tools; scoped-admin hardening; drift and recovery hardening; greenfield/brownfield/government docs; final parity | none | W3, W5 |
+
+### 3a. Executable PRPs (one fresh session each) and wave table
+
+Wave numbers below are recomputed from `depends_on` (longest path). The `concurrent-with` column is indicative only; the authoritative cross-program order is `PRPs/reference/GLOBAL-SCHEDULE.md`.
+
+Wave numbers are the run order; a PRP's wave is greater than every wave it depends on. Items keep their original W-n ids.
+The original single-file waves W2 to W7 were split; W8 and W9 are rewritten in place; W1b was added for W1's declared gaps.
+
+| name | wave | depends_on | bicep | concurrent-with | branch |
+|---|---|---|---|---|---|
+| `apigw-W00-measurement-spike` | 0 | none | no | none | shipped (feat/apigw-w00-measurement-spike) |
+| `apigw-W01-gateway-registry-observe` | 1 | W00 | yes (shipped) | none | shipped (feat/apigw-w01) |
+| `apigw-W01b-close-gaps` | 2 | W01 | no | W02a, W04a | feat/apigw-w01b |
+| `apigw-W02a-plan-engine` | 2 | W01 | see file | W01b, W04a | feat/apigw-w02a |
+| `apigw-W04a-cost-centers-pricing` | 2 | W01 | see file | W01b, W02a | feat/apigw-w04a |
+| `apigw-W02b-endpoints` | 3 | W02a | see file | W04b | feat/apigw-w02b |
+| `apigw-W04b-diagnostics-rollup-job` | 5 | W04a | yes (worker job) | W02b | feat/apigw-w04b |
+| `apigw-W02c-workbench-adopt` | 4 | W02a, W02b | see file | W03a, W04c, W07a | feat/apigw-w02c |
+| `apigw-W03a-bootstrap-principals-grants` | 3 | per file | see file | W02c, W04c, W07a | feat/apigw-w03a |
+| `apigw-W04c-analytics-verifier` | 6 | W04b | see file | W02c, W03a, W07a | feat/apigw-w04c |
+| `apigw-W07a-pools-health` | 4 | W02a, W02b | no | W02c, W03a, W04c | feat/apigw-w07a |
+| `apigw-W03b-governed-renderer-keys` | 4 | per file | see file | W05 | feat/apigw-w03b |
+| `apigw-W05-budgets-notifications` | 7 | W04 slice | see file | W03b | feat/apigw-w05 |
+| `apigw-W03c-requests-marketplace` | 5 | per file | see file | W06a, W08 | feat/apigw-w03c |
+| `apigw-W06a-mcp-registry-publish` | 5 | W02a, W03a, W03b | no | W03c, W08 | feat/apigw-w06a |
+| `apigw-W08-cross-cloud-connections` | 8 | W01b, W02b, W04a, W04b, W05 | yes (new vault module) | W03c, W06a | feat/apigw-w08 |
+| `apigw-W06b-mcp-grants-rest-to-mcp` | 6 | W06a, W03b, W03c | no | W07b | feat/apigw-w06b |
+| `apigw-W07b-pool-access-deploy` | 6 | W07a, W02b, W03b, W03c, W04b | no | W06b | feat/apigw-w07b |
+| `apigw-W06c-mcp-on-behalf-docs` | 7 | W06a, W06b, W04b, W04c | no | W07c | feat/apigw-w06c |
+| `apigw-W07c-adopt-day-one` | 7 | W07a, W07b (+ apim WA, WB1 cross-program) | yes (apim.bicep, main.bicep, params) | W06c | feat/apigw-w07c |
+| `apigw-W09-approvals-copilot-hardening` | 9 | W02c, W03c, W04c, W05, W06c, W07c, W08 | no | none | feat/apigw-w09 |
+
+Worktrees: `E:/Repos/_apigw-<slug>` (for example `_apigw-w06a`). Rows marked "per file" or "see file" are lane 1's PRPs: the authoritative
+wave, depends_on and bicep flag live in those files; this table mirrors them and must be re-checked when they change. Only W04b, W07c and W08 are
+known bicep PRs; every bicep PR takes the single bicep slot (`PRPs/reference/GLOBAL-SCHEDULE.md`).
+
+Concurrency: W02a and W04a run in parallel after W01 (with W01b). After W02 the W03 slice, W07a/W07b and W08 run in parallel (subject to the
+depends_on edges above, which are authoritative where this note is looser). W05 follows W04. W06 follows W03 (a, b) and W04b. W09 is last.
+Cross-program order: W07c item W7-5 starts only after `apim-WA-multi-endpoint-pool` and `apim-WB1-default-on-commercial-gcc` (`PRPs/active/apim-ai-gateway`) merge.
 
 ## 4. Dependency graph and run order
 
@@ -168,15 +207,16 @@ wave are filed as Q17+ in the risks file and wait for an answer.
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
 | W0 | merged | feat/apigw-w00-receipts | sonnet | W0-RECEIPT.md; instruments #5181 #5183 | 2026-10-29 |
-| W1 | todo | | sonnet | `apigw-W01-gateway-registry-observe.md` | 2026-10-28 |
-| W2 | todo | | sonnet (W2-1 opus) | `apigw-W02-publishing-plan-apply.md` | 2026-10-28 |
-| W3 | todo | | sonnet (W3-4 opus) | `apigw-W03-identity-entitlements.md` | 2026-10-28 |
-| W4 | todo | | sonnet | `apigw-W04-cost-centers-usage-pricing.md` | 2026-10-28 |
-| W5 | todo | | sonnet | `apigw-W05-budgets-notifications.md` | 2026-10-28 |
-| W6 | todo | | sonnet | `apigw-W06-mcp-publishing.md` | 2026-10-28 |
-| W7 | todo | | sonnet | `apigw-W07-model-pools-deployments.md` | 2026-10-28 |
-| W8 | todo | | sonnet | `apigw-W08-cross-cloud-connections.md` | 2026-10-28 |
-| W9 | todo | | sonnet | `apigw-W09-approvals-copilot-hardening.md` | 2026-10-28 |
+| W1 | merged | feat/apigw-w01 | sonnet | #5191; on Commercial live ea1a38d72; receipt unmet, see W1b | 2026-11-14 |
+| W1b | todo | | sonnet | `apigw-W01b-close-gaps.md`; #5210 | 2026-11-14 |
+| W2 | todo | | sonnet (W2-1 opus) | split: W02a, W02b, W02c (section 3a) | 2026-11-14 |
+| W3 | todo | | sonnet (W3-4 opus) | split: W03a, W03b, W03c (section 3a) | 2026-11-14 |
+| W4 | todo | | sonnet | split: W04a, W04b, W04c (section 3a) | 2026-11-14 |
+| W5 | todo | | sonnet | `apigw-W05-budgets-notifications.md` | 2026-11-14 |
+| W6 | todo | | sonnet | split: W06a, W06b, W06c (section 3a) | 2026-11-14 |
+| W7 | todo | | sonnet | split: W07a, W07b, W07c (section 3a) | 2026-11-14 |
+| W8 | todo | | sonnet | `apigw-W08-cross-cloud-connections.md` | 2026-11-14 |
+| W9 | todo | | sonnet | `apigw-W09-approvals-copilot-hardening.md` | 2026-11-14 |
 
 ## Relationship to apim-ai-gateway (#4442)
 

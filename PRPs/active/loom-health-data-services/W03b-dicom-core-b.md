@@ -36,7 +36,7 @@ Edge: only W3-4 has a real code dependency on W02b (the W2-4 outbox relay). W3-5
 
 ## Owns
 `apps/loom-health-dicom-gateway/src/{changefeed,tags,partitions,lifecycle}/**`; `apps/loom-health-cp/src/relay/dicom-*.ts`, `src/jobs/dicom-purge.ts`; `lib/install/provisioners/health-dicom-service.ts`; `lib/editors/health/dicom-service-editor.tsx`; `app/api/health/[tenant]/dicomweb/**`;
-`lib/catalog/item-types/health.ts` and `lib/copilot/health-tools.ts` (append one block each, freeze order after W02b); `docs/fiab/parity/health-dicom-service.md`; `apps/loom-health-viewer/**` (build only); `tests/health/viewer-smoke.spec.ts`; `.github/workflows/health-load.yml`; `tests/health/load/dicom-*.js`.
+`docs/fiab/parity/health-dicom-service.md`; `apps/loom-health-viewer/**` (build only); `tests/health/viewer-smoke.spec.ts`; `.github/workflows/health-load.yml`; `tests/health/load/dicom-*.js`.
 
 ## Must NOT touch
 `apps/loom-health-dicom/**` (image, W03a); gateway root `src/` files and `tenant.bicep` (W03a); the relay worker core and `src/relay/` non-`dicom-` files (W02b); `lib/gates/registry/health.ts` (not needed; an export-gate entry belongs to W06); `main.bicep`; any matrix row except the viewer build row (last commit).
@@ -53,6 +53,9 @@ DICOM change feed/tags/partitions API (W06 export, W09 viewer consume), `health-
 3. W3-6 item/editor (needs the W3-3 gateway contract only); G1 walk is its gate.
 4. W3-7 viewer smoke (parallel).
 5. W3-8 load + Gov job last, after W3-2..W3-5.
+
+### Integration step (serialized)
+- `apps/fiab-console/lib/catalog/item-types/health.ts` and `apps/fiab-console/lib/copilot/health-tools.ts`: append one block each (freeze order, after W02b). Owner of both: `W02b-fhir-core-ops` (in `depends_on`). Concurrent appenders in wave 4 (W04, W05) rebase on whichever merged first.
 
 ## Validation
 ```bash
@@ -73,7 +76,7 @@ Gateway scaled to 0; blobs retained; `LOOM_HEALTH_DICOM_ENABLED=false`; relay `d
 `docs/fiab/parity/health-dicom-service.md`, `docs/fiab/health/index.md` per-cloud table, `ARCHITECTURE.md` section 6, `adr/ADR-017` status line.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: W03a-dicom-core-a, W02b-fhir-core-ops (W2-4 only) · Branch: feat/lhds-w3b-dicom-ops · Worktree: E:/Repos/_lhds-w3b
+Wave: 4 · Blocked-by: W03a-dicom-core-a, W02b-fhir-core-ops (W2-4 only) · Branch: feat/lhds-w3b-dicom-ops · Worktree: E:/Repos/_lhds-w3b
 
 ## Hot files
 `lib/catalog/item-types/health.ts`, `lib/copilot/health-tools.ts`, `apps/loom-health-cp/src/relay/`, new workflow `health-load.yml`, build matrix (viewer row). `touches_bicep: no`.

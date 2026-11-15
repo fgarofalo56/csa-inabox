@@ -3,7 +3,7 @@ name: W12-compliance-evidence-pack
 status: backlog
 priority: P1
 order: 30
-depends_on: [W11b-hardening-bicep, W08b-breakglass-audit-siem]
+depends_on: [W11b-hardening-bicep, W08b-breakglass-audit-siem, W09b-editors-admin]
 review: required
 orchestrator_model: sonnet
 implementer_model: sonnet
@@ -68,7 +68,7 @@ Docs and a generator; nothing to roll back beyond reverting the PR.
 `docs/fiab/health/compliance/**`, `README.md`, `ARCHITECTURE.md` section 6.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 9 · Blocked-by: W11b-hardening-bicep, W08b-breakglass-audit-siem · Branch: feat/lhds-w12-evidence-pack · Worktree: E:/Repos/_lhds-w12`
+`Wave: 10 · Blocked-by: W11b-hardening-bicep, W08b-breakglass-audit-siem, W09b-editors-admin · Branch: feat/lhds-w12-evidence-pack · Worktree: E:/Repos/_lhds-w12`
 
 ## Hot files
 `tenant-editor.tsx` (last editor of the program), `README.md`/`PRP.md` (close-out only). `touches_bicep: no`.

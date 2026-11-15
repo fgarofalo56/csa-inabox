@@ -73,10 +73,11 @@ Remove the per-workspace assignments (ARM delete by deterministic GUID) or leave
 `docs/fiab/runbooks/workspace-identity-grants.md` (spark-lake backend section).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 4 · Blocked-by: W00, W01 · Branch: feat/spark-id-w05-scoper · Worktree: E:/Repos/_spark-id-w05
+Wave: 4 · Blocked-by: spark-id-W00-spike, spark-id-W01-abfss-builder · Branch: feat/spark-id-w05-scoper · Worktree: E:/Repos/_spark-id-w05
 
 ## Hot files
 `workspace-grants.ts` sole owner; `synapse.bicep`: ONE bicep PR in flight; touches_bicep: yes.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Read PRPs/backlog/per-workspace-spark-identity/PRP.md, spark-id-W05-scoper-and-synapse-rbac.md, REFERENCE.md 2.5/4(b), and the W00 report. Build SparkLakeScoper (ABAC+ACL) and the Synapse Compute Operator ensure in workspace-grants.ts. Done = tsc + the named vitest pass (trailing-slash test fails if the slash is removed) and an inside-OK/outside-403 probe receipt per deployed boundary.

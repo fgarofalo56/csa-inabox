@@ -35,7 +35,7 @@ Items W2-4, W2-6, W2-7, W2-8. Non-goals: terminology ops (W04), bulk export (W06
 `lib/azure/auto-bind.ts` (`healthTenantAutoBindOnCreate`), `docs/fiab/ux-standards.md` section 7, `apps/loom-health-cp/src/jobs/{builtin,tenant-jobs}.ts`, `.github/workflows/deploy-health.yml` (Gov job pattern), `TEST-STRATEGY.md` sections 3 and 9.
 
 ## Owns
-`apps/loom-health-fhir/plugin/src/**/outbox/**`; `apps/loom-health-cp/src/relay/**` (new; fhir half) and `src/jobs/reindex-*.ts`; `apps/loom-health-fhir/config/search-params.json`; `lib/gates/registry/health.ts` (one entry);
+`apps/loom-health-fhir/plugin/src/**/outbox/**`; `apps/loom-health-cp/src/relay/**` (new; fhir half) and `apps/loom-health-cp/src/jobs/reindex-*.ts`; `apps/loom-health-fhir/config/search-params.json`;
 `lib/catalog/item-types/health.ts` (one entry); `lib/install/provisioners/health-fhir-service.ts`; `lib/editors/health/fhir-service-editor.tsx`; `app/api/health/[tenant]/fhir/**`; `lib/copilot/health-tools.ts` (created here; read tools `health_fhir_search_count`, `health_patient_summary_codes`);
 `docs/fiab/parity/health-fhir-service.md`; `.github/workflows/health-conformance.yml`; `tests/health/conformance/**`. Registration order per the freeze.
 
@@ -53,6 +53,9 @@ Outbox table + relay + change-feed endpoint (W3-4, W6, W7 consume), the curated 
 2. W2-6 curated parameters + reindex job + gate.
 3. W2-7 provisioner/editor/BFF/tools/parity doc (after W2-2 contract is stable; G1 walk is its gate).
 4. W2-8 conformance workflow and reports (needs all of the above deployed).
+
+### Integration step (serialized)
+- `apps/fiab-console/lib/gates/registry/health.ts`: append one gate entry. Owner: `W01b-close-deploy-receipts` (in the `depends_on` chain). Registration order per the freeze.
 
 ## Validation
 ```bash

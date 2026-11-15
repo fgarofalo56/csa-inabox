@@ -31,7 +31,7 @@ In: W6-3, W6-3b, W6-6a. Out: Expert Determination statistical certification (onl
 `adr/ADR-015-deidentification.md`, `SECURITY-AND-COMPLIANCE.md` (PHI-free logs), `apps/loom-health-cp/src/jobs/runner.ts`, the job API from W06a (`apps/loom-health-cp/src/jobs/export-*.ts`), `research/` de-id notes.
 
 ## Owns
-`apps/loom-health-deid/**`, `apps/loom-health-cp/src/jobs/deid-*.ts`, `apps/fiab-console/lib/install/provisioners/health-deid-job.ts`, `apps/fiab-console/lib/editors/health/deid-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/deid/**`, `docs/fiab/parity/health-deid-job.md`, `tests/health/deid/**`, the de-id workload block in `platform/fiab/bicep/modules/health/engines.bicep` and the matrix row in `.github/workflows/build-fiab-images-acr-tasks.yml` (serialized bicep PR).
+`apps/loom-health-deid/**`, `apps/loom-health-cp/src/jobs/deid-*.ts`, `apps/fiab-console/lib/install/provisioners/health-deid-job.ts`, `apps/fiab-console/lib/editors/health/deid-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/deid/**`, `docs/fiab/parity/health-deid-job.md`, `tests/health/deid/**`, the de-id workload block in `platform/fiab/bicep/modules/health/engines.bicep` (serialized bicep PR).
 
 ## Must NOT touch
 `apps/loom-health-sink/**` (W06c), the `export-*.ts` job files beyond the `_deid` call-through (W06a is merged first), `apps/fiab-console/lib/copilot/health-tools.ts`.
@@ -51,6 +51,9 @@ W06a job API and export pipeline; W02b read path; `engines.bicep` and the image 
 | W6-3b | DICOM PS3.15 profile, `tag`/`redact`/`surrogate` sync endpoint, `$export?_deid=` | W6-3 | Sonnet | required | DICOM tag golden; export golden |
 | W6-6a | `health-deid-job` item, editor, BFF routes, parity doc | W6-3, W6-3b | Sonnet | none (G1) | Playwright walk |
 
+### Integration step (serialized)
+- `.github/workflows/build-fiab-images-acr-tasks.yml`: the de-id matrix row only (serialized bicep PR). Owner: `W01b-close-deploy-receipts` (in the `depends_on` chain).
+
 ## Validation
 ```
 cd apps/loom-health-cp && npx vitest run src/jobs/deid && npx tsc --noEmit -p tsconfig.test.json
@@ -66,10 +69,11 @@ De-id jobs disabled by flag; workload scaled to 0; golden fixtures retained; no 
 `docs/fiab/health/index.md` (de-id section), `docs/fiab/parity/health-deid-job.md`, the de-id row status in `SECURITY-AND-COMPLIANCE.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 5 · Blocked-by: W06a-bulk-export-import · Branch: feat/lhds-w06b-deid · Worktree: E:/Repos/_lhds-w06b`
+`Wave: 6 · Blocked-by: W06a-bulk-export-import · Branch: feat/lhds-w06b-deid · Worktree: E:/Repos/_lhds-w06b`
 
 ## Hot files
 `platform/fiab/bicep/modules/health/engines.bicep` (shared with W06c: serialized), `.github/workflows/build-fiab-images-acr-tasks.yml` (matrix row). `touches_bicep: yes`.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

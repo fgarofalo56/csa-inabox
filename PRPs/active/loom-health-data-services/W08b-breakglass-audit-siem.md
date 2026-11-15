@@ -31,7 +31,7 @@ In: W8-3, W8-4, W8-5. Out: policy bundle (W08a), certification claims.
 `SECURITY-AND-COMPLIANCE.md` (audit, break-glass), `adr/ADR-011-consent-pdp.md`, `OPERATIONS-AND-BCDR.md` section 2, `platform/fiab/bicep/modules/health/storage.bicep` and `stamp.bicep`, `monitoring/` (existing alerts layout), W08a bundle v2 break-glass hooks.
 
 ## Owns
-`apps/loom-health-cp/src/auth/break-glass.ts`, `apps/loom-health-cp/src/audit/**`, `apps/fiab-console/lib/editors/health/tenant-editor.tsx` (Access and Audit tabs), `apps/fiab-console/lib/editors/health/fhir-service-editor.tsx` (Audit tab only), `apps/fiab-console/app/api/health/[tenant]/break-glass/**`, `apps/fiab-console/app/api/health/[tenant]/audit/**`, `apps/fiab-console/lib/copilot/health-tools.ts` (tool `health_audit_summary`, counts only), `monitoring/health-sentinel-rules/**`, immutable container policy in `platform/fiab/bicep/modules/health/stamp.bicep` (one bicep PR).
+`apps/loom-health-cp/src/auth/break-glass.ts`, `apps/loom-health-cp/src/audit/**`, `apps/fiab-console/lib/editors/health/tenant-editor.tsx` (Access and Audit tabs), `apps/fiab-console/app/api/health/[tenant]/break-glass/**`, `apps/fiab-console/app/api/health/[tenant]/audit/**`, `monitoring/health-sentinel-rules/**`, immutable container policy in `platform/fiab/bicep/modules/health/stamp.bicep` (one bicep PR).
 
 ## Must NOT touch
 PDP policies (W08a), export/sink (W06*), `engines.bicep`, other editors.
@@ -51,6 +51,9 @@ Audit chain reports and break-glass events consumed by W12 (evidence generator) 
 | W8-4 | Audit chain, verification job, immutability, SIEM rules, container policy bicep | W2-3 | Sonnet | required (bicep + evidence control) | Tamper breaks chain; overwrite rejected |
 | W8-5 | Accounting of disclosures, audit search, report export, `health_audit_summary` | W8-4 | Sonnet | none (G1) | Playwright walk; canary patient report |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/editors/health/fhir-service-editor.tsx` (Audit tab only; owner `W02b-fhir-core-ops`) and `apps/fiab-console/lib/copilot/health-tools.ts` (tool `health_audit_summary`, counts only; owner `W02b-fhir-core-ops`). Both are in the `depends_on` chain via W08a.
+
 ## Validation
 ```
 cd apps/loom-health-cp && npx vitest run src/audit src/auth && npx tsc --noEmit -p tsconfig.test.json
@@ -66,10 +69,11 @@ Audit chain is append-only (no rollback by design; the verification job can be d
 `docs/fiab/health/security.md`, `docs/fiab/health/runbooks.md` (break-glass review), `docs/fiab/parity/health-tenant.md` (Access, Audit).
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 5 · Blocked-by: W08a-labels-pdp · Branch: feat/lhds-w08b-breakglass-audit · Worktree: E:/Repos/_lhds-w08b`
+`Wave: 6 · Blocked-by: W08a-labels-pdp · Branch: feat/lhds-w08b-breakglass-audit · Worktree: E:/Repos/_lhds-w08b`
 
 ## Hot files
 `tenant-editor.tsx` (also W09b, W12: later tiers), `health-tools.ts` (one tool), `stamp.bicep` (ledger). `touches_bicep: yes`.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

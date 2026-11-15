@@ -3,7 +3,7 @@ name: apim-WF-gov-capable-semantic-cache
 status: active
 priority: P2
 order: 67
-depends_on: [apim-WD-service-families-and-sovereign-spend-control]
+depends_on: [apim-WD-service-families-and-sovereign-spend-control, apim-WE-observability-and-safety-ownership]
 review: required
 orchestrator_model: opus
 implementer_model: sonnet
@@ -41,7 +41,7 @@ Each criterion names the value or output that would make it fail.
 - `platform/fiab/bicep/modules/admin-plane/main.bicep` `redisOss`, `aoaiSemanticCacheEnabled`; `platform/fiab/bicep/modules/admin-plane/apim.bicep` `aoaiSemanticLookup`, `aoaiSemanticStore`; REFERENCE.md 3.2, 3.4 (Q4 paragraph); W0-RECEIPT.md.
 
 ## Owns
-- `platform/fiab/bicep/modules/admin-plane/apim.bicep` (cache policy wiring). - `platform/fiab/bicep/modules/admin-plane/main.bicep` (`redisOss` backend config only). - the `redisOss` app definition file found by `grep -rn redisOss platform/fiab/bicep/modules/admin-plane platform/fiab/bicep/modules`. - `docs/fiab/apim-ai-gateway.md`.
+- `platform/fiab/bicep/modules/admin-plane/apim.bicep` (cache policy wiring). - `platform/fiab/bicep/modules/admin-plane/main.bicep` (`redisOss` backend config only). - the `redisOss` app definition file found by `grep -rn redisOss platform/fiab/bicep/modules/admin-plane platform/fiab/bicep/modules`.
 
 ## Must NOT touch
 - Params, `loomBackends` defaults other than `redisOss` internals, `apps/**`.
@@ -54,6 +54,9 @@ Each criterion names the value or output that would make it fail.
 
 ## Steps
 1. Bicep slot. 2. Confirm `redisOss` RediSearch support (module/image). 3. Per-tenant keying. 4. Wire policies. 5. Hit/miss receipt in GCC-High via Actions.
+
+### Integration step (serialized)
+- `docs/fiab/apim-ai-gateway.md`: add the semantic-cache section. Owner: `apim-WE-observability-and-safety-ownership` (now in `depends_on`).
 
 ## Validation
 ```bash
@@ -84,11 +87,12 @@ Set `aoaiSemanticCacheEnabled` false and redeploy; `redisOss` stays. `git revert
 `docs/fiab/apim-ai-gateway.md` cache section (one-line redisOss vs Azure Cache for Redis comparison; per-boundary status).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 7 · Blocked-by: apim-WD · Branch: feat/apim-wf · Worktree: E:/Repos/_apim-wf
+Wave: 7 · Blocked-by: apim-WD-service-families-and-sovereign-spend-control, apim-WE-observability-and-safety-ownership · Branch: feat/apim-wf · Worktree: E:/Repos/_apim-wf
 
 ## Hot files
 `platform/fiab/bicep/modules/admin-plane/apim.bicep`, `platform/fiab/bicep/modules/admin-plane/main.bicep`. **Takes the bicep slot.** Exactly one bicep-touching PR may be in flight across apim-ai-gateway, `loom-api-gateway-plane` (apigw W1-2 / W7-5), LHDS and any other program (ledger: `PRPs/reference/INTERLOCK.md`). Before opening the PR, `gh pr list --state open --search "bicep in:title,body"` and confirm none is in flight; rebase on `main` after it merges.
 `touches_bicep: yes`
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

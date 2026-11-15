@@ -100,10 +100,11 @@ apply, not a what-if, is the receipt. Positive control for the probe: a request 
 `docs/fiab/health/index.md`, `greenfield.md`, `brownfield.md` (execute and correct them; shrink "Not yet implemented"), per-cloud table in `ARCHITECTURE.md` section 6 with run ids, `docs/fiab/parity/health-tenant.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 1 · Blocked-by: none (operator go for billing stamp; #5123 for Gov) · Branch: feat/lhds-w1b-close-receipts · Worktree: E:/Repos/_lhds-w1b
+Wave: 1 · Blocked-by: W00-measurement-spike (also: operator go for billing stamp; #5123 for Gov) · Branch: feat/lhds-w1b-close-receipts · Worktree: E:/Repos/_lhds-w1b
 
 ## Hot files
 `health.bicep`, `control-plane.bicep`, `health-params/*`, `deploy-health.yml`, `gates/registry/health.ts` (W1b owns first in the freeze order), `build-fiab-images-acr-tasks.yml` (Gov gate only). `touches_bicep: yes` (W1b-1, W1b-5 are small separate PRs, one in flight).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Fresh session, Sonnet. Read in order: `PRPs/active/loom-health-data-services/W01b-close-deploy-receipts.md`, then `W01-control-plane-identity-stamp.md` (execution state),

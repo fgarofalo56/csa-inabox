@@ -3,7 +3,11 @@
 Written 2026-11-14 by the PRP audit. Every PRP in `PRPs/active` and `PRPs/backlog` links here instead of restating it.
 Programs: **LHDS** (`active/loom-health-data-services`), **apigw** (`active/loom-api-gateway-plane`), **apim** (`active/apim-ai-gateway`),
 **gov** (`backlog/governance-autopilot`), **spark** (`backlog/per-workspace-spark-identity`), **estate** (`backlog/estate-power-receipts`),
-**brain** (`backlog/loom-brain`), **snow** (`backlog/snowflake-parity`).
+**brain** (`backlog/loom-brain`), **snow** (`backlog/snowflake-parity`), **ib** (`backlog/issue-batches`, 12 issue-batch PRPs).
+
+The order in which PRPs run together and take the bicep slot is generated: [`GLOBAL-SCHEDULE.md`](GLOBAL-SCHEDULE.md)
+(`python tools/prp/gen_plan.py`). A file that two PRPs need has one owner; the other PRP lists it under an
+`Integration step (serialized)` and carries a `depends_on` edge or a `Cross-program order` line, which the generator reads.
 
 ## 1. The bicep slot (one at a time)
 

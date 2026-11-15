@@ -38,8 +38,9 @@ Each names the value or output that would make it fail.
 ## Owns
 - `apps/fiab-console/lib/azure/workspace-identity-client.ts`
 - `apps/fiab-console/lib/azure/workspace-credential-factory.ts`
-- new host module under `platform/fiab/bicep/modules/` and its wiring (ONE bicep PR; take the INTERLOCK slot first)
-- host app source under `apps/` if a container app is chosen (named in the W00 verdict)
+- `platform/fiab/bicep/modules/admin-plane/workspace-identity-host.bicep` (new host module; ASSUMPTION: exact filename, ONE bicep PR, take the INTERLOCK slot first)
+- `platform/fiab/bicep/modules/admin-plane/main.bicep` (env-var wiring only, declared edit window)
+- `apps/loom-workspace-identity-host/**` (new; only if a container app is chosen in the W00 verdict)
 
 ## Must NOT touch
 Any file outside Owns. Never edit `PRPs/INDEX.md`, `MASTER-INDEX.md`, `REGISTER.md`. No new Fabric/Power BI dependency (`no-fabric-dependency.md`). Do not re-decide Q1-Q10 (REFERENCE.md section 10). `workspace-grants.ts` (W05/W06), `synapse-dev-client.ts` (W02).
@@ -71,10 +72,11 @@ Set `LOOM_SPARK_IDENTITY_MODE=off` (credential factory then never calls the host
 `docs/fiab/runbooks/workspace-identity-grants.md` (host section).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: W00 · Branch: feat/spark-id-w04-token · Worktree: E:/Repos/_spark-id-w04
+Wave: 3 · Blocked-by: spark-id-W00-spike · Branch: feat/spark-id-w04-token · Worktree: E:/Repos/_spark-id-w04
 
 ## Hot files
 `platform/fiab/bicep/main.bicep` wiring, `admin-plane/main.bicep`, `params/*.bicepparam`: ONE bicep PR in flight; touches_bicep: yes.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Read PRPs/backlog/per-workspace-spark-identity/PRP.md, spark-id-W04-token-source.md, the W00 report, workspace-identity-client.ts. Build the submitter host and credentialFor spark branch. First claim the bicep INTERLOCK slot. Done = tsc + named vitest pass and a live oid/aud claim receipt exists per deployed boundary.

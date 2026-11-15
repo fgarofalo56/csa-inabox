@@ -203,4 +203,4 @@ and on for sandbox stamps — Decision D18 in `RISKS-AND-OPEN-DECISIONS.md`.
 ## Related
 
 `CAPACITY-MODEL.md`, `ARCHITECTURE.md` sections 3 and 6, `SECURITY-AND-COMPLIANCE.md`,
-`TEST-STRATEGY.md` section 5-6, `W11-hardening-dr-scale-out.md`.
+`TEST-STRATEGY.md` section 5-6, `W11a-chaos-dr.md` and `W11b-hardening-bicep.md`.

@@ -32,7 +32,7 @@ In: W6-4, W6-4b, W6-6b. Out: OMOP (D25), full-scale sink throughput (W13).
 `adr/ADR-016-lakehouse-sink.md`, `RISKS-AND-OPEN-DECISIONS.md` Q7 and R7, `apps/loom-health-cp/src/jobs/runner.ts`, `apps/loom-health-pdp/policies/lhds/`, `apps/fiab-console/lib/gates/registry/` (category files, e.g. `azure-services.ts`, for the entry pattern). The lakehouse isolation advisory is private: do not quote it in this public repo.
 
 ## Owns
-`apps/loom-health-sink/**`, `apps/loom-health-cp/src/jobs/sink-*.ts`, `apps/fiab-console/lib/install/provisioners/health-lakehouse-sink.ts`, `apps/fiab-console/lib/editors/health/sink-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/sink/**`, `apps/fiab-console/lib/copilot/health-tools.ts` (tool `health_lakehouse_query` only, after W06a merges), the `health-lakehouse-isolation` gate entry (ASSUMPTION: a new `lib/gates/registry/health.ts` plus one export line in the registry index, serialized), `docs/fiab/parity/health-lakehouse-sink.md`, the sink workload block in `engines.bicep`.
+`apps/loom-health-sink/**`, `apps/loom-health-cp/src/jobs/sink-*.ts`, `apps/fiab-console/lib/install/provisioners/health-lakehouse-sink.ts`, `apps/fiab-console/lib/editors/health/sink-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/sink/**`, `docs/fiab/parity/health-lakehouse-sink.md`, the sink workload block in `engines.bicep`.
 
 ## Must NOT touch
 `apps/loom-health-deid/**`, the export job files (W06a), other registry category files.
@@ -52,6 +52,10 @@ Silver tables and the `health-lakehouse-sink` item for W09b; the isolation gate 
 | W6-4b | DICOM metadata tables, Loom Unity registration, OpenLineage, backfill job | W6-4 | Sonnet | none | Backfill resume without duplicates |
 | W6-6b | Item, editor, BFF, Copilot `health_lakehouse_query`, parity doc | W6-4, W6-4b | Sonnet | none (G1) | Playwright walk; policy-filtered rows |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/copilot/health-tools.ts`: tool `health_lakehouse_query` only, after W06a merges. Owner: `W02b-fhir-core-ops` (in the `depends_on` chain).
+- `apps/fiab-console/lib/gates/registry/health.ts`: the `health-lakehouse-isolation` gate entry. Owner: `W01b-close-deploy-receipts` (in the `depends_on` chain). ASSUMPTION: the registry index needs no new export line because `health.ts` already exists.
+
 ## Validation
 ```
 cd apps/loom-health-cp && npx vitest run src/jobs/sink && npx tsc --noEmit -p tsconfig.test.json
@@ -67,10 +71,11 @@ Sink disabled by flag; Silver tables retained; the watermark is resumable; no so
 `docs/fiab/health/index.md` (sink section), the parity doc, `ARCHITECTURE.md` section 6 status.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 5 · Blocked-by: W06a-bulk-export-import (health-tools.ts ordering) and open decision Q7 · Branch: feat/lhds-w06c-lakehouse-sink · Worktree: E:/Repos/_lhds-w06c`
+`Wave: 6 · Blocked-by: W06a-bulk-export-import (and open decision Q7) · Branch: feat/lhds-w06c-lakehouse-sink · Worktree: E:/Repos/_lhds-w06c`
 
 ## Hot files
 `engines.bicep` (with W06b: serialized), `health-tools.ts` (one tool), the gate registry. `touches_bicep: yes`.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

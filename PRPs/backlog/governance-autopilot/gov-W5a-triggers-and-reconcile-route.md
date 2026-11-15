@@ -65,7 +65,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run app/api/items lib/azure lib/governance
 Live: clean create then out-of-band scan delete then reconcile (Commercial receipt; GCC-High via Actions)

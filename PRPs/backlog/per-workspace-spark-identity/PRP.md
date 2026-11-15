@@ -104,6 +104,7 @@ Wave: program hub · Blocked-by: W00 (operator-held: sandbox + Gov Actions acces
 ## Hot files
 `synapse-dev-client.ts`, `synapse-livy-client.ts` (W02 only), `spark-session-pool.ts` (W08 only), `lakehouse/*` routes (W01 then W03), `run-adapters.ts`, `taskflow/launch-item.ts` (W09 only),
 `workspace-grants.ts` (W05 only), landing-zone bicep + `admin-plane/main.bicep` + `params/*.bicepparam` (W04, W05, W10, W12: one at a time). touches_bicep: yes (by those waves).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Read PRPs/backlog/per-workspace-spark-identity/PRP.md (hub) then spark-id-W00-spike.md and REFERENCE.md sections 2.5, 2.6, 3.

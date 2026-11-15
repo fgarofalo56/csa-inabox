@@ -109,6 +109,7 @@ Wave: 1 (first bicep slot after Wave 0) · Blocked-by: apim-W00-prerequisite-mea
 ## Hot files
 `platform/fiab/bicep/modules/admin-plane/main.bicep`, `platform/fiab/bicep/modules/admin-plane/apim.bicep`, possibly `platform/fiab/bicep/main.bicep`. **Takes the bicep slot.** Exactly one bicep-touching PR may be in flight across apim-ai-gateway, `loom-api-gateway-plane` (apigw W1-2 / W7-5), LHDS and any other program (ledger: `PRPs/reference/INTERLOCK.md`). Before opening the PR, `gh pr list --state open --search "bicep in:title,body"` and confirm none is in flight; rebase on `main` after it merges. `apim-WB1` also edits `platform/fiab/bicep/modules/admin-plane/main.bicep`, so A and B1 are SERIALIZED (A first) - they are NOT parallel as the pre-2026-11-14 PRP stated.
 `touches_bicep: yes`
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

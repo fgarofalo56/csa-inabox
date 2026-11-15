@@ -65,7 +65,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run lib/governance lib/scheduler
 Mutation (sandbox copy): remove the paused-skip branch; the paused-ADX test must go RED.

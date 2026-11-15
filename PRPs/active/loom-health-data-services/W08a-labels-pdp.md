@@ -64,7 +64,7 @@ Bundle version pinned per tenant; roll back to the previous bundle; labels are a
 `docs/fiab/health/security.md` (consent and labels), `adr/ADR-011-consent-pdp.md` status, `TEST-STRATEGY.md` section 7.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 4 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology · Branch: feat/lhds-w08a-labels-pdp · Worktree: E:/Repos/_lhds-w08a`
+`Wave: 5 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b, W04-terminology · Branch: feat/lhds-w08a-labels-pdp · Worktree: E:/Repos/_lhds-w08a`
 
 ## Hot files
 `apps/loom-health-pdp/policies/**` (sole owner this tier). `touches_bicep: no`.

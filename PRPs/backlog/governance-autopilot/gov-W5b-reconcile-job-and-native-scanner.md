@@ -63,7 +63,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 az bicep build on module + each params file
 pnpm --dir apps/fiab-console exec vitest run  (scanner tests under its own package: run its test script)
@@ -82,6 +83,7 @@ Wave: 4 · Blocked-by: gov-W5a-triggers-and-reconcile-route, gov-W3-permissions-
 
 ## 15. Hot files
 `admin-plane/main.bicep`, `params/*.bicepparam`, build-fiab-images matrix. ONE bicep PR at a time. touches_bicep: yes
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## 16. Kickoff prompt
 ```

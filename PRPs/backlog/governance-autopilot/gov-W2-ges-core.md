@@ -66,7 +66,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run lib/governance lib/catalog
 Mutation: in a SANDBOX COPY drop the etag check and the dedupe key; both must turn tests RED; prove the tracked tree untouched with `git hash-object` before/after.

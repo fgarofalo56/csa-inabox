@@ -71,7 +71,7 @@ Revert the PR; the panel falls back to the prior fields. No data change.
 Runbook and parity doc are the deliverable.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 7 · Blocked-by: W07 · Branch: feat/spark-id-w11-ui · Worktree: E:/Repos/_spark-id-w11
+Wave: 7 · Blocked-by: spark-id-W07-auto-bind-reconciler · Branch: feat/spark-id-w11-ui · Worktree: E:/Repos/_spark-id-w11
 
 ## Hot files
 `workspace-identity-panel.tsx` sole owner; touches_bicep: no.

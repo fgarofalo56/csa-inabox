@@ -61,8 +61,16 @@ G1 receipt for the panel; a true parity doc.
 ## Validation
 - cd apps/fiab-console && pnpm exec tsc --noEmit -p tsconfig.build.json
 - `cd apps/fiab-console && pnpm exec vitest run lib/components/admin-scaling lib/estate`
-- Sandbox mutation: make the panel render `PAUSED` on the POST response instead of the readback; the polling test must go RED (name the test).
-- Browser walk receipt per `ux-baseline.md` G1 with screenshots in the PR.
+- Sandbox mutation, run in a detached worktree (never mutate the tracked tree), RED expected on `estate-power-panel-polling.test.tsx`:
+  ```bash
+  git worktree add --detach temp/estate-d-sandbox HEAD
+  # edit temp/estate-d-sandbox/apps/fiab-console/lib/components/admin-scaling/estate-power-panel.tsx so PAUSED renders from the POST response, not the readback
+  pnpm --dir temp/estate-d-sandbox/apps/fiab-console install --frozen-lockfile   # own node_modules, never a link to the main checkout
+  pnpm --dir temp/estate-d-sandbox/apps/fiab-console vitest run lib/components/admin-scaling/__tests__/estate-power-panel-polling.test.tsx   # must exit non-zero
+  git worktree remove --force temp/estate-d-sandbox
+  test "$(git hash-object apps/fiab-console/lib/components/admin-scaling/estate-power-panel.tsx)" = "$(git rev-parse HEAD:apps/fiab-console/lib/components/admin-scaling/estate-power-panel.tsx)"   # tree untouched
+  ```
+- Browser walk receipt per `ux-baseline.md` G1 (manual, headed browser) with screenshots in the PR; presence check: `test -s docs/fiab/receipts/estate-power-panel.md && grep -c 'RESUME_FAILED' docs/fiab/receipts/estate-power-panel.md` must print a count of 1 or more.
 - Rule: a panel fix merged is "merged, not deployed" until the console is rolled and re-walked.
 
 ## Rollback
@@ -72,7 +80,7 @@ Revert the panel PR. The live estate is returned to its declared state by Resume
 `docs/fiab/parity/estate-power.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: A · Branch: chore/estate-power-d-panel-g1 · Worktree: E:/Repos/_estate-d
+Wave: 3 · Blocked-by: estate-power-A-commercial-receipts · Branch: chore/estate-power-d-panel-g1 · Worktree: E:/Repos/_estate-d
 
 ## Hot files
 `estate-power-panel.tsx` sole owner. touches_bicep: no.

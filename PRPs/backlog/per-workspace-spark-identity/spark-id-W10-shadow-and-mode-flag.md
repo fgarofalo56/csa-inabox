@@ -72,10 +72,11 @@ Set `LOOM_SPARK_IDENTITY_MODE=off` and roll the env var (revision). Enforce -> s
 `docs/fiab/runbooks/workspace-identity-migration.md` (flag states).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 6 · Blocked-by: W03, W07 · Branch: feat/spark-id-w10-shadow · Worktree: E:/Repos/_spark-id-w10
+Wave: 6 · Blocked-by: spark-id-W03-lakehouse-roots, spark-id-W07-auto-bind-reconciler · Branch: feat/spark-id-w10-shadow · Worktree: E:/Repos/_spark-id-w10
 
 ## Hot files
 `admin-plane/main.bicep`, `params/*.bicepparam`: ONE bicep PR in flight; touches_bicep: yes.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Read PRPs/backlog/per-workspace-spark-identity/PRP.md, spark-id-W10-shadow-and-mode-flag.md. Add LOOM_SPARK_IDENTITY_MODE (off/shadow/enforce) + shadow evaluator + env-check row. Claim the bicep INTERLOCK slot first. Done = tsc + named vitest pass and az bicep build is clean; no default spend.

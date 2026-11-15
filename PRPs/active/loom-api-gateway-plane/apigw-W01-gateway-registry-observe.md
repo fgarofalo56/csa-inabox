@@ -84,3 +84,5 @@ Monitoring Reader grant harmless.
 **Receipts:** Commercial: Loom own gateway and brownfield apim-keystone-dev-tcigwh registered through discovery, stored counts equal ARM (10/0/1/20/23). GCC-High: Actions run 41531061836, apim-csa-loom-usgovvirginia registered and synced, probe MATCH on the API count only.
 
 **Not done, not claimed (tracked in #5210):** the deploy-owned gateway is not auto-registered on the live estate; APIs, Products, Named values and Policies tabs are not gateway-scoped for registered gateways; the G1 browser walk is incomplete (light theme, narrow width, Settings and MCP tabs, Gov click-walk); the Playwright uat specs never ran; Q18 (in-boundary GCC-High measurement) stays a declared gap. GCC-High has no GatewayLlmLogs and no MCP type.
+
+**Estate check 2026-11-14:** Commercial `/build-marker.txt` is `ea1a38d72`, which contains merge `387c3f629` (PR #5191), so the W1 code is live on Commercial; GCC-High was not re-measured today. The deploy-owned-gateway auto-registration receipt is still unmet. All declared gaps are owned by `apigw-W01b-close-gaps` (issues #5210, #5200, #5203, #5202, #5201, #5186, #5187, #5179).

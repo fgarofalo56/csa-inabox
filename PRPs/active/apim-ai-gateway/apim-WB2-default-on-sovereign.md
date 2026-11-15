@@ -85,11 +85,12 @@ Set `aoaiViaApim` back to empty in the three files and redeploy; console falls b
 `docs/fiab/apim-ai-gateway.md` per-boundary routing status.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 5 · Blocked-by: apim-WD (deployed to GCC-High) + #4460 · Branch: feat/apim-wb2 · Worktree: E:/Repos/_apim-wb2
+Wave: 5 · Blocked-by: apim-WD-service-families-and-sovereign-spend-control (apim-WD deployed to GCC-High; also #4460) · Branch: feat/apim-wb2 · Worktree: E:/Repos/_apim-wb2
 
 ## Hot files
 3 sovereign `params/*.bicepparam`. **Takes the bicep slot.** Exactly one bicep-touching PR may be in flight across apim-ai-gateway, `loom-api-gateway-plane` (apigw W1-2 / W7-5), LHDS and any other program (ledger: `PRPs/reference/INTERLOCK.md`). Before opening the PR, `gh pr list --state open --search "bicep in:title,body"` and confirm none is in flight; rebase on `main` after it merges.
 `touches_bicep: yes`
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

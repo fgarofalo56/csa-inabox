@@ -85,11 +85,12 @@ Merged is not done (`deploy-integrity.md` R2): until a deploy job EXECUTED steps
 `docs/fiab/apim-ai-gateway.md` observability + safety-ownership sections.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 6 · Blocked-by: apim-WD · Branch: feat/apim-we · Worktree: E:/Repos/_apim-we
+Wave: 6 · Blocked-by: apim-WD-service-families-and-sovereign-spend-control · Branch: feat/apim-we · Worktree: E:/Repos/_apim-we
 
 ## Hot files
 `platform/fiab/bicep/modules/admin-plane/apim.bicep`. **Takes the bicep slot.** Exactly one bicep-touching PR may be in flight across apim-ai-gateway, `loom-api-gateway-plane` (apigw W1-2 / W7-5), LHDS and any other program (ledger: `PRPs/reference/INTERLOCK.md`). Before opening the PR, `gh pr list --state open --search "bicep in:title,body"` and confirm none is in flight; rebase on `main` after it merges.
 `touches_bicep: yes`
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

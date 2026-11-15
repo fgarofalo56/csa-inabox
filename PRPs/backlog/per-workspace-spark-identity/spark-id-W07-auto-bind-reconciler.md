@@ -72,7 +72,8 @@ Set `LOOM_SPARK_IDENTITY_MODE=off`: hooks no-op and the reconciler idles. Backfi
 `docs/fiab/runbooks/workspace-identity-grants.md`, `workspace-identity-migration.md` (backfill).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 5 · Blocked-by: W05, W03 · Branch: feat/spark-id-w07-autobind · Worktree: E:/Repos/_spark-id-w07
+Wave: 5 · Blocked-by: spark-id-W05-scoper-and-synapse-rbac, spark-id-W03-lakehouse-roots · Branch: feat/spark-id-w07-autobind · Worktree: E:/Repos/_spark-id-w07
+Cross-program order: after `apigw-W04a-cost-centers-pricing` (both edit `apps/fiab-console/lib/azure/workspace-bindings.ts`; rebase on it).
 
 ## Hot files
 `lakehouse-abfss.ts` (after W01), `workspace-bindings.ts`; touches_bicep: no.
