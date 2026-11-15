@@ -121,14 +121,33 @@ function collect(name, sinceEpochSec) {
   const lines = `${r.stdout}\n${r.stderr}`.split(/\r?\n/)
     .filter((l) => l.length > 0 && !l.includes('[search-parameter-identity-cache'));
   if (!lines.some((l) => STARTED_ACCESS.test(l))) throw new Error('capture window has no access-log line: the operations never reached the server log');
-  return lines.join('\n') + '\n';
+  return normalizeIds(lines.join('\n') + '\n');
+}
+
+/**
+ * Replace random hex identifiers (trace ids 32, span ids 16, container id 64 / host name 12)
+ * with stable placeholders. They carry no meaning for the test, and secret scanners read
+ * high-entropy hex next to words like "token" (the HFJ_SPIDX_TOKEN table) as API keys. The
+ * mapping is consistent within one capture, so span/trace relationships stay readable.
+ */
+export function normalizeIds(text) {
+  const seen = new Map();
+  const label = (prefix, id) => {
+    if (!seen.has(id)) seen.set(id, `${prefix}-${String(seen.size + 1).padStart(4, '0')}`);
+    return seen.get(id);
+  };
+  return text
+    .replace(/\b[0-9a-f]{64}\b/g, (m) => label('container', m))
+    .replace(/\b[0-9a-f]{32}\b/g, (m) => label('trace', m))
+    .replace(/\b[0-9a-f]{16}\b/g, (m) => label('span', m))
+    .replace(/\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{12}\b/g, (m) => label('host', m));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const out = resolve(process.argv[2] ?? join(ROOT, 'temp', 'scrub-capture'));
   mkdirSync(out, { recursive: true });
   const { log, ops, image } = await captureHapi({ workDir: join(ROOT, 'temp', 'scrub-capture') });
-  writeFileSync(join(out, 'capture.log'), log);
+  writeFileSync(join(out, 'capture.txt'), log);
   writeFileSync(join(out, 'ops.json'), JSON.stringify({ image, ops }, null, 2) + '\n');
   process.stdout.write(`captured ${log.split('\n').length - 1} lines, ops=${JSON.stringify(ops)}\n`);
 }

@@ -44,7 +44,7 @@ async function getCapture() {
   } else {
     const dir = join(APP, 'fixtures');
     capture = {
-      log: readFileSync(join(dir, 'capture.log'), 'utf8'),
+      log: readFileSync(join(dir, 'capture.txt'), 'utf8'),
       ops: JSON.parse(readFileSync(join(dir, 'ops.json'), 'utf8')).ops,
       source: 'fixture (real HAPI output, captured earlier)',
     };
@@ -273,6 +273,64 @@ test('OTLP JSON: span attributes, data-point labels and exemplar attributes are 
   const dp = out.resourceMetrics[0].scopeMetrics[0].metrics[0].histogram.dataPoints[0];
   assert.deepEqual(dp.attributes, [kv('http.route', '/fhir/*')]);
   assert.deepEqual(dp.exemplars[0].filteredAttributes, []);
+});
+
+test('OTLP JSON: a kvlistValue attribute is scrubbed, an unknown value type is DROPPED (fail closed)', () => {
+  // BREAKS when: a value type the scrubber cannot read passes through (the original defect:
+  // kvlistValue and non-string array elements were returned untouched, so the nested
+  // `family` below survived), or a nested key is exempt from the PHI-key rule.
+  const sv = (s) => ({ stringValue: s });
+  const doc = { attributes: [
+    { key: 'x', value: { kvlistValue: { values: [{ key: 'family', value: sv(SENTINEL) }] } } },
+    { key: 'raw', value: { bytesValue: Buffer.from(SENTINEL).toString('base64') } },
+    { key: 'mixed', value: { arrayValue: { values: [sv('ok'), { bytesValue: 'WlotU0VOVElORUwtTEhEUw==' }] } } },
+    { key: 'future', value: { someNewValue: SENTINEL } },
+    { key: 'n', value: { intValue: '7' } },
+    { key: 'tags', value: { arrayValue: { values: [sv('a'), sv('b')] } } },
+  ] };
+  const out = scrubOtlp(doc);
+  assert.equal(SENTINEL_ANY.test(JSON.stringify(out)), false, JSON.stringify(out));
+  assert.deepEqual(out.attributes, [
+    { key: 'x', value: { kvlistValue: { values: [{ key: 'family', value: sv('[REDACTED]') }] } } },
+    { key: 'n', value: { intValue: '7' } },
+    { key: 'tags', value: { arrayValue: { values: [sv('a'), sv('b')] } } },
+  ]);
+});
+
+test('OTLP JSON: span name, status.message, and log-record body are scrubbed', () => {
+  // BREAKS when: scrubOtlp leaves `name`, `status.message` or a log `body` untouched
+  // (a span named from a URL, an error message echoing a value, a log body carrying a name).
+  const doc = {
+    resourceSpans: [{ scopeSpans: [{ spans: [{
+      name: `GET /fhir/Patient?family=${SENTINEL}`,
+      status: { code: 2, message: `Failure during REST processing: x.InvalidRequestException: HAPI-0450: bad ${SENTINEL}` },
+    }] }] }],
+    resourceLogs: [
+      { scopeLogs: [{ logRecords: [{ body: { stringValue: `Params[?family=${SENTINEL}]` } }, { body: { bytesValue: 'eA==' } }] }] },
+    ],
+  };
+  const out = scrubOtlp(doc);
+  assert.equal(SENTINEL_ANY.test(JSON.stringify(out)), false, JSON.stringify(out));
+  const span = out.resourceSpans[0].scopeSpans[0].spans[0];
+  assert.equal(span.name, 'GET /fhir/Patient?family=[REDACTED]');
+  assert.equal(span.status.message, 'Failure during REST processing: x.InvalidRequestException: HAPI-0450: [REDACTED-MESSAGE]');
+  assert.equal(span.status.code, 2);
+  const [a, b] = out.resourceLogs[0].scopeLogs[0].logRecords;
+  assert.deepEqual(a.body, { stringValue: 'Params[?family=[REDACTED]]' });
+  assert.deepEqual(b.body, { stringValue: '[REDACTED]' }, 'an unknown body type is replaced, not passed');
+});
+
+test('metric labels: a non-scalar value on an allowed key is dropped', () => {
+  // BREAKS when: an object/array value on an allow-listed label key passes through unscrubbed.
+  assert.deepEqual(scrubMetricLabels({ 'http.route': { family: SENTINEL }, 'http.request.method': 'GET' }), { 'http.request.method': 'GET' });
+});
+
+test('stream: a multibyte character split across chunks does not corrupt the line', async () => {
+  // Fixture arithmetic: U+00E9 is 2 bytes (0xC3 0xA9); the cut is between them. BREAKS when
+  // chunks are decoded independently (each half becomes U+FFFD).
+  const bytes = Buffer.from('café ok\n');
+  const out = await through(createScrubTransform(), [bytes.subarray(0, 4), bytes.subarray(4)]);
+  assert.equal(out, 'café ok\n');
 });
 
 // ---- 4. stream behaviour ---------------------------------------------------------------------

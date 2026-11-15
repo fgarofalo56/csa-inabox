@@ -67,6 +67,10 @@ Rules, in order of strength:
   agent stage, is) is **not implemented here**. The `Dockerfile` only packages the filter.
   Until the engine's stdout is actually routed through it on a stamp, nothing is scrubbed in
   production.
+- **Stack traces and wrapped exceptions.** Only the `Failure during REST processing` line and
+  `HAPI-NNNN` echo messages get message redaction. A stack-trace continuation line or a
+  `Caused by: ...` line gets only the shape rules (SSN, e-mail, MRN, DOB, DICOM) and the query
+  and JSON-key rules, so a wrapped exception whose message echoes a value is a leak path.
 - **Ids are not redacted.** `Patient/1000` stays in access logs by design
   (`SECURITY-AND-COMPLIANCE.md` 8.3: ids are logged, and logs are in the audit retention class).
 - **Network and storage:** request/response bodies on the wire and at rest are out of scope.
@@ -74,9 +78,9 @@ Rules, in order of strength:
 ## Tests
 
 ```bash
-node --test tests/health/log-scrub.test.mjs                        # replays a committed real capture; no Docker
+node --test tests/health/log-scrub.test.mjs                        # replays fixtures/capture.txt (real HAPI output committed as .txt: the root .gitignore ignores *.log); no Docker
 LHDS_SCRUB_LIVE=1 node --test tests/health/log-scrub.test.mjs      # re-captures from the real HAPI image (Docker, ~1 min)
-node apps/loom-health-scrubber/scripts/capture-hapi.mjs <outdir>   # refresh fixtures/ (capture.log, ops.json)
+node apps/loom-health-scrubber/scripts/capture-hapi.mjs <outdir>   # refresh fixtures/ (capture.txt, ops.json)
 ```
 
 `node:test` was chosen over vitest because the scrubber is plain ESM with no dependencies and
@@ -84,6 +88,6 @@ the sibling `apps/loom-health-fhir/tests/` already use it. The suite includes a 
 control: with the scrubber replaced by a byte copy the sentinel must be visible in the log,
 trace, metric and exception output, otherwise the "absent after scrubbing" test is vacuous.
 
-`fixtures/capture.log` drops ~24,600 background cache-refresh span lines (thread
+`fixtures/capture.txt` drops ~24,600 background cache-refresh span lines (thread
 `search-parameter-identity-cache-*`) from the real capture to stay under half a megabyte; every
 request-thread line is kept.

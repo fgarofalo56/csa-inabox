@@ -2,6 +2,7 @@
 // scrubbers, an OTLP-JSON walker, and a fail-closed line Transform stream.
 // No dependencies. Rules live in ./rules.mjs.
 import { Transform } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import {
   REDACTED, REDACTED_MESSAGE, QUERY_ALLOW, QUERY_SEGMENT, JSON_KEY_RULE, PHI_JSON_KEYS,
   REST_FAILURE_RULE, HAPI_ECHO_RULE, SHAPE_RULES, DROP_KEY, METRIC_LABEL_ALLOW,
@@ -78,33 +79,58 @@ export function scrubMetricLabels(labels) {
   const out = {};
   for (const [k, v] of Object.entries(labels ?? {})) {
     if (!METRIC_LABEL_ALLOW.has(k)) continue;
-    out[k] = typeof v === 'string' ? (v.length > 128 ? REDACTED : scrubLine(v)) : v;
+    if (typeof v === 'string') out[k] = v.length > 128 ? REDACTED : scrubLine(v);
+    else if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
   }
   return out;
 }
 
 // ---- OTLP JSON (the collector/exporter wire shape) ------------------------------------
-function anyValueToPlain(v) {
-  if (v == null || typeof v !== 'object') return v;
-  if ('stringValue' in v) return v.stringValue;
-  if ('arrayValue' in v) return (v.arrayValue.values ?? []).map(anyValueToPlain);
-  return v;
+// Fail closed: an AnyValue whose type is not understood (bytesValue, a future type, an array
+// holding anything unknown) makes scrubAnyValue return undefined and the attribute is DROPPED.
+const SCALAR_KINDS = ['intValue', 'doubleValue', 'boolValue'];
+function scrubString(attrName, s, labelMode) {
+  if (labelMode) return s.length > 128 ? REDACTED : scrubLine(s);
+  return scrubValue(attrName, s);
 }
-function plainToAnyValue(orig, plain) {
-  if (orig && 'stringValue' in orig) return { stringValue: plain };
-  if (orig && 'arrayValue' in orig) {
-    return { arrayValue: { values: (orig.arrayValue.values ?? []).map((o, i) => plainToAnyValue(o, plain[i])) } };
+function scrubAnyValue(v, attrName, labelMode) {
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const kinds = Object.keys(v);
+  if (kinds.length !== 1) return undefined;
+  const [kind] = kinds;
+  if (kind === 'stringValue') {
+    return typeof v.stringValue === 'string' ? { stringValue: scrubString(attrName, v.stringValue, labelMode) } : undefined;
   }
-  return orig;
+  if (SCALAR_KINDS.includes(kind)) return { [kind]: v[kind] };
+  if (kind === 'arrayValue') {
+    const values = v.arrayValue?.values ?? [];
+    if (!Array.isArray(values)) return undefined;
+    const out = values.map((e) => scrubAnyValue(e, attrName, labelMode));
+    return out.some((e) => e === undefined) ? undefined : { arrayValue: { values: out } };
+  }
+  if (kind === 'kvlistValue') {
+    const values = v.kvlistValue?.values ?? [];
+    return Array.isArray(values) ? { kvlistValue: { values: scrubKvList(values, labelMode) } } : undefined;
+  }
+  return undefined;
 }
 function scrubKvList(list, labelMode) {
-  const plain = {};
-  for (const kv of list) plain[kv.key] = anyValueToPlain(kv.value);
-  const clean = labelMode ? scrubMetricLabels(plain) : scrubAttributes(plain);
-  return list.filter((kv) => kv.key in clean).map((kv) => ({ key: kv.key, value: plainToAnyValue(kv.value, clean[kv.key]) }));
+  const out = [];
+  for (const entry of list) {
+    const name = entry && entry.key;
+    if (typeof name !== 'string') continue;
+    if (DROP_KEY.test(name) || ALWAYS_DROP_KEYS.has(name)) continue;
+    if (labelMode && !METRIC_LABEL_ALLOW.has(name)) continue;
+    const value = scrubAnyValue(entry.value, name, labelMode);
+    if (value !== undefined) out.push({ key: name, value });
+  }
+  return out;
 }
 
-/** Walk an OTLP/JSON document; attribute lists under metric data points / exemplars use the label allow-list. */
+/**
+ * Walk an OTLP/JSON document. Attribute lists under metric data points / exemplars use the
+ * label allow-list; span/metric `name`, status `message` and log-record `body` are scrubbed.
+ */
 export function scrubOtlp(node, labelMode = false) {
   if (Array.isArray(node)) return node.map((n) => scrubOtlp(n, labelMode));
   if (!node || typeof node !== 'object') return node;
@@ -113,6 +139,10 @@ export function scrubOtlp(node, labelMode = false) {
     const mode = labelMode || k === 'dataPoints' || k === 'exemplars';
     if ((k === 'attributes' || k === 'filteredAttributes') && Array.isArray(v)) {
       out[k] = scrubKvList(v, mode);
+    } else if (k === 'body' && v && typeof v === 'object') {
+      out[k] = scrubAnyValue(v, 'body', false) ?? { stringValue: REDACTED };
+    } else if ((k === 'name' || k === 'message') && typeof v === 'string') {
+      out[k] = scrubLine(v);
     } else {
       out[k] = scrubOtlp(v, mode);
     }
@@ -124,6 +154,7 @@ export function scrubOtlp(node, labelMode = false) {
 /** Transform: bytes in, scrubbed lines out. A line that cannot be scrubbed is DROPPED, never passed. */
 export function createScrubTransform(scrub = scrubLine) {
   let buf = '';
+  const decoder = new StringDecoder('utf8');
   let discarding = false;
   const emit = (self, line) => {
     let res;
@@ -133,7 +164,7 @@ export function createScrubTransform(scrub = scrubLine) {
   return new Transform({
     decodeStrings: false,
     transform(chunk, _enc, cb) {
-      buf += chunk.toString('utf8');
+      buf += decoder.write(chunk);
       let nl;
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl).replace(/\r$/, '');
@@ -150,6 +181,7 @@ export function createScrubTransform(scrub = scrubLine) {
       cb();
     },
     flush(cb) {
+      buf += decoder.end();
       if (buf.length > 0 && !discarding) emit(this, buf);
       cb();
     },
