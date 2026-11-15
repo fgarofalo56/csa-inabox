@@ -148,6 +148,16 @@ const REVIEWED_IMAGES = {
   // packages Apache Maven (Apache-2.0). BUILD-STAGE ONLY in apps/loom-health-fhir:
   // it compiles the plugin jar and is not copied into the shipped runtime image.
   'maven': 'Apache-2.0',
+  // github.com/dcm4che/dcm4chee-arc-light — tri-licensed MPL-1.1 / GPL-2.0+ / LGPL-2.1+
+  // (https://github.com/dcm4che/dcm4chee-arc-light/blob/master/LICENSE.txt, read 2026-11-15).
+  // Loom uses it UNDER THE MPL (ADR-002; the recorded D2/Q3 posture is "MPL/LGPL yes, AGPL no")
+  // and ships it unmodified apart from a jar-patch layer, so the reviewed license is MPL-1.1.
+  // LHDS W3-1 DICOM engine.
+  'dcm4che/dcm4chee-arc-psql': 'MPL-1.1',
+  // The dcm4che-published OpenLDAP image holding dcm4chee's configuration store. OpenLDAP is
+  // under the OpenLDAP Public License 2.8 (permissive); the dcm4che schema/config layered on it
+  // is MPL-1.1. Reviewed as OLDAP-2.8 (the engine itself); no copyleft obligation on the image.
+  'dcm4che/slapd-dcm4chee': 'OLDAP-2.8',
 };
 
 /**

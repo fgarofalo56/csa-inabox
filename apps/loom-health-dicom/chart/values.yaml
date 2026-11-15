@@ -1,0 +1,45 @@
+# Loom Health DICOM engine. Defaults are the hardened posture (ADR-002; CISA ICSMA-26-288-02).
+# Images are set per deploy by the stamp pipeline (digest-pinned); the repository defaults here
+# only name the build outputs.
+image:
+  archive: loom-health-dicom:5.35.2
+  ldap: loom-health-dicom-ldap:5.35.2
+  pullPolicy: IfNotPresent
+
+hardening:
+  # AE registration ENFORCED: only the listed calling AE titles are accepted. Turning this off
+  # is refused by the chart unless allowUnenforced is also set (dev stamps only).
+  aeEnforce: true
+  allowUnenforced: false
+  aeTitle: DCM4CHEE
+  aeAllowedCalling: [LOOMGW]
+  # HL7 authentication: only the listed "Application|Facility" senders are accepted.
+  hl7Auth: true
+  hl7AllowedSending: ["LOOMGW|LOOM"]
+  # DIMSE (DICOM association) listener. OFF in v1: DICOMweb only. When true the Service also
+  # exposes 11112 and the AE allow-list above is what protects it.
+  dimseEnabled: false
+
+# Existing secrets (created by the tenant provisioner; this chart never holds a value).
+secrets:
+  postgres: lhds-pg          # keys: username, password
+  ldap: lhds-ldap            # key: rootpass
+
+postgres:
+  host: tenant-pg.invalid    # placeholder (RFC 6761, never resolves): the stamp pipeline MUST override
+  database: pacsdb
+  jdbcParams: "?sslmode=require"
+
+archive:
+  javaOpts: "-Xms256m -Xmx4g -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true -Djboss.modules.system.pkgs=org.jboss.byteman -Djava.awt.headless=true"
+  storage: 32Gi
+  resources:
+    requests: {cpu: "1", memory: 5Gi}
+    limits: {memory: 6Gi}
+
+ldap:
+  dataStorage: 2Gi
+  configStorage: 1Gi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}

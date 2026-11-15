@@ -1,0 +1,6 @@
+apiVersion: v2
+name: loom-health-dicom
+description: "Loom Health DICOM engine (dcm4chee-arc-light), hardened defaults - AE registration enforced, HL7 sender allow-list, DIMSE listener off."
+type: application
+version: 0.1.0
+appVersion: "5.35.2"
