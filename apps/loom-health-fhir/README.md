@@ -5,7 +5,7 @@ The LHDS FHIR engine image (W2-1 of `PRPs/active/loom-health-data-services/`).
 | Part | What | State |
 |---|---|---|
 | Base | `hapiproject/hapi` **8.12.0**, pinned by digest to the image W0-7 measured (FHIR R4 4.0.1) | real |
-| Plugin | `/app/extra-classes/loom-health-fhir-plugin.jar`, Loom module layout (`pdp/`, `audit/`) | **skeleton**: loads, registers **no** interceptor. PDP + audit interceptors are W2-3. Nothing in this image authorizes or audits yet. |
+| Plugin | `/app/extra-classes/loom-health-fhir-plugin.jar`, Loom module layout (`pdp/`, `audit/`) | PDP + audit interceptors (W2-3, see "Interceptors" below). **Present, not wired**: nothing in this image enables them until the per-tenant engine config (W2-2) lists them. |
 | US Core | `hl7.fhir.us.core#6.1.0` + dependency closure, `/opt/loom/fhir/packages` | baked, sha256-pinned (`packages.lock.tsv`) |
 | Validator | `validator_cli.jar` **6.9.12** (same `org.hl7.fhir.core` as the server), `/opt/loom/fhir/validator` | baked, sha256-pinned (`validator.lock`) |
 | Validator cache | `/opt/loom/fhir/home/.fhir/packages`, built from the pinned tarballs | baked |
@@ -15,6 +15,37 @@ All fetching happens in the build's `tools` stage and aborts on any sha256 misma
 
 Engine configuration (partition mode, datasource, validation flags) is W2-2 and is **not** in
 this image; wiring the image into Container Apps/bicep is W2-6.
+
+## Interceptors (W2-3)
+
+Two HAPI interceptors in `plugin/`, registered in this order via `hapi.fhir.custom-interceptor-classes`
+(no-arg constructors, env-configured) or `LoomPlugin.register(...)`:
+
+1. `ai.loom.health.fhir.pdp.LoomPdpInterceptor`: before the engine does any work, `POST
+   /v1/data/lhds/authz/decision` on the in-cluster OPA with the raw bearer token and
+   `{service, interaction, tenant, base, resource_type, op, patient_compartment, categories}`
+   (`apps/loom-health-pdp/input-contract.json`). Only `result.allow == true` permits; deny is 403;
+   timeout, connection error, non-200 or a reply without `result` is **503**, never 200; no bearer is 401
+   (PDP not asked). `GET /metadata` is the one unauthenticated interaction (still audited). On the way out,
+   read/vread/history/search results are filtered by the token's SMART v2 scopes (type, `r`, `category`
+   constraint, patient compartment), so `_include` / `_revinclude` cannot leak other types or patients;
+   a single resource outside the scopes is 403.
+2. `ai.loom.health.fhir.audit.LoomAuditInterceptor`: exactly one record per interaction (permit, deny,
+   503, 401), as an R4 `AuditEvent` plus a flat `LhdsAudit_CL` row: one JSON line on stdout
+   (`"lhds_audit":1`) and, if `LOOM_HEALTH_AUDIT_DIR` is set, hourly append-only JSONL files for W8-4 to
+   seal. No token, body or query values (parameter names only).
+
+Env: `LOOM_HEALTH_PDP_URL` (required; unset means every request is 503), `LOOM_HEALTH_PDP_TIMEOUT_MS`
+(default 1500), `LOOM_HEALTH_TENANT` (engine serves one tenant; else the tenant is the first path segment of
+`/<tenant>/fhir/`), `LOOM_HEALTH_AUDIT_DIR`.
+
+Not verified: any run against the real OPA/Rego or on a live stamp (tests use a stand-in PDP that speaks the
+frozen API); the `LhdsAudit_CL` table and its ingestion rule do not exist yet (W8-4 / bicep). Known limits:
+a search page fetched via `_getpages` has no resource type, so only wildcard-type scopes cover it; a
+`patient/` token reading a non-Patient resource by id is denied (owner unknown before the read); the audit
+sink does not block the interaction if it fails to write.
+
+Test: `mvn -f apps/loom-health-fhir/plugin/pom.xml -q test` (embedded Jetty + real `RestfulServer`).
 
 ## Build
 
