@@ -10,8 +10,8 @@
 # image W0-7 measured (server 8.12.0, FHIR R4 4.0.1; PRPs/active/loom-health-data-
 # services/W0-RECEIPT.md section 1; same digest as scripts/measure/health/
 # fhir-engine-deploy.sh), plus:
-#   - /app/extra-classes/loom-health-fhir-plugin.jar  Loom plugin jar. SKELETON:
-#     it loads, it registers no interceptor (W2-3 adds PDP + audit).
+#   - /app/extra-classes/loom-health-fhir-plugin.jar  Loom plugin jar: registers the PDP
+#     authorization interceptor, then the AuditEvent interceptor (W2-3).
 #   - /opt/loom/fhir/packages/*.tgz   US Core 6.1.0 + its dependency closure.
 #   - /opt/loom/fhir/validator/validator_cli.jar   HL7 validator 6.9.12 (the same
 #     org.hl7.fhir.core version the pinned server ships).
@@ -34,9 +34,20 @@ RUN sh ./scripts/fetch-baked-assets.sh /build /baked
 
 COPY plugin/pom.xml ./plugin/pom.xml
 COPY plugin/src ./plugin/src
-RUN mvn -B -q -f plugin/pom.xml package \
- && java -cp plugin/target/loom-health-fhir-plugin.jar ai.loom.health.fhir.LoomPlugin | tee /tmp/plugin-load.json \
- && grep -q '"interceptors":0' /tmp/plugin-load.json
+# Tests are skipped here: the plugin tests start Jetty and run in the CI/test lanes
+# (mvn -f plugin/pom.xml test). The expected interceptor count is LIFTED from the plugin
+# source (one svc.registerInterceptor( call per interceptor), never hard-coded, and must be
+# >0, so a plugin that registers none fails the build; the load probe must report the same.
+# The probe runs with the plugin's provided HAPI deps on the class path: LoomPlugin.register()
+# links IInterceptorService, so the class cannot initialise without them (the runtime image
+# supplies them via PropertiesLauncher; see scripts/verify-image.sh).
+RUN set -eu; \
+    EXPECTED=$(grep -cE '^[[:space:]]*svc\.registerInterceptor\(' plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java); \
+    [ "$EXPECTED" -gt 0 ] || { echo "FAIL: LoomPlugin.java registers no interceptor"; exit 1; }; \
+    mvn -B -q -f plugin/pom.xml package -DskipTests; \
+    mvn -B -q -f plugin/pom.xml dependency:build-classpath -Dmdep.outputFile=/tmp/plugin-cp.txt; \
+    java -cp "plugin/target/loom-health-fhir-plugin.jar:$(cat /tmp/plugin-cp.txt)" ai.loom.health.fhir.LoomPlugin | tee /tmp/plugin-load.json; \
+    grep -q "\"interceptors\":$EXPECTED}" /tmp/plugin-load.json
 
 COPY check ./check
 RUN sh ./check/check-validator.sh /baked/validator/validator_cli.jar /baked/home /build/check
@@ -79,4 +90,4 @@ LABEL org.opencontainers.image.title="Loom Health FHIR Engine (HAPI FHIR JPA)"
 LABEL org.opencontainers.image.source="https://github.com/fgarofalo56/csa-inabox"
 LABEL ai.loom.health.hapi-version="8.12.0"
 LABEL ai.loom.health.validator-version="6.9.12"
-LABEL ai.loom.health.plugin-state="skeleton-no-interceptors"
+LABEL ai.loom.health.plugin-state="pdp-audit-interceptors"

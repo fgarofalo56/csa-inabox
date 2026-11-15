@@ -1,5 +1,5 @@
 /**
- * Reserved for the AuditEvent interceptor (LHDS W2-3). Intentionally empty in W2-1:
- * no class here means no audit hook is installed.
+ * One {@code AuditEvent} (and one {@code LhdsAudit_CL} row) per FHIR interaction (LHDS W2-3).
+ * Records carry identifiers and decisions only: no tokens, no bodies, no query values.
  */
 package ai.loom.health.fhir.audit;

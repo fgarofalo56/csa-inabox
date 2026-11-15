@@ -1,5 +1,5 @@
 /**
- * Reserved for the PDP authorization interceptor (LHDS W2-3). Intentionally empty in
- * W2-1: no class here means no authorization hook is installed.
+ * PDP authorization interceptor (LHDS W2-3): one decision call per interaction, fail closed,
+ * response filtering from the token's SMART scopes. Contract: CONTRACT-FREEZE-W2.md section 1.
  */
 package ai.loom.health.fhir.pdp;

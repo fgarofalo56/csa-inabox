@@ -6,7 +6,7 @@
 // assertion-design.md: every test names the input that breaks it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,21 +107,31 @@ test('CVE patch locks are sha256-pinned and wired into the runtime stage', () =>
   assert.match(runtime, /COPY --from=ospatch \/out\/status\.d\/ \/var\/lib\/dpkg\/status\.d\//);
 });
 
-test('the plugin is an honest skeleton: no interceptor classes before W2-3', () => {
-  // BREAKS when: a class other than LoomPlugin / package-info lands in the plugin without this
-  // test (and the "skeleton" label, README and Dockerfile LABEL) being updated with it.
-  const files = [];
-  const walk = (d) => readdirSync(d).forEach((n) => {
-    const p = join(d, n);
-    statSync(p).isDirectory() ? walk(p) : files.push(p.slice(APP.length + 1).replace(/\\/g, '/'));
-  });
-  walk(join(APP, 'plugin/src'));
-  assert.deepEqual(files.sort(), [
-    'plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java',
-    'plugin/src/main/java/ai/loom/health/fhir/audit/package-info.java',
-    'plugin/src/main/java/ai/loom/health/fhir/pdp/package-info.java',
-  ]);
-  assert.match(read(join(APP, 'plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java')), /return new String\[0\];/);
-  assert.match(dockerfile, /plugin-state="skeleton-no-interceptors"/);
-  assert.match(dockerfile, /"interceptors":0/); // the build greps the load probe for zero interceptors
+test('the image build and verify script expect exactly the interceptors the plugin registers', () => {
+  // BREAKS when: LoomPlugin.java registers 0 interceptors (a registerInterceptor line removed or
+  // commented out) so the list below shrinks; the register() calls and the
+  // registeredInterceptors() literal list disagree (2 vs 1); PDP/audit order flips; or the
+  // Dockerfile / verify-image.sh lose the ">0" guard or go back to a hard-coded "interceptors":0.
+  const src = read(join(APP, 'plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java'));
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const registered = [...code.matchAll(/svc\.registerInterceptor\(new (\w+)\(/g)].map((m) => m[1]);
+  assert.deepEqual(registered, ['LoomPdpInterceptor', 'LoomAuditInterceptor'], 'PDP must register before audit');
+  const literal = code.match(/new String\[\] \{([^}]*)\}/);
+  assert.ok(literal, 'registeredInterceptors() literal list not found');
+  assert.equal([...literal[1].matchAll(/"ai\.loom[^"]+"/g)].length, registered.length);
+  for (const [name, text] of [['Dockerfile', dockerfile], ['verify-image.sh', read(join(APP, 'scripts/verify-image.sh'))]]) {
+    assert.ok(text.includes("grep -cE '^[[:space:]]*svc\\.registerInterceptor\\('"),
+      `${name} must lift the expected count from LoomPlugin.java, anchored so a commented-out registration is not counted`);
+    assert.ok(text.includes('"$EXPECTED" -gt 0'), `${name} must fail when the plugin registers 0 interceptors`);
+    assert.doesNotMatch(text, /"interceptors":\d/, `${name} must not hard-code an interceptor count`);
+  }
+});
+
+test('the image is no longer labelled a skeleton, and the build skips plugin tests', () => {
+  // BREAKS when: the plugin-state LABEL reverts to "skeleton-no-interceptors" (or any value
+  // containing "skeleton"), or the mvn package step loses -DskipTests (the plugin tests start
+  // Jetty and belong to the CI test lane, not the image build).
+  assert.match(dockerfile, /LABEL ai\.loom\.health\.plugin-state="pdp-audit-interceptors"/);
+  assert.doesNotMatch(dockerfile, /skeleton/i);
+  assert.match(stage('tools'), /mvn -B -q -f plugin\/pom\.xml package -DskipTests/);
 });
