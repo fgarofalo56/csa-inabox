@@ -99,5 +99,5 @@ Start with the SBOM claim vs `build-fiab-images-acr-tasks.yml`, then W2-2 and W2
 |---|---|---|---|---|---|
 | W2-1 HAPI image + plugin skeleton + baked US Core | merged | feat/lhds-w2-1-hapi-image | sonnet | #5290 = ea1a38d72, merged, not deployed; docs #5292 open; SBOM + cosign UNVERIFIED | 2026-11-14 |
 | W2-2 engine config per tenant | todo | | sonnet | | 2026-11-14 |
-| W2-3 PDP + audit interceptors | todo | | sonnet | | 2026-11-14 |
-| W2-5 log scrubber + sentinel | todo | | sonnet | | 2026-11-14 |
+| W2-3 PDP + audit interceptors | merged | feat/lhds-w2-3-interceptors | sonnet | #5310 = `da67b2691`, merged, not deployed (wired into an engine only by W2-2). Two review rounds: an update-over-existing bypass was found and fixed, and the plugin CI lane `health-fhir-plugin-test.yml` was added (125 mvn tests). Built against the frozen contract ahead of W2-2; the assumptions are in the PR body. Follow-ups #5316, including the real-JPA hook receipt. | 2026-11-15 |
+| W2-5 log scrubber + sentinel | merged | feat/lhds-w2-5-scrubber | sonnet | #5312 = `ea0098278`, merged, not deployed. Real-HAPI capture fixture; the sentinel is visible unscrubbed in 4 channels and absent after scrubbing (22 tests). Image producer row added. The sidecar wiring beside the engine is NOT built (README). | 2026-11-15 |

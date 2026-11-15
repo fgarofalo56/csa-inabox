@@ -8,8 +8,9 @@
 |---|---|---|---|---|---|
 | [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | n/a | no Execution state table | sonnet / sonnet | required |
 | [W01-control-plane-identity-stamp](active/loom-health-data-services/W01-control-plane-identity-stamp.md) | P1 | 9/9 (100%) | merged 9 | sonnet / sonnet | required |
-| [W01b-close-deploy-receipts](active/loom-health-data-services/W01b-close-deploy-receipts.md) | P1 | 0/5 (0%) | todo 5 | sonnet / sonnet | required |
-| [W02a-fhir-core-build](active/loom-health-data-services/W02a-fhir-core-build.md) | P1 | 1/4 (25%) | todo 3, merged 1 | sonnet / sonnet | required |
+| [W01b-close-deploy-receipts](active/loom-health-data-services/W01b-close-deploy-receipts.md) | P1 | 0/5 (0%) | todo 3, verifying 2 | sonnet / sonnet | required |
+| [W02a-fhir-core-build](active/loom-health-data-services/W02a-fhir-core-build.md) | P1 | 3/4 (75%) | todo 1, merged 3 | sonnet / sonnet | required |
+| [W03a-dicom-core-a](active/loom-health-data-services/W03a-dicom-core-a.md) | P1 | 1/3 (33%) | todo 2, merged 1 | sonnet / sonnet | required |
 | [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 2/11 (18%) | todo 9, merged 2 | sonnet / sonnet | none |
 | [apim-W00-prerequisite-measurements](active/apim-ai-gateway/apim-W00-prerequisite-measurements.md) | P1 | 1/4 (25%) | todo 3, merged 1 | opus / sonnet | none |
 | [apim-WA-multi-endpoint-pool](active/apim-ai-gateway/apim-WA-multi-endpoint-pool.md) | P1 | 0/4 (0%) | todo 4 | opus / sonnet | required |
@@ -32,8 +33,7 @@
 | [estate-power-B-gov-resume-path](backlog/estate-power-receipts/estate-power-B-gov-resume-path.md) | P1 | 2 | estate-power-A-commercial-receipts | estate-power-A-commercial-receipts (backlog) | sonnet / sonnet | required |
 | [brain-scan-restore](backlog/loom-brain/brain-scan-restore.md) | P1 | 3 | - | - | sonnet / sonnet | none |
 | [W02b-fhir-core-ops](active/loom-health-data-services/W02b-fhir-core-ops.md) | P1 | 5 | W02a-fhir-core-build | W02a-fhir-core-build (active) | sonnet / sonnet | required |
-| [W03a-dicom-core-a](active/loom-health-data-services/W03a-dicom-core-a.md) | P1 | 6 | W01b-close-deploy-receipts | W01b-close-deploy-receipts (active) | sonnet / sonnet | required |
-| [W03b-dicom-core-b](active/loom-health-data-services/W03b-dicom-core-b.md) | P1 | 7 | W03a-dicom-core-a, W02b-fhir-core-ops | W03a-dicom-core-a (backlog); W02b-fhir-core-ops (backlog) | sonnet / sonnet | required |
+| [W03b-dicom-core-b](active/loom-health-data-services/W03b-dicom-core-b.md) | P1 | 7 | W03a-dicom-core-a, W02b-fhir-core-ops | W03a-dicom-core-a (active); W02b-fhir-core-ops (backlog) | sonnet / sonnet | required |
 | [W04-terminology](active/loom-health-data-services/W04-terminology.md) | P1 | 8 | W02a-fhir-core-build, W02b-fhir-core-ops | W02a-fhir-core-build (active); W02b-fhir-core-ops (backlog) | sonnet / sonnet | none |
 | [W05-conversion-hl7v2-ccda](active/loom-health-data-services/W05-conversion-hl7v2-ccda.md) | P1 | 9 | W02a-fhir-core-build, W02b-fhir-core-ops | W02a-fhir-core-build (active); W02b-fhir-core-ops (backlog) | sonnet / sonnet | required |
 | [W06a-bulk-export-import](active/loom-health-data-services/W06a-bulk-export-import.md) | P1 | 20 | W02b-fhir-core-ops, W03b-dicom-core-b | W02b-fhir-core-ops (backlog); W03b-dicom-core-b (backlog) | sonnet / sonnet | required |

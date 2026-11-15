@@ -286,7 +286,7 @@ flowchart LR
 | [`W01-control-plane-identity-stamp`](../active/loom-health-data-services/W01-control-plane-identity-stamp.md) | active | 1 | W00-measurement-spike | no | `-` |
 | [`W01b-close-deploy-receipts`](../active/loom-health-data-services/W01b-close-deploy-receipts.md) | active | 1 | W00-measurement-spike | yes | `-` |
 | [`W02a-fhir-core-build`](../active/loom-health-data-services/W02a-fhir-core-build.md) | active | 2 | W01b-close-deploy-receipts | yes | `-` |
-| [`W03a-dicom-core-a`](../active/loom-health-data-services/W03a-dicom-core-a.md) | backlog | 2 | W01b-close-deploy-receipts | yes | `-` |
+| [`W03a-dicom-core-a`](../active/loom-health-data-services/W03a-dicom-core-a.md) | active | 2 | W01b-close-deploy-receipts | yes | `-` |
 | [`W02b-fhir-core-ops`](../active/loom-health-data-services/W02b-fhir-core-ops.md) | backlog | 3 | W02a-fhir-core-build | no | `-` |
 | [`W03b-dicom-core-b`](../active/loom-health-data-services/W03b-dicom-core-b.md) | backlog | 4 | W03a-dicom-core-a, W02b-fhir-core-ops | no | `-` |
 | [`W04-terminology`](../active/loom-health-data-services/W04-terminology.md) | backlog | 4 | W02a-fhir-core-build, W02b-fhir-core-ops | yes | `-` |
