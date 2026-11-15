@@ -48,6 +48,15 @@ describe('control-plane.bicep authorization-server infra (W1-4)', () => {
     expect(health).toContain('authServerMissing: cpAuthMissing');
   });
 
+  it('derives issuer and FHIR edge base from the stamp ingress FQDN, and never defaults the AS client id', () => {
+    // Input that breaks it: reverting to `?? ''` for the issuer/FHIR base (control plane crash-loops again),
+    // a path other than /auth (the AS serves {issuerPath}/jwks.json), or inventing a client id default.
+    expect(health).toContain("'https://${cpIngressFqdn}/auth'");
+    expect(health).toContain("'https://${cpIngressFqdn}')");
+    expect(health).toContain('healthStamp!.outputs.stamp.ingressPublicFqdn');
+    expect(health).toContain("var cpAuthAsClientId = string(controlPlaneConfig.?authAsClientId ?? '')");
+  });
+
   it('signing key is EC P-384 sign/verify with no rotation policy, and Crypto User is scoped to that key', () => {
     // Input that breaks it: RSA (the service rejects any key that is not EC P-384), a rotation policy (a
     // new version the JWKS does not publish), or a vault-scope Crypto User grant.

@@ -59,6 +59,11 @@ on:
           - auto
           - containerApps
           - aks
+      control_plane_as_client_id:
+        description: 'Optional client id (GUID) of the authorization-server Entra app loom-health-cp-as. Empty = repository variable LOOM_HEALTH_CP_AS_CLIENT_ID, else an Entra lookup by display name that must find exactly one app. The issuer URL and FHIR edge base are derived from the stamp ingress, not supplied.'
+        type: string
+        required: false
+        default: ''
       allow_existing_hub:
         description: 'Reconcile an LHDS stamp that already exists in this subscription. Default false: if an rg-csa-loom-health-* group exists the run refuses rather than silently adopting or duplicating it (deploy-integrity R5). The hub itself (registry + Container Apps environment) must already exist either way.'
         type: boolean
@@ -319,6 +324,48 @@ jobs:
           echo "hub_rg=$HUB_RG" >> "$GITHUB_OUTPUT"
           echo "::notice::Hub: registry $ACR, resource group $HUB_RG, control plane audiences $(jq '.audiences | length' temp/cp.json)."
 
+      # W1b-1 (#5151): the authorization-server Entra app client id has no ARM source (it is an Entra
+      # object), so it is resolved HERE and handed to health.bicep as controlPlaneConfig.authAsClientId.
+      # The issuer and the FHIR edge base are derived inside health.bicep from the stamp ingress FQDN.
+      # Order: dispatch input, then repo variable LOOM_HEALTH_CP_AS_CLIENT_ID, then an Entra lookup by
+      # display name that must find EXACTLY one app (never guess between several). A full run that
+      # cannot resolve it FAILS here rather than deploying a control plane that crash-loops.
+      - name: Resolve the authorization-server Entra app client id
+        id: asclient
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.control_plane_audiences != '' }}
+        env:
+          AS_INPUT: ${{ inputs.control_plane_as_client_id }}
+          AS_VAR: ${{ vars.LOOM_HEALTH_CP_AS_CLIENT_ID || '' }}
+        run: |
+          set -uo pipefail
+          GUID='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          problem() { # $1 = message
+            if [ "$RUN_MODE" = "full" ]; then echo "::error::$1"; exit 1; fi
+            echo "::warning::$1 (what-if continues; a full run would stop here)."
+            exit 0
+          }
+          AS=""; SRC=""
+          if [ -n "$AS_INPUT" ]; then AS="$AS_INPUT"; SRC="dispatch input control_plane_as_client_id"
+          elif [ -n "$AS_VAR" ]; then AS="$AS_VAR"; SRC="repository variable LOOM_HEALTH_CP_AS_CLIENT_ID"
+          else
+            az ad app list --filter "displayName eq 'loom-health-cp-as'" --query "[].appId" -o json > temp/as-app.json 2> temp/as-app.err
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              problem "could not read Entra to find the app loom-health-cp-as (az exit $RC: $(head -c 300 temp/as-app.err)). Whether it exists is UNKNOWN. Set the repository variable LOOM_HEALTH_CP_AS_CLIENT_ID or the dispatch input control_plane_as_client_id, or grant the deploy identity Graph Application.Read.All."
+            fi
+            N=$(jq 'length' temp/as-app.json)
+            if [ "$N" != "1" ]; then
+              problem "found $N Entra apps named loom-health-cp-as; exactly 1 is required and this lane will not guess. Create it, or set LOOM_HEALTH_CP_AS_CLIENT_ID / control_plane_as_client_id."
+            fi
+            AS=$(jq -r '.[0]' temp/as-app.json); SRC="Entra lookup by display name loom-health-cp-as"
+          fi
+          if ! printf '%s' "$AS" | grep -Eq "$GUID"; then
+            problem "the authorization-server client id from the $SRC is not a GUID."
+          fi
+          jq --arg id "$AS" '. + {authAsClientId: $id}' temp/cp.json > temp/cp.next.json || { echo "::error::could not add authAsClientId to temp/cp.json"; exit 1; }
+          mv temp/cp.next.json temp/cp.json
+          echo "::notice::authorization-server client id resolved from the $SRC (an app registration id, not a secret)."
+
       - name: Refuse to adopt or duplicate an existing LHDS stamp
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.allow_existing_hub != true }}
         run: |
@@ -448,5 +495,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$AUDIENCES" != "" ] && [ "$DEPLOYED" != "true" ]; then
             echo "::error::control_plane_audiences was set but the control plane was NOT deployed: $(jq -r '.healthControlPlaneState.value.reason' temp/outputs.json)"
+            exit 1
+          fi
+          # A control plane missing any authorization-server value crash-loops (run 43333990195).
+          if [ "$DEPLOYED" = "true" ] && [ "$(jq -r '.healthControlPlaneState.value.authServerMissing | length' temp/outputs.json)" != "0" ]; then
+            echo "::error::the control plane deployed WITHOUT authorization-server values and will not start: missing $(jq -c '.healthControlPlaneState.value.authServerMissing' temp/outputs.json)."
             exit 1
           fi

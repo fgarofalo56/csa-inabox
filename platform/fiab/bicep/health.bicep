@@ -42,8 +42,9 @@
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
 //     required on aks), pdpReplicas (default 2),
-//   authIssuerUrl, authFhirBaseUrl, authAsClientId (authorization server; no deploy-time source,
-//     reported in healthControlPlaneState.authServerMissing when empty), authGraphConsentUrl
+//   authIssuerUrl, authFhirBaseUrl (optional overrides: default https://<stamp ingress fqdn>/auth and
+//     https://<stamp ingress fqdn>), authAsClientId (the Entra app loom-health-cp-as; supplied by
+//     deploy-health.yml; reported in healthControlPlaneState.authServerMissing when empty), authGraphConsentUrl
 //     (optional), authSigningKeyId (optional; default = a key created in the stamp vault),
 //   apim (object; publishes the lhds-tenant-routing fragment and grants the APIM identity
 //     Reader on the control plane; keys documented at the APIM section below).
@@ -148,10 +149,20 @@ var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed
 
 // Authorization server settings (W1-4). The signing key is created in the stamp vault unless
 // authSigningKeyId is supplied. The three values below have no deploy-time source (the public
-// issuer and FHIR edge URLs and the AS Entra app are not produced by this template), so a missing
-// one is reported in healthControlPlaneState.authServerMissing instead of being implied configured.
-var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? '')
-var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? '')
+// W1b-1 auto-bind: the issuer URL and the FHIR edge base are DERIVED from the stamp ingress public
+// FQDN (the Application Gateway public IP DNS label, produced by ingress.bicep), not supplied by an
+// operator. controlPlaneConfig.authIssuerUrl / authFhirBaseUrl still win when set (a custom domain).
+//   issuer        = https://<ingress fqdn>/auth     (the AS serves {issuerPath}/jwks.json, /{tenant}/token, ...)
+//   fhir edge base = https://<ingress fqdn>         (the AS appends /{tenant}/fhir per tenant)
+// The AS Entra app client id is an Entra object with no ARM source, so it cannot be derived here:
+// deploy-health.yml resolves it (input, repo variable, or an exactly-one Entra lookup) and passes
+// controlPlaneConfig.authAsClientId. If it is still empty it is reported in
+// healthControlPlaneState.authServerMissing, and the workflow fails the run on a non-empty list.
+// Derived values are https even while the ingress has no TLS listener (ingressTlsConfigured=false):
+// the identifiers are stable, but a client cannot complete TLS until tlsCertificateSecretUri is set.
+var cpIngressFqdn = healthDeploy ? string(healthStamp!.outputs.stamp.ingressPublicFqdn) : ''
+var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}/auth'))
+var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'))
 var cpAuthAsClientId = string(controlPlaneConfig.?authAsClientId ?? '')
 var cpAuthMissing = concat(
   empty(cpAuthIssuerUrl) ? ['authIssuerUrl'] : [],
@@ -222,7 +233,8 @@ module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
 // and workspace), so the stamp cannot hold it without a cycle. controlPlaneConfig.apim keys:
 //   serviceName (EXISTING APIM service; empty = fragment not published, REQUIRED to enable),
 //   resourceGroup + subscriptionId (default: the stamp group / this subscription),
-//   authServerIssuer (REQUIRED: public https issuer URL of the LHDS authorization server),
+//   authServerIssuer (REQUIRED: public https issuer URL of the LHDS authorization server; it gates a
+//     module condition, which cannot read the stamp-derived issuer, so it is not defaulted - W1-6 routing gap #5149),
 //   controlPlaneBaseUrl (https; default https://<fqdn> on containerApps, required on aks),
 //   defaultRequestsPerMinute (default 600).
 // The openid-config URL is derived as {issuer}/.well-known/openid-configuration: a
