@@ -1,0 +1,2 @@
+# The captured HAPI output is a byte-exact fixture; never let a checkout rewrite its line endings.
+fixtures/* -text
