@@ -1,6 +1,6 @@
 ---
 name: W03a-dicom-core-a
-status: backlog
+status: active
 priority: P1
 order: 6
 depends_on: [W01b-close-deploy-receipts]
@@ -90,6 +90,6 @@ Review required on all three items (security defaults, irreversible layout, auth
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W3-1 dcm4chee image + hardened defaults + Helm | todo | | sonnet | | 2026-11-14 |
+| W3-1 dcm4chee image + hardened defaults + Helm | merged | feat/lhds-w3-1-dcm4chee-image | sonnet | #5313 = `474898abf`, merged, not deployed. Local live verify passed (registered and unregistered AE, HL7, DIMSE off); Trivy CRITICAL 3 -> 0 through a patch layer; producer rows for the archive and LDAP images. #5315 (NetworkPolicy, AE enumeration, fail-closed read-back, `aeEnforce` string bypass) MUST land before any DICOM stamp is live. | 2026-11-15 |
 | W3-2 Blob storage layout, CMK, lifecycle | todo | | sonnet | | 2026-11-14 |
 | W3-3 DICOMweb gateway | todo | | sonnet | | 2026-11-14 |

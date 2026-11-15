@@ -34,7 +34,7 @@ that do not exist yet (child services, per-tenant evacuate) - see Assumptions; G
 > means the engine behind it is absent, not the URL.
 > ASSUMPTION: the parity rows for `health-tenant` that need engines (child services, per-tenant evacuate/cost/evidence) move to
 > W09 (Lane B owns it); W1b builds only rows whose backend exists now (Access, Keys list/rotate if `tenant-jobs.ts` supports it).
-> Unresolved: the operator must confirm that descoping.
+> Operator CONFIRMED that descoping on 2026-11-15; the rows are tracked to W09 in #5309.
 
 ## Acceptance criteria
 - [ ] `GET <cp>/api/health/stamps` through the console BFF returns `{ok:true,...}` with the dev01 stamp; fails (503/`authServerMissing`) if any of the three env values is unset.
@@ -116,8 +116,8 @@ checklist, each with a run id or response body, posted on #5151. Report merged/d
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W1b-1 wire env values + Entra bootstrap, activate revision | todo | feat/lhds-w1b-1-env | sonnet | #5223 bootstrap merged, never run | 2026-11-14 |
+| W1b-1 wire env values + Entra bootstrap, activate revision | verifying | feat/lhds-w1b-1-env | sonnet | #5304 merged (`cbd434703`). Commercial: deploy-health full run 43726729661 (deploy job 17 steps); bootstrap run 43727458723 (`OK: 6 write(s); federated credential created`, allowlist = 2 app ids). Revision `loom-health-cp--0000002` Running with ISSUER/FHIR_BASE/AS_CLIENT set. OWED: BFF `GET /api/health/stamps` = `{ok:true}` receipt. Note: FHIR_BASE_URL is the ingress host with no `/fhir` suffix; confirm against the Assumption above. | 2026-11-15 |
 | W1b-2 Commercial exercise: bundle publish, synthetic tenant, edge probe | todo | | sonnet | #5162, #5149 | 2026-11-14 |
 | W1b-3 Inferno SMART kit | todo | | sonnet | #5151 | 2026-11-14 |
-| W1b-4 health-tenant editor: paused banner, Fix-it, G1 walk | todo | | sonnet | #5161 | 2026-11-14 |
+| W1b-4 health-tenant editor: paused banner, Fix-it, G1 walk | verifying | feat/lhds-w1b-4-tenant-editor | sonnet | #5311 merged (`2ac32a01c`) and DEPLOYED on Commercial (build marker `2ac32a01c`, 2026-11-15T15:02Z). OWED: G1 walk (dark, light, narrow), blocked on `loom-ui-verify` (last 3 runs failed). Follow-ups #5314; W09 descopes #5309. `autoBindOnCreate` was already wired (#5161 premise stale). | 2026-11-15 |
 | W1b-5 GCC-High: Trivy+cosign gate then deploy-health via Actions | todo | | sonnet | #4584, #5123 | 2026-11-14 |

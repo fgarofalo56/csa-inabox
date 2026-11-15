@@ -13,7 +13,7 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-14): ACTIVE.** W00 merged; W01 merged, not deployed (first Commercial stamp applied 2026-11-12/13, control plane deployed but not functional); W02a W2-1 merged (#5290), not deployed, docs PR #5292 open; everything from W02b on is backlog; W13 (class-M characterisation) is blocked on an operator spend approval that has not been given.
+**Status (2026-11-15): ACTIVE.** W00 merged. W01 merged. W01b in progress on Commercial: W1b-1 is deployed (control plane revision `--0000002` Running with all three auth values plus the Entra wiring from bootstrap run 43727458723), but its BFF `/api/health/stamps` receipt is still owed. W1b-4 merged and deployed (the estate rolled to `2ac32a01c`), G1 walk owed. W02a: W2-1, W2-3 and W2-5 merged, not deployed. W03a: W3-1 merged, not deployed. The bicep-touching W2-2 and W3-2 wait for the global bicep slot. W13 (class-M characterisation) is blocked on an operator spend approval that has not been given.
 
 | Field | Value |
 |---|---|
@@ -142,10 +142,10 @@ W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c, W08b, W10)
 |---|---|---|---|---|---|
 | W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | W0-7 #5118; DEV proof #5107; pass bars carried to W13 | 2026-11-14 |
 | W01-control-plane-identity-stamp | in-progress | main | sonnet | W1 items merged, not deployed (#5122..#5287); detail in W01 file | 2026-11-14 |
-| W01b-close-deploy-receipts | todo | | sonnet | W01 deploy receipts on #5151; cp crash-loops, auth vars missing | 2026-11-14 |
-| W02a-fhir-core-build | in-progress | | sonnet | W2-1 merged #5290, merged not deployed; docs PR #5292 open | 2026-11-14 |
+| W01b-close-deploy-receipts | in-progress | feat/lhds-w1b-close-receipts | sonnet | W1b-1 deployed on Commercial (deploy-health 43726729661, bootstrap 43727458723; BFF receipt owed). W1b-4 #5311 deployed, G1 owed. W1b-2/3/5 todo. Detail in W01b file. | 2026-11-15 |
+| W02a-fhir-core-build | in-progress | | sonnet | W2-1 #5290, W2-3 #5310, W2-5 #5312 merged, not deployed; W2-2 waits on the bicep slot | 2026-11-15 |
 | W02b-fhir-core-ops | todo | | sonnet | | 2026-11-14 |
-| W03a-dicom-core-a | todo | | sonnet | | 2026-11-14 |
+| W03a-dicom-core-a | in-progress | | sonnet | W3-1 #5313 merged, not deployed; #5315 must land before any DICOM stamp is live | 2026-11-15 |
 | W03b-dicom-core-b | todo | | sonnet | | 2026-11-14 |
 | W04-terminology | todo | | sonnet | | 2026-11-14 |
 | W05-conversion-hl7v2-ccda | todo | | sonnet | | 2026-11-14 |
@@ -163,7 +163,7 @@ W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c, W08b, W10)
 | W12-compliance-evidence-pack | todo | | sonnet | | 2026-11-14 |
 | W13-class-m-characterisation | blocked | | sonnet | spend NOT approved 2026-11-14 | 2026-11-14 |
 
-Nothing in the table is exercised in any cloud beyond the Commercial dev01 stamp apply on #5151. IL5 and DoD are supported-in-code, never exercised; GCC is never exercised (`cloud-parity.md`).
+Exercised so far: Commercial only. The dev01 stamp apply on #5151, plus the 2026-11-15 control-plane deploy and bootstrap; GCC-High has no LHDS receipt (W1b-5, blocked by #5123). IL5 and DoD are supported-in-code, never exercised; GCC is never exercised (`cloud-parity.md`).
 
 ## 4. Open decisions that gate waves
 
