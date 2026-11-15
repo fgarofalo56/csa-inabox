@@ -143,3 +143,46 @@ test('harden.sh with DIMSE_ENABLED=true writes the DICOM ports (positive control
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.ldif, /^dicomPort: 11112$/m);
 });
+
+// ---- jar patch layer: versions are lifted from the Dockerfile, thresholds are the advisory fixes ----
+const dockerfile = read(join(APP, 'Dockerfile'));
+const arg = (n) => dockerfile.match(new RegExp(`^ARG ${n}=(\\S+)$`, 'm'))?.[1];
+const allArgs = (n) => [...dockerfile.matchAll(new RegExp(`^ARG ${n}=(\\S+)$`, 'mg'))].map((m) => m[1]);
+const atLeast = (have, min) => {
+  const a = have.split(/[.-]/).map((x) => parseInt(x, 10));
+  const b = min.split(/[.-]/).map((x) => parseInt(x, 10));
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = Number.isNaN(a[i]) ? 0 : (a[i] ?? 0);
+    const y = Number.isNaN(b[i]) ? 0 : (b[i] ?? 0);
+    if (x !== y) return x > y;
+  }
+  return true;
+};
+
+test('patched jars are at or above the CVE fix versions, pinned by sha256, with module.xml renamed', () => {
+  // BREAKS when: NETTY_HANDLER_VERSION drops below 4.1.137 (CVE-2026-75595) or BCPROV_VERSION below
+  // 1.85 (CVE-2026-8763); a sha256 is not 64 hex; the module.xml sed is dropped or does not use
+  // the same ARG as the jar it installs (the archive would fail to load the module).
+  const netty = arg('NETTY_HANDLER_VERSION');
+  const bc = arg('BCPROV_VERSION');
+  assert.ok(netty && bc, 'Dockerfile lacks the NETTY_HANDLER_VERSION / BCPROV_VERSION ARGs');
+  assert.ok(atLeast(netty, '4.1.137'), `netty-handler ${netty} is below the CVE-2026-75595 fix 4.1.137`);
+  assert.ok(atLeast(bc, '1.85'), `bcprov ${bc} is below the CVE-2026-8763 fix 1.85`);
+  assert.match(arg('NETTY_HANDLER_SHA256') ?? '', /^[0-9a-f]{64}$/);
+  assert.match(arg('BCPROV_SHA256') ?? '', /^[0-9a-f]{64}$/);
+  assert.match(dockerfile, /sed -i "s#netty-handler-4\.1\.136\.Final\.jar#netty-handler-\$\{NETTY_HANDLER_VERSION\}\.jar#"/);
+  assert.match(dockerfile, /sed -i "s#bcprov-jdk18on-1\.84\.jar#bcprov-jdk18on-\$\{BCPROV_VERSION\}\.jar#"/);
+  assert.match(dockerfile, /sha256sum -c -/);
+  // two stages each declare the version: they must agree
+  assert.equal(new Set(allArgs('NETTY_HANDLER_VERSION')).size, 1, 'NETTY_HANDLER_VERSION differs between stages');
+  assert.equal(new Set(allArgs('BCPROV_VERSION')).size, 1, 'BCPROV_VERSION differs between stages');
+});
+
+test('version comparator has positive and negative controls (else the test above could not fail)', () => {
+  // BREAKS when: the comparator is inverted or ignores the patch component:
+  // 4.1.136 < 4.1.137, 1.84 < 1.85, equal passes, 4.2.0 passes.
+  assert.equal(atLeast('4.1.136.Final', '4.1.137'), false);
+  assert.equal(atLeast('1.84', '1.85'), false);
+  assert.equal(atLeast('4.1.137.Final', '4.1.137'), true);
+  assert.equal(atLeast('4.2.0.Final', '4.1.137'), true);
+});

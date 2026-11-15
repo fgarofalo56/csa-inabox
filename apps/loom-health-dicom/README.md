@@ -25,6 +25,14 @@ Hardening lives in the LDAP configuration store, not the image, because that is 
   The chart exposes 11112 only when `hardening.dimseEnabled=true`.
 - The chart refuses `aeEnforce=false` unless `allowUnenforced=true`.
 
+## Patched jars
+
+Upstream 5.35.2 ships netty-handler 4.1.136 (CVE-2026-75595) and bcprov 1.84 (CVE-2026-8763). The Dockerfile
+swaps in netty-handler 4.1.137.Final and bcprov 1.85 (sha256-verified at build) and rewrites the WildFly
+`module.xml` resource-root names. `bin/client/jboss-client.jar`, which shades the old netty and is not loaded by
+the server, is removed. netty-handler is now one patch release ahead of its sibling netty modules (4.1.136);
+patch releases are binary compatible and the live run boots and serves with this mix.
+
 ## Not covered here
 
 - DICOMweb itself is unauthenticated (the upstream `unsecure` WAR): it must only be reachable through the Loom
