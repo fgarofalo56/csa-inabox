@@ -1,0 +1,12 @@
+{
+  "name": "@csa-loom/health-scrubber",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom Health Data Services PHI log scrubber: a stdin-to-stdout line filter plus attribute/label/OTLP-JSON scrubbers. No dependencies.",
+  "license": "MIT",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "test": "node --test ../../tests/health/"
+  }
+}

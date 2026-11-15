@@ -1,0 +1,33 @@
+{
+  "image": "hapiproject/hapi@sha256:0ff86aac4c7bd13a1ee226444a70263bb46ed1c28ef543c30a44f865b80ca04e",
+  "ops": [
+    {
+      "op": "create",
+      "status": 201
+    },
+    {
+      "op": "read",
+      "status": 200
+    },
+    {
+      "op": "search",
+      "status": 200
+    },
+    {
+      "op": "everything",
+      "status": 200
+    },
+    {
+      "op": "delete",
+      "status": 200
+    },
+    {
+      "op": "read-after-delete",
+      "status": 410
+    },
+    {
+      "op": "invalid-create",
+      "status": 400
+    }
+  ]
+}
