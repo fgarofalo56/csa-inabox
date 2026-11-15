@@ -35,6 +35,7 @@ import type { AzureResourceNode, BrainGraphView, DanglingEdge, Finding } from '.
 import {
   CONSOLE_ID,
   DIRECTLAKE_FQDN,
+  DIRECTLAKE_ID,
   ENV_DOMAIN,
   RG,
   SUB,
@@ -622,6 +623,36 @@ describe('CONTRACT — the DIFFERENTIAL: verdicts follow graph CONTENT, never gr
       const b = paddedRun.results.find((r) => r.detector === a.detector)!;
       expect(skipsOf(b), `${a.detector} skipped a different set at scale`).toEqual(skipsOf(a));
     }
+  });
+
+  it('config-drift keeps flagging REAL drift once the graph passes 50 edges (#3964)', () => {
+    // WHY A SEPARATE GRAPH. On every estate graph above, config-drift has ZERO
+    // findings (2 pairs, both cleared), so a bypass inside its "compared and
+    // AGREE" clearing branch -- `if (kind === null || graph.edges.length > 50)` --
+    // had nothing to hide and stayed green (measured RC=0, 247/247). This graph
+    // plants one real drift pair: the template declares LOOM_DIRECTLAKE_URL, the
+    // running app carries ''. Under that bypass the padded run clears it
+    // (finding 1 -> 0) while the ledger still balances.
+    const driftOptions = {
+      consoleEnvOverride: [
+        { name: 'LOOM_BROKER_URL', value: '' },
+        { name: 'LOOM_DIRECTLAKE_URL', value: '' },
+      ],
+      extraConsoleBindings: { LOOM_DIRECTLAKE_URL: DIRECTLAKE_ID },
+    };
+    const small = buildFixtureGraph(driftOptions);
+    const big = buildFixtureGraph({ ...driftOptions, extraExtractions: [inertPaddingExtraction(60)] });
+    // POPULATION: the two graphs are on opposite sides of the 50-edge threshold.
+    expect(small.edges.length).toBeLessThan(50);
+    expect(big.edges.length).toBeGreaterThan(50);
+
+    const a = runDetectors(small).results.find((r) => r.detector === 'config-drift')!;
+    const b = runDetectors(big).results.find((r) => r.detector === 'config-drift')!;
+    // POSITIVE: real drift is flagged on BOTH graphs (kills the bypass: 0 on `big`).
+    expect(a.findings.length, 'small graph must carry the planted drift').toBe(1);
+    expect(b.findings.length, 'config-drift stopped flagging real drift at scale').toBe(1);
+    expect(b.dispositions).toEqual(a.dispositions);
+    expect(b.findings[0]!.title).toBe(a.findings[0]!.title);
   });
 
   it('CONTROL: the differential CAN fail — the SAME padded estate PLUS one real app differs', () => {

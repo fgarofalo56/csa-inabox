@@ -33,36 +33,95 @@ import * as detectors from '../../detectors';
 
 const DETECTORS_DIR = join(__dirname, '..', '..', 'detectors');
 
-function sourceFiles(dir: string): string[] {
+/**
+ * EVERY regular file under `dir`, whatever its extension. The `.ts` filter used
+ * to live INSIDE this collector, so a `detectors/shell.mjs` was not a violation
+ * the guard reported, it was a file the guard could not see. The extension is
+ * asserted as its own test below instead (#3963 residual B).
+ */
+function allEntries(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
-    else if (entry.endsWith('.ts')) out.push(full);
+    if (statSync(full).isDirectory()) out.push(...allEntries(full));
+    else out.push(full);
   }
   return out;
 }
 
-const FORBIDDEN: readonly { readonly name: string; readonly re: RegExp; readonly control: string }[] = [
+/**
+ * Every way a module can be named: static `from`, bare side-effect `import 'x'`,
+ * dynamic `import('x')`, CJS `require('x')`. These patterns used to be keyed to
+ * ONE spelling (`from 'node:fs'`), so `from 'fs'`, `await import('node:fs')` and
+ * `require('@azure/identity')` all passed (#3963 residual A). Same helper as
+ * `__tests__/graph/mutation.test.ts`.
+ */
+function specifierRe(spec: string): string {
+  return `(?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*['"]${spec}['"]`;
+}
+
+/** A node builtin, bare or `node:`-prefixed, with optional subpath. */
+function builtinRe(name: string): string {
+  return specifierRe(`(?:node:)?${name}(?:/[A-Za-z0-9_-]+)?`);
+}
+
+const FORBIDDEN: readonly {
+  readonly name: string;
+  readonly re: RegExp;
+  readonly controls: readonly string[];
+}[] = [
   {
     name: 'Azure SDK import',
-    re: /from\s+['"]@azure\//,
-    control: "import { ContainerAppsAPIClient } from '@azure/arm-appcontainers';",
+    re: new RegExp(specifierRe('@azure/[^\'"]+')),
+    controls: [
+      "import { ContainerAppsAPIClient } from '@azure/arm-appcontainers';",
+      "import '@azure/identity';",
+      "const cred = await import('@azure/identity');",
+      "const cred = require('@azure/identity');",
+    ],
   },
   {
     name: 'network call',
-    re: /\bfetch\s*\(|\baxios\b|from\s+['"]node:https?['"]/,
-    control: 'const r = await fetch(url);',
+    re: new RegExp(
+      [
+        '\\bfetch\\s*\\(',
+        '\\baxios\\b',
+        builtinRe('https?'),
+        specifierRe('undici'),
+        specifierRe('node-fetch'),
+      ].join('|'),
+    ),
+    controls: [
+      'const r = await fetch(url);',
+      "import https from 'node:https';",
+      "import https from 'https';",
+      "import http from 'http';",
+      "const { request } = await import('node:https');",
+      "const undici = require('undici');",
+    ],
   },
   {
     name: 'filesystem access',
-    re: /from\s+['"]node:fs['"]|require\(['"]fs['"]\)/,
-    control: "import { readFileSync } from 'node:fs';",
+    re: new RegExp(builtinRe('fs')),
+    controls: [
+      "import { readFileSync } from 'node:fs';",
+      "import { writeFileSync } from 'fs';",
+      "import { readFile } from 'node:fs/promises';",
+      "const fs = await import('node:fs');",
+      "const fs = require('fs');",
+    ],
   },
   {
     name: 'process spawn',
-    re: /from\s+['"]node:child_process['"]|\bexecSync\s*\(/,
-    control: "import { execSync } from 'node:child_process';",
+    re: new RegExp([builtinRe('child_process'), '\\b(?:execSync|execFileSync|spawnSync)\\s*\\('].join('|')),
+    controls: [
+      "import { execSync } from 'node:child_process';",
+      "import { spawn } from 'child_process';",
+      "const cp = await import('node:child_process');",
+      "const cp = require('child_process');",
+      'const out = execFileSync(bin, args);',
+      'const out = spawnSync(bin, args);',
+    ],
   },
   {
     // The precise form of "cannot mutate Azure". A name heuristic was rejected
@@ -73,17 +132,40 @@ const FORBIDDEN: readonly { readonly name: string; readonly re: RegExp; readonly
     // guard gets talked down to nothing.
     name: 'ARM write verb',
     re: /\bmethod\s*:\s*['"](PUT|POST|PATCH|DELETE)['"]/i,
-    control: "await http({ method: 'DELETE', url });",
+    controls: ["await http({ method: 'DELETE', url });", 'await http({ method: "put", url });'],
   },
   {
     name: 'self-approving proposal',
     re: /requiresHumanApproval\s*:\s*false|mutatesAzure\s*:\s*true/,
-    control: 'return { kind: "proposal", requiresHumanApproval: false };',
+    controls: ['return { kind: "proposal", requiresHumanApproval: false };'],
   },
 ];
 
+/**
+ * NEGATIVE controls: legitimate detector code that NO pattern may match. A
+ * pattern broadened to /fs/ passes every positive control and flags the whole
+ * directory; only a benign corpus catches that.
+ */
+const BENIGN: readonly string[] = [
+  "import type { BrainGraphView } from '../graph';",
+  "import { canonicalPath } from '../graph/node-id';",
+  'const scaleUnknownCount = nodes.filter((n) => n.scale === undefined).length;',
+  "const method = 'GET';",
+  'export function fetchPlanFromGraph(graph: BrainGraphView) { return graph.nodes; }',
+  'const requiresHumanApproval = true;',
+];
+
 describe('the detectors are PURE — they have no client to mutate with', () => {
-  const files = sourceFiles(DETECTORS_DIR);
+  const files = allEntries(DETECTORS_DIR);
+
+  it('EXTENSION: every file under lib/brain/detectors is TypeScript, so none escapes the scan', () => {
+    const nonTs = files.filter((f) => !f.endsWith('.ts')).map((f) => f.replace(/\\/g, '/'));
+    expect(
+      nonTs,
+      'a non-.ts file under lib/brain/detectors is not covered by the purity patterns below; ' +
+        'either it does not belong here or this guard must be taught to read it',
+    ).toEqual([]);
+  });
 
   it('POPULATION: the guard actually read the modules it claims to watch', () => {
     expect(files.length).toBeGreaterThanOrEqual(8);
@@ -106,8 +188,19 @@ describe('the detectors are PURE — they have no client to mutate with', () => 
 
   it('CONTROL: every forbidden-pattern matcher can actually fire', () => {
     for (const p of FORBIDDEN) {
-      expect(p.re.test(p.control), `${p.name} matcher failed its own control`).toBe(true);
+      expect(p.controls.length, `${p.name} has no controls`).toBeGreaterThan(0);
+      for (const c of p.controls) {
+        expect(p.re.test(c), `${p.name} matcher failed its control: ${c}`).toBe(true);
+      }
     }
+  });
+
+  it('NEGATIVE CONTROL: no matcher fires on legitimate detector code', () => {
+    const hits: string[] = [];
+    for (const line of BENIGN) {
+      for (const p of FORBIDDEN) if (p.re.test(line)) hits.push(`${p.name} <- ${line}`);
+    }
+    expect(hits).toEqual([]);
   });
 
   it('no detector imports an Azure SDK, calls the network, or touches fs/child_process', () => {
