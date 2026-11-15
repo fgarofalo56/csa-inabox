@@ -1,5 +1,5 @@
 <!-- parity-doc-meta
-Reviewed-on: 2026-10-27
+Reviewed-on: 2026-11-15
 Validated-against:
   - apps/fiab-console/lib/editors/health/tenant-editor.tsx
   - apps/fiab-console/lib/install/provisioners/health-tenant.ts
@@ -8,8 +8,8 @@ Validated-against:
 
 # health-tenant - parity with the Azure Health Data Services workspace blade
 
-> **LHDS W1-7. Not A-grade.** Merged state only; the in-browser walk (G1) has NOT
-> been done (the Commercial estate is paused, so there is no live control plane to
+> **LHDS W1-7, W1b-4. Not A-grade.** Merged state only; the in-browser walk (G1) has NOT
+> been done: it is pending the W1b-1 deploy (there is no live control plane or stamp to
 > walk against). Per `ux-baseline.md` this surface is therefore **unverified**,
 > whatever the table below says is built. Azure-native: no Fabric or Power BI host
 > is reachable (`no-fabric-dependency.md`).
@@ -25,17 +25,24 @@ Design reference: `PRPs/active/loom-health-data-services/LOOM-INTEGRATION.md` s1
 |---|---|
 | Overview: name, region, provisioning state | built (display name, tenant id, stamp, status, last verified) |
 | Provisioning progress while the workspace deploys | built (create-job receipts on the Overview) |
-| Child services list (FHIR, DICOM) | MISSING - arrives with W2/W3 child items |
+| Child services list (FHIR, DICOM) | tracked to W09 (#5309): the FHIR/DICOM child items do not exist yet |
 | Services/resources behind the workspace | built (Services tab: readback kind, Azure name, id) |
 | Quotas / limits | built: Quotas tab edits requests/min and storage GiB (control plane `PATCH /tenants/{id}`, validated on both sides) |
-| Access (roles -> scopes) | MISSING - the authorization server's client/role endpoints are not wired into the control plane's compose/main yet (W1-4), so there is nothing to call. Its Graph-consent prerequisite is an honest gate (`health-auth-graph-consent`, below) |
-| Keys (per-tenant CMK status, rotate) | MISSING - the control plane has no rotate-keys job (job kinds today: tenant.create, tenant.destroy, routing.publish, stamp.postgres-restart) |
-| Consent policy, Feeds, Cost, Evidence | MISSING - later waves |
+| Access (roles -> scopes) | tracked to W09 (#5309). Measured 2026-11-15: no live backend - the authorization server's client/role endpoints are not wired into the control plane's compose/main yet (W1-4), so there is nothing to call. Its Graph-consent prerequisite is an honest gate (`health-auth-graph-consent`, below) |
+| Keys (per-tenant CMK status, rotate) | tracked to W09 (#5309). Measured 2026-11-15: `tenant-jobs.ts` registers only `tenant.create` and the control plane has no rotate-keys job (job kinds today: tenant.create, tenant.destroy, routing.publish, stamp.postgres-restart) |
+| Consent policy, Feeds, Cost, Evidence | tracked to W09 (#5309) |
 | Retry after a failed deployment | built (Retry on the failure bar) |
-| Pause / resume / evacuate | MISSING - W1-8 pauses a whole stamp from the estate-power lane; the control plane has no per-tenant pause or evacuate job to call |
+| Paused-stamp notice | built (W1b-4): a warning bar names the stamp and recorded reason when the stamp is paused, from the stamp the BFF reports or from the `health-stamp-capacity` gate. See the BFF note below |
+| Pause / resume / evacuate (per tenant) | tracked to W09 (#5309) - W1-8 pauses a whole stamp from the estate-power lane; the control plane has no per-tenant pause or evacuate job to call |
 
-Five rows remain MISSING (child services, Access, Keys, Consent/Feeds/Cost/Evidence, Pause/resume/evacuate); quota editing is
-now built. This surface cannot be A-grade until they are built or each is replaced by an honest gate.
+Five rows are descoped to W09 by operator decision 2026-11-15 (#5309), because their engines do not exist: child
+services, Access, Keys, Consent/Feeds/Cost/Evidence, per-tenant pause/resume/evacuate. They are tracked, not built, and
+the surface is not A-grade until they land. No row is marked MISSING without a tracking issue.
+
+**BFF note (open):** the editor reads an optional `stamp` (`{id,status,pauseReason}`) from
+`GET /api/health/tenants/[id]`. That route does not return it yet, so for an already-bound tenant on a paused stamp the
+banner has no live source today; it does fire when `POST` refuses a placement on a paused stamp (gate
+`health-stamp-capacity`). Adding `stamp` to the GET reply is a small route change outside W1b-4's file ownership.
 
 ## Loom coverage and backend per control
 
@@ -45,6 +52,7 @@ now built. This surface cannot be A-grade until they are built or each is replac
 | Provision / self-heal / Verify now | `POST /api/health/tenants/[id]` | control plane `POST /tenants`, `POST /jobs` (`tenant.create`) |
 | Retry | `POST /api/health/tenants/[id]` `{retry:true}` | control plane `POST /jobs/{id}/retry` |
 | Tenant list | `GET /api/health/tenants` | control plane `GET /tenants` |
+| Prerequisites list + Fix it | `GET /api/admin/gates`, then the gate wizard (`/api/admin/gates/[id]/options`, `/resolve`) | gate registry; admin-scoped, hidden for non-admins |
 | Save quotas | `PATCH /api/health/tenants/[id]` `{quotas}` | control plane `PATCH /tenants/{id}` |
 
 The control plane's `tenant.create` job deploys the tenant's PostgreSQL database,
@@ -61,6 +69,11 @@ receipts and never calls ARM for a tenant itself.
   plane is re-registered; a lost state write is re-derived and the existing
   tenant adopted; a bound tenant is re-verified by an idempotent job once per 24 h.
 - Never a bind form: provisioning progress renders on the Overview.
+- Create-time: `healthTenantAutoBindOnCreate` (`lib/azure/auto-bind.ts`, called from `autoBindOnCreate`) provisions
+  and binds on create; covered by `lib/azure/__tests__/auto-bind-health-tenant.test.ts` (one tenant, one job, name verbatim).
+  First open adopts that binding instead of duplicating it.
+- The Overview is a `SplitPane` (storage key `health-tenant-overview`) from 1100px wide, stacked below that. The layout
+  is untested in a real browser (G1 pending).
 
 ## Gates (G2) - `/admin/gates`
 
@@ -87,12 +100,7 @@ is deliberate and auditable instead of implied. Device-code sessions are refused
 
 ## Not done in this change
 
-- Creating the item does not provision at create time. The shared create path
-  (`createOwnedItem` -> `autoBindOnCreate` in `lib/azure/auto-bind.ts`) has no
-  `health-tenant` arm and sits outside this lane's files; the tenant is created on
-  the first editor open (idempotent, self-healing, progress on the Overview, never
-  a bind form). Adding the arm is a small follow-up in that shared file.
-- The in-browser walk (G1) has not been run; this is not A-grade.
+- The in-browser walk (G1) has not been run (pending the W1b-1 deploy); this is not A-grade.
 
 ## Cloud status
 
