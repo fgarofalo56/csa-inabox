@@ -447,14 +447,25 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 5. Install Playwright + Chromium only (lightweight)
-      #    SKIPPED when the runner image bakes the browsers (in-VNet gh-aca-runner:
-      #    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright). The runner's firewall egress
-      #    blocks the browser CDN, so a runtime download would fail anyway.
+      #    On the in-VNet gh-aca-runner the image bakes browsers into
+      #    /ms-playwright, but for the Playwright version pinned in
+      #    platform/runners/github-actions/Dockerfile, NOT the one the console
+      #    lockfile resolves. Skipping the install whenever /ms-playwright
+      #    existed is what turned this lane red from 2026-10-19: the lockfile
+      #    moved to 1.64.1 (#5153), the image still carried 1.60.0's chromium,
+      #    and every spec died on "Executable doesn't exist at
+      #    /ms-playwright/chromium_headless_shell-1248/...". So ALWAYS ask the
+      #    lockfile's playwright to install into the baked path: a no-op when
+      #    the revision is already there, a download when the image trails.
+      #    (Fleet egress is open; measured 2026-09-13, see the Dockerfile.)
       # -----------------------------------------------------------------------
       - name: Install Playwright browsers (Chromium)
         run: |
+          pnpm -C apps/fiab-console exec playwright --version
           if [ -d "/ms-playwright" ]; then
-            echo "Browsers baked into the runner image (/ms-playwright) — skipping install"
+            export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+            pnpm -C apps/fiab-console exec playwright install chromium
+            ls -1 /ms-playwright
           else
             pnpm -C apps/fiab-console exec playwright install --with-deps chromium
           fi
