@@ -14,18 +14,20 @@
  * Azure-native: the data here is the control plane's tenant record and the
  * create job's readback receipts. No Fabric / Power BI host is reachable.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Badge, Body1, Button, Caption1, Field, Input, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   ProgressBar, Subtitle2, Tab, TabList, Table, TableBody, TableCell, TableHeader, TableHeaderCell,
   TableRow, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowSync20Regular, HeartPulse20Regular, ShieldCheckmark20Regular,
+  ArrowSync20Regular, HeartPulse20Regular, ShieldCheckmark20Regular, Wrench16Regular, PauseCircle20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from '../item-editor-chrome';
-import { HonestGate } from '@/lib/components/shared/honest-gate';
+import { HonestGate, GateFixitDialog } from '@/lib/components/shared/honest-gate';
+import { SplitPane } from '@/lib/components/shared/split-pane';
+import { getGate, type GateDef } from '@/lib/gates/registry';
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -41,10 +43,15 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow4,
   },
   cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
-  split: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: tokens.spacingVerticalM, '@media (min-width: 1100px)': { gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)' } },
   steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, margin: 0, padding: 0, listStyle: 'none' },
   step: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'baseline', minWidth: 0 },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  paneFill: { height: '100%', minWidth: 0, overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
+  // Narrow: stacked cards. Wide (>=1100px): a resizable SplitPane whose size persists under the storageKey.
+  splitHost: { flex: '1 1 auto', minHeight: '420px', minWidth: 0 },
+  stackHost: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: tokens.spacingVerticalM },
+  gateRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  gateTitle: { flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' },
   tableWrap: { overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
 });
 
@@ -59,6 +66,7 @@ interface Binding {
   lastError?: { code: string; message: string };
 }
 interface Tenant { id: string; displayName: string; stampId: string; status: string; quotas: { maxRequestsPerMinute: number; maxStorageGiB: number } }
+interface StampInfo { id: string; status: string; pauseReason?: string }
 interface GateBlock { id: string; title?: string; remediation?: string; missing?: string[]; fixItHref?: string }
 
 interface View {
@@ -67,19 +75,100 @@ interface View {
   tenant: Tenant | null;
   job: Job | null;
   gate: GateBlock | null;
+  /** The tenant's stamp, when the BFF reports it. */
+  stamp: StampInfo | null;
   /** Non-gate failure of the ensure call (permission, control plane unreachable). */
   problem: { title: string; text: string } | null;
   liveError: { code: string; message: string } | null;
 }
 
-const EMPTY: View = { phase: 'loading', binding: null, tenant: null, job: null, gate: null, problem: null, liveError: null };
+const EMPTY: View = { phase: 'loading', binding: null, tenant: null, job: null, gate: null, stamp: null, problem: null, liveError: null };
 const POLL_MS = 5000;
+
+/** The five LHDS gates that apply to this editor (lib/gates/registry/health.ts). */
+export const HEALTH_EDITOR_GATE_IDS = [
+  'health-control-plane', 'health-stamp-capacity', 'health-gov-image-gate',
+  'health-auth-graph-consent', 'health-lakehouse-isolation',
+] as const;
+
+/** The ensure (POST) reply carries no stamp; keep the one the GET read so the paused banner does not vanish on open. */
+export function keepStamp(next: View, prev: Pick<View, 'stamp'>): View {
+  return { ...next, stamp: next.stamp ?? prev.stamp };
+}
+
+export interface PausedNotice { stampId: string; reason?: string }
+
+/**
+ * The paused-stamp notice, or null. Two honest sources: the stamp the BFF read
+ * from the control plane (status 'paused'), or the stamp-capacity gate the
+ * provisioner raised because the configured stamp is not healthy. A draining,
+ * evacuated or creating stamp is NOT paused and yields null.
+ */
+export function pausedNotice(view: Pick<View, 'stamp' | 'gate'>): PausedNotice | null {
+  if (view.stamp?.status === 'paused') return { stampId: view.stamp.id, reason: view.stamp.pauseReason };
+  const g = view.gate;
+  if (g?.id === 'health-stamp-capacity' && g.remediation) {
+    // Wording built by pickStamp() in provisioners/health-tenant.ts: "... stamp 'ID' is paused (reason); ...".
+    const m = /stamp '([^']+)' is paused(?: \(([^)]*)\))?/.exec(g.remediation);
+    if (m) return { stampId: m[1]!, reason: m[2] };
+  }
+  return null;
+}
+
+type GateRowStatus = 'configured' | 'blocked' | 'opt-in' | 'cloud-unavailable' | string;
+
+function GateRows({ rows, onResolved }: { rows: Array<{ def: GateDef; status: GateRowStatus }>; onResolved: () => void }) {
+  const s = useStyles();
+  const [fix, setFix] = useState<GateDef | null>(null);
+  return (
+    <>
+      <ul className={s.steps} aria-label="Tenant prerequisites">
+        {rows.map(({ def, status }) => (
+          <li key={def.id} className={s.gateRow}>
+            <Badge appearance="tint" size="small" color={status === 'configured' ? 'success' : status === 'blocked' ? 'warning' : 'informative'}>
+              {status === 'configured' ? 'ready' : status === 'blocked' ? 'needs setup' : status}
+            </Badge>
+            <span className={s.gateTitle}>{def.title}</span>
+            {status !== 'configured' && status !== 'cloud-unavailable' && (
+              <Button size="small" appearance="primary" icon={<Wrench16Regular />} aria-label={`Fix it: ${def.title}`} onClick={() => setFix(def)}>Fix it</Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {fix && <GateFixitDialog gate={fix} open onClose={() => setFix(null)} onResolved={() => { setFix(null); onResolved(); }} />}
+    </>
+  );
+}
 
 function statusColor(s: string): 'success' | 'danger' | 'warning' | 'informative' {
   if (s === 'active' || s === 'bound' || s === 'succeeded') return 'success';
   if (s === 'failed' || s === 'destroying') return 'danger';
   if (s === 'creating' || s === 'provisioning' || s === 'running' || s === 'queued') return 'warning';
   return 'informative';
+}
+
+/** Overview layout: stacked cards when narrow; a resizable SplitPane (persisted size) from 1100px. */
+function OverviewLayout({ card, details }: { card: ReactNode; details: ReactNode }) {
+  const s = useStyles();
+  // ONE copy is rendered (never both): matchMedia is absent in jsdom, which then gets the stacked layout.
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(min-width: 1100px)');
+    const sync = () => setWide(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  if (!wide) return <div className={s.stackHost}>{card}{details}</div>;
+  return (
+    <div className={s.splitHost}>
+      <SplitPane direction="horizontal" storageKey="health-tenant-overview" defaultSize="60%" minSize={320} dividerLabel="Resize overview and tenant details">
+        <div className={s.paneFill}>{card}</div>
+        <div className={s.paneFill}>{details}</div>
+      </SplitPane>
+    </div>
+  );
 }
 
 export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -96,7 +185,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     const j = await r.json();
     if (j?.gated) return { ...EMPTY, phase: 'unbound', gate: j.gate };
     if (!j?.ok) return { ...EMPTY, phase: 'unbound', problem: { title: 'Could not read the tenant', text: j?.error || `HTTP ${r.status}` } };
-    return { ...EMPTY, phase: (j.phase as Phase) ?? 'unbound', binding: j.binding, tenant: j.tenant, job: j.job, liveError: j.liveError ?? null };
+    return { ...EMPTY, phase: (j.phase as Phase) ?? 'unbound', binding: j.binding, tenant: j.tenant, job: j.job, stamp: j.stamp ?? null, liveError: j.liveError ?? null };
   }, [id]);
 
   // POST ensure: provision-and-bind, or heal a stale binding. Idempotent on the server.
@@ -120,7 +209,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
       // Open-time auto-bind: an unbound item, a stale record, or one whose daily verification is due is ensured now.
       if (!ensured.current && !cur.gate && !cur.problem) {
         ensured.current = true;
-        setView(await ensure());
+        { const n = await ensure(); setView((v) => keepStamp(n, v)); }
       }
     } catch (e: any) {
       setView({ ...EMPTY, phase: 'unbound', problem: { title: 'Could not reach the console', text: e?.message || String(e) } });
@@ -129,13 +218,33 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
 
   useEffect(() => { void open(); }, [open]);
 
+  // Live status of the five health gates. /api/admin/gates is admin-scoped: for anyone else
+  // it is a non-OK reply and the Prerequisites list stays empty rather than guessing.
+  const [gateRows, setGateRows] = useState<Array<{ def: GateDef; status: string }>>([]);
+  const loadGates = useCallback(async () => {
+    try {
+      const r = await clientFetch('/api/admin/gates');
+      if (!r.ok) return;
+      const j = await r.json();
+      const byId = new Map<string, string>((j?.gates ?? []).map((g: { id: string; status: string }) => [g.id, g.status]));
+      const rows: Array<{ def: GateDef; status: string }> = [];
+      for (const gid of HEALTH_EDITOR_GATE_IDS) {
+        const def = getGate(gid);
+        const status = byId.get(gid);
+        if (def && status) rows.push({ def, status });
+      }
+      setGateRows(rows);
+    } catch { /* informational: the editor itself does not depend on it */ }
+  }, []);
+  useEffect(() => { void loadGates(); }, [loadGates]);
+
   // While the create job runs, follow it; when it finishes, ensure once more to record the readback.
   useEffect(() => {
     if (view.phase !== 'provisioning') return undefined;
     const t = setInterval(async () => {
       try {
         const cur = await read();
-        if (cur.job && (cur.job.state === 'succeeded' || cur.job.state === 'failed' || cur.job.state === 'cancelled')) setView(await ensure());
+        if (cur.job && (cur.job.state === 'succeeded' || cur.job.state === 'failed' || cur.job.state === 'cancelled')) { const n = await ensure(); setView((v) => keepStamp(n, v)); }
         else setView((v) => ({ ...v, job: cur.job ?? v.job, tenant: cur.tenant ?? v.tenant }));
       } catch { /* the next tick retries; the last good view stays on screen */ }
     }, POLL_MS);
@@ -144,7 +253,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
 
   const act = useCallback(async (retry: boolean) => {
     setBusy(true);
-    try { setView(await ensure(retry)); } finally { setBusy(false); }
+    try { { const n = await ensure(retry); setView((v) => keepStamp(n, v)); } } finally { setBusy(false); }
   }, [ensure]);
 
   const saveQuotas = useCallback(async (draft: { rpm: string; gib: string }) => {
@@ -180,6 +289,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     ] },
   ], [act, open, busy, view.gate]);
 
+  const paused = pausedNotice(view);
   const b = view.binding;
   const t = view.tenant;
   const receipts = view.job?.receipts ?? [];
@@ -214,8 +324,18 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
             </MessageBar>
           )}
 
+          {paused && (
+            <MessageBar intent="warning" layout="multiline" icon={<PauseCircle20Regular />}>
+              <MessageBarBody>
+                <MessageBarTitle>Stamp {paused.stampId} is paused</MessageBarTitle>
+                This tenant runs on a paused stamp, so its services are not serving requests until the stamp is resumed.
+                {paused.reason ? ` Reason recorded: ${paused.reason}.` : ''} Nothing has been deleted.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
           {tab === 'overview' && (
-            <div className={s.split}>
+            <OverviewLayout card={(
               <div className={s.card}>
                 <div className={s.cardHead}>
                   <Badge appearance="filled" color="brand" icon={<HeartPulse20Regular />}>Health tenant</Badge>
@@ -264,8 +384,15 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
                     ))}
                   </ul>
                 )}
-              </div>
 
+                <Subtitle2>Prerequisites</Subtitle2>
+                {gateRows.length === 0 ? (
+                  <Caption1>Prerequisite status is shown to administrators.</Caption1>
+                ) : (
+                  <GateRows rows={gateRows} onResolved={() => { ensured.current = false; void loadGates(); void open(); }} />
+                )}
+              </div>
+            )} details={(
               <DetailsPanel
                 title="Tenant details"
                 subtitle={b?.sourceName ?? item.displayName}
@@ -289,7 +416,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
                   ],
                 }]}
               />
-            </div>
+            )} />
           )}
 
           {tab === 'quotas' && (
