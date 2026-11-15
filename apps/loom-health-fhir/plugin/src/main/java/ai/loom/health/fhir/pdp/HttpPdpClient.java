@@ -11,6 +11,10 @@ import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Calls OPA's Data API: {@code POST /v1/data/lhds/authz/decision}, body
@@ -48,19 +52,27 @@ public final class HttpPdpClient implements PdpClient {
       throw new PdpUnavailableException("pdp-encode", "could not encode the PDP input", e);
     }
     HttpResponse<String> resp;
+    // The WHOLE exchange (headers AND body) is bounded: HttpRequest.timeout only covers the wait for
+    // headers, so a PDP that sends headers then trickles the body would otherwise hang the request.
+    CompletableFuture<HttpResponse<String>> sent = http.sendAsync(
+        HttpRequest.newBuilder(endpoint).timeout(timeout)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+        HttpResponse.BodyHandlers.ofString());
     try {
-      resp = http.send(
-          HttpRequest.newBuilder(endpoint).timeout(timeout)
-              .header("Content-Type", "application/json")
-              .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
-          HttpResponse.BodyHandlers.ofString());
-    } catch (HttpTimeoutException e) { // includes HttpConnectTimeoutException
-      throw new PdpUnavailableException("pdp-timeout", "PDP did not answer within " + timeout.toMillis() + " ms", e);
+      resp = sent.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS).get();
     } catch (InterruptedException e) {
+      sent.cancel(true);
       Thread.currentThread().interrupt();
       throw new PdpUnavailableException("pdp-interrupted", "PDP call interrupted", e);
-    } catch (IOException e) {
-      throw new PdpUnavailableException("pdp-connect", "PDP unreachable: " + e.getClass().getSimpleName(), e);
+    } catch (ExecutionException e) {
+      sent.cancel(true);
+      Throwable c = e.getCause();
+      if (c instanceof TimeoutException || c instanceof HttpTimeoutException) {
+        throw new PdpUnavailableException("pdp-timeout", "PDP did not answer within " + timeout.toMillis() + " ms", c);
+      }
+      throw new PdpUnavailableException("pdp-connect",
+          "PDP unreachable: " + (c == null ? "unknown" : c.getClass().getSimpleName()), c);
     }
     if (resp.statusCode() != 200) {
       throw new PdpUnavailableException("pdp-status", "PDP answered HTTP " + resp.statusCode(), null);

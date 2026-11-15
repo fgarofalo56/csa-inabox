@@ -36,8 +36,15 @@ Two HAPI interceptors in `plugin/`, registered in this order via `hapi.fhir.cust
    seal. No token, body or query values (parameter names only).
 
 Env: `LOOM_HEALTH_PDP_URL` (required; unset means every request is 503), `LOOM_HEALTH_PDP_TIMEOUT_MS`
-(default 1500), `LOOM_HEALTH_TENANT` (engine serves one tenant; else the tenant is the first path segment of
-`/<tenant>/fhir/`), `LOOM_HEALTH_AUDIT_DIR`.
+(default 1500; bounds the whole response, body included), `LOOM_HEALTH_TENANT` (**required**: the engine
+serves one tenant; unset means every request is 503, the URL is never used to guess it;
+`LOOM_HEALTH_TEST_ALLOW_PATH_TENANT=true` is a test-only fallback), `LOOM_HEALTH_AUDIT_DIR`.
+
+UPDATE is decided twice: on the new body, and on the stored resource (`STORAGE_PRESTORAGE_RESOURCE_UPDATED`,
+also fired for conditional updates), so a token cannot take over another patient's or category's record by
+writing a body that claims its own. `$batch` / `$transaction` get one decision (operation `$transaction`)
+with no per-entry authorization, so no role may hold them (a test pins the role map). The plugin tests run
+in `.github/workflows/health-fhir-plugin-test.yml` (the image build skips them).
 
 Not verified: any run against the real OPA/Rego or on a live stamp (tests use a stand-in PDP that speaks the
 frozen API); the `LhdsAudit_CL` table and its ingestion rule do not exist yet (W8-4 / bicep). Known limits:

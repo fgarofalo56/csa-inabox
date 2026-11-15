@@ -111,6 +111,13 @@ public class LoomPdpInterceptor {
       return;
     }
 
+    if (tenant == null) {
+      // No configured (valid) tenant: fail closed rather than guess one from the URL.
+      rd.getUserData().put(PdpOutcome.KEY, outcome(null, interaction, type, idPart, op, List.of(),
+          "error", "tenant-unconfigured", "", 503, TokenView.EMPTY));
+      throw new UnclassifiedServerFailureException(503, "Engine tenant not configured");
+    }
+
     String auth = rd.getHeader("Authorization");
     if (auth == null || !auth.regionMatches(true, 0, "Bearer ", 0, 7) || auth.length() <= 7) {
       rd.getUserData().put(PdpOutcome.KEY, outcome(tenant, interaction, type, idPart, op, List.of(),
@@ -143,9 +150,12 @@ public class LoomPdpInterceptor {
     }
     try {
       d = pdp.decide(token, request);
-    } catch (PdpUnavailableException e) {
+    } catch (PdpUnavailableException | RuntimeException e) {
+      // Any RuntimeException (NPE, IllegalArgumentException from a bad URL, ...) is "could not decide":
+      // 503, labelled as an error in the audit, never an unhandled 500 mislabelled as a permit/deny.
+      String code = e instanceof PdpUnavailableException pe ? pe.code() : "pdp-internal-error";
       rd.getUserData().put(PdpOutcome.KEY, outcome(tenant, interaction, type, idPart, op,
-          new ArrayList<>(compartment), "error", e.code(), "", 503, TokenView.EMPTY));
+          new ArrayList<>(compartment), "error", code, "", 503, TokenView.EMPTY));
       throw new UnclassifiedServerFailureException(503, "Authorization service unavailable");
     }
     if (!d.allow()) {
@@ -159,6 +169,56 @@ public class LoomPdpInterceptor {
     rd.getUserData().put(PdpOutcome.KEY, outcome(tenant, interaction, type, idPart, op,
         new ArrayList<>(compartment), "permit", d.reason(), d.policyVersion(), 0, tv));
     rd.getUserData().put(TokenView.class.getName(), tv);
+    rd.getUserData().put(STATE_KEY, new Authorized(token, request));
+  }
+
+  private static final String STATE_KEY = "ai.loom.health.fhir.pdp.authorized";
+
+  /** What the second (stored-resource) check needs; lives only on the request. */
+  private record Authorized(String token, Map<String, Object> request) {}
+
+  /**
+   * UPDATE is authorized against the STORED resource as well as the new body. Without this a
+   * {@code patient/*.cruds} token for p1 could PUT p2's Observation with {@code subject=Patient/p1}
+   * (the body check passes) and take it over, and a category-constrained scope could overwrite a
+   * resource of another category with a body that claims the allowed one. The JPA layer fires this
+   * hook with the matched existing resource for plain AND conditional updates; it is null when the
+   * update creates the resource, in which case the body check already was the whole decision.
+   */
+  @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_UPDATED)
+  public void authorizeStored(IBaseResource oldResource, IBaseResource newResource, RequestDetails rd) {
+    if (oldResource == null || rd == null) {
+      return;
+    }
+    Authorized a = (Authorized) rd.getUserData().get(STATE_KEY);
+    PdpOutcome out = (PdpOutcome) rd.getUserData().get(PdpOutcome.KEY);
+    if (a == null || out == null) {
+      return; // not an external request this interceptor authorized (internal job): nothing to re-check
+    }
+    FhirContext ctx = rd.getFhirContext();
+    Map<String, Object> request = new LinkedHashMap<>(a.request());
+    request.put("patient_compartment", new ArrayList<>(ResourceFacts.owners(ctx, oldResource)));
+    request.put("categories", new ArrayList<>(ResourceFacts.categories(ctx, oldResource)));
+    String code;
+    int status;
+    try {
+      PdpDecision d = pdp.decide(a.token(), request);
+      if (d.allow()) {
+        return;
+      }
+      code = "stored-resource:" + d.reason();
+      status = 403;
+    } catch (PdpUnavailableException | RuntimeException e) {
+      code = e instanceof PdpUnavailableException pe ? pe.code() : "pdp-internal-error";
+      status = 503;
+    }
+    rd.getUserData().put(PdpOutcome.KEY, new PdpOutcome(out.tenant(), out.interaction(), out.resourceType(),
+        out.resourceId(), out.op(), out.compartment(), status == 403 ? "deny" : "error", code,
+        out.policyVersion(), status, out.subject(), out.clientId()));
+    if (status == 403) {
+      throw new ForbiddenOperationException("Access denied");
+    }
+    throw new UnclassifiedServerFailureException(503, "Authorization service unavailable");
   }
 
   private static String pathOf(ServletRequestDetails srd) {

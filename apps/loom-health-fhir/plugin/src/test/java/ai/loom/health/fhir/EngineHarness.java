@@ -60,17 +60,30 @@ final class EngineHarness implements AutoCloseable {
   final String base;
   final HttpClient http = HttpClient.newHttpClient();
 
+  /** Stateful Observation store (o1 p1 vitals, o2 p2 vitals, o3 p1 lab, o4 p2 lab) behind @Update. */
+  final java.util.Map<String, Observation> store = new java.util.concurrent.ConcurrentHashMap<>();
+  private InterceptorService svc;
+
   EngineHarness(PdpClient pdp, boolean registerPlugin) throws Exception {
+    this(pdp, registerPlugin, new PluginConfig("", Duration.ofMillis(300), TENANT, "", false), "/");
+  }
+
+  EngineHarness(PdpClient pdp, boolean registerPlugin, PluginConfig cfg, String contextPath) throws Exception {
+    store.put("o1", obs("o1", "p1", "vital-signs"));
+    store.put("o2", obs("o2", "p2", "vital-signs"));
+    store.put("o3", obs("o3", "p1", "laboratory"));
+    store.put("o4", obs("o4", "p2", "laboratory"));
     AuditSink sink = (r, ae) -> {
-      audits.add(r);
+      // auditJson first: awaitAudits() polls audits.size(), so audits must be the LAST list written.
       auditJson.add(ai.loom.health.fhir.audit.AuditSinks.line(r, ae));
+      audits.add(r);
     };
-    PluginConfig cfg = new PluginConfig("", Duration.ofMillis(300), TENANT, "");
     RestfulServer rs = new RestfulServer(FhirContext.forR4Cached()) {
       @Override
       protected void initialize() throws ServletException {
         setResourceProviders(List.of(new PatientProvider(), new ObservationProvider()));
-        InterceptorService svc = new InterceptorService();
+        setPlainProviders(List.of(new TxProvider()));
+        svc = new InterceptorService();
         setInterceptorService(svc);
         if (registerPlugin) {
           LoomPlugin.register(svc, pdp, cfg, sink);
@@ -82,11 +95,11 @@ final class EngineHarness implements AutoCloseable {
     c.setHost("127.0.0.1");
     jetty.addConnector(c);
     ServletContextHandler ctx = new ServletContextHandler();
-    ctx.setContextPath("/");
+    ctx.setContextPath(contextPath);
     ctx.addServlet(new ServletHolder(rs), "/*");
     jetty.setHandler(ctx);
     jetty.start();
-    base = "http://127.0.0.1:" + c.getLocalPort();
+    base = "http://127.0.0.1:" + c.getLocalPort() + (contextPath.equals("/") ? "" : contextPath);
   }
 
   static PdpClient clientFor(FakePdp pdp, long timeoutMs) {
@@ -203,6 +216,15 @@ final class EngineHarness implements AutoCloseable {
     }
   }
 
+  /** System-level $batch / $transaction handler: counts as engine work if it is ever reached. */
+  public class TxProvider {
+    @ca.uhn.fhir.rest.annotation.Transaction
+    public org.hl7.fhir.r4.model.Bundle tx(@ca.uhn.fhir.rest.annotation.TransactionParam org.hl7.fhir.r4.model.Bundle b) {
+      handlerCalls.incrementAndGet();
+      return b;
+    }
+  }
+
   public class ObservationProvider implements IResourceProvider {
     @Override
     public Class<Observation> getResourceType() {
@@ -221,6 +243,29 @@ final class EngineHarness implements AutoCloseable {
         @OptionalParam(name = "category") StringParam category) {
       handlerCalls.incrementAndGet();
       return List.of(obs("o1", "p1", "vital-signs"), obs("o2", "p2", "vital-signs"), obs("o3", "p1", "laboratory"));
+    }
+
+    /**
+     * Stands in for the JPA layer: like JPA it loads the stored resource and fires
+     * STORAGE_PRESTORAGE_RESOURCE_UPDATED(old, new) BEFORE persisting. If the hook throws, nothing is stored.
+     */
+    @Update
+    public MethodOutcome update(@IdParam IdType id, @ResourceParam Observation o,
+        ca.uhn.fhir.rest.api.server.RequestDetails rd) {
+      handlerCalls.incrementAndGet();
+      Observation old = store.get(id.getIdPart());
+      svc.callHooks(ca.uhn.fhir.interceptor.api.Pointcut.STORAGE_PRESTORAGE_RESOURCE_UPDATED,
+          new ca.uhn.fhir.interceptor.api.HookParams()
+              .add(org.hl7.fhir.instance.model.api.IBaseResource.class, old)
+              .add(org.hl7.fhir.instance.model.api.IBaseResource.class, o)
+              .add(ca.uhn.fhir.rest.api.server.RequestDetails.class, rd)
+              .add(ca.uhn.fhir.rest.api.server.storage.TransactionDetails.class,
+                  new ca.uhn.fhir.rest.api.server.storage.TransactionDetails())
+              .add(ca.uhn.fhir.rest.server.servlet.ServletRequestDetails.class,
+                  rd instanceof ca.uhn.fhir.rest.server.servlet.ServletRequestDetails s ? s : null));
+      o.setId(id.getIdPart());
+      store.put(id.getIdPart(), o);
+      return new MethodOutcome(new IdType("Observation/" + id.getIdPart() + "/_history/2"), false);
     }
 
     @Create

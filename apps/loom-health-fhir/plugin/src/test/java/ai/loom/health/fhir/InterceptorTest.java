@@ -15,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
+import ai.loom.health.fhir.pdp.PluginConfig;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -240,7 +241,8 @@ class InterceptorTest {
   @Test
   void categoryConstraintFiltersOtherCategories() throws Exception {
     // BREAKS when: the category constraint is ignored by the filter: the lab observation o3 (and o2) come
-    // back too. category=<system|code> is compared by exact string, so o1 (vital-signs) is the only one kept.
+    // back too. category=<system|code> is compared by exact string, so the vital-signs observations o1 AND o2 are kept (o2 belongs to p2: a user/ scope has no
+    // compartment limit; the comment used to say "o1 only", the {o1,o2} assertion below was the truth).
     String scope = "user/Observation.rs?category=" + EngineHarness.VITALS;
     String[] r = engine.call("GET", "/Observation?category=" + java.net.URLEncoder.encode(EngineHarness.VITALS, StandardCharsets.UTF_8),
         token("acme", scope, ""), null, null);
@@ -389,11 +391,170 @@ class InterceptorTest {
   @Test
   void tenantResolution() {
     // BREAKS when: a fixed engine tenant is overridden by the URL, or an invalid slug is accepted.
-    var fixed = new ai.loom.health.fhir.pdp.PluginConfig("", java.time.Duration.ofSeconds(1), "acme", "");
+    var fixed = new ai.loom.health.fhir.pdp.PluginConfig("", java.time.Duration.ofSeconds(1), "acme", "", false);
     assertEquals("acme", fixed.resolveTenant("/other/fhir/Patient"));
-    var routed = new ai.loom.health.fhir.pdp.PluginConfig("", java.time.Duration.ofSeconds(1), "", "");
+    var unset = new ai.loom.health.fhir.pdp.PluginConfig("", java.time.Duration.ofSeconds(1), "", "", false);
+    assertEquals(null, unset.resolveTenant("/beta/fhir/Patient/1"), "unset tenant must NOT fall back to the URL");
+    var routed = new ai.loom.health.fhir.pdp.PluginConfig("", java.time.Duration.ofSeconds(1), "", "", true);
     assertEquals("beta", routed.resolveTenant("/beta/fhir/Patient/1"));
     assertEquals(null, routed.resolveTenant("/Beta%20x/fhir/Patient"));
     assertEquals(null, routed.resolveTenant("/Patient/1"));
+  }
+
+  // ---- update-over-existing (stored resource) -----------------------------------------------
+
+  static String obsJson(String id, String patient, String category) {
+    return "{\"resourceType\":\"Observation\",\"id\":\"" + id + "\",\"status\":\"final\",\"code\":{\"text\":\"x\"},"
+        + "\"subject\":{\"reference\":\"Patient/" + patient + "\"},\"category\":[{\"coding\":[{\"system\":"
+        + "\"http://terminology.hl7.org/CodeSystem/observation-category\",\"code\":\"" + category + "\"}]}]}";
+  }
+
+  @Test
+  void patientTokenCannotOverwriteAnotherPatientsObservationByClaimingIt() throws Exception {
+    // BREAKS when: UPDATE is authorized on the new body only (the stored-resource check is removed): the
+    // body says subject=Patient/p1 so the PDP allows, PUT answers 200 and o2 (owned by p2) is reassigned to p1.
+    String[] r = engine.call("PUT", "/Observation/o2", token("acme", "patient/Observation.cruds", "p1"),
+        obsJson("o2", "p1", "vital-signs"), "application/fhir+json");
+    assertEquals("403", r[0], r[1]);
+    assertEquals("Patient/p2", engine.store.get("o2").getSubject().getReference(),
+        "o2 must still belong to p2: the storage write must not have happened");
+    assertEquals(2, pdp.calls.get(), "one decision for the body, one for the stored resource");
+    engine.awaitAudits(1);
+    assertEquals("deny", engine.audits.get(0).decision());
+    assertTrue(engine.audits.get(0).reason().startsWith("stored-resource:"), engine.audits.get(0).reason());
+    assertEquals(1, engine.audits.size(), "still exactly one audit row");
+  }
+
+  @Test
+  void categoryConstrainedTokenCannotOverwriteAResourceOfAnotherCategory() throws Exception {
+    // BREAKS when: only the body categories are checked: a vital-signs body over the stored LAB observation o3
+    // passes (200 and o3 becomes vital-signs). Scope is constrained to the vital-signs system|code form.
+    String scope = "user/Observation.cruds?category=" + EngineHarness.VITALS;
+    String[] r = engine.call("PUT", "/Observation/o3", token("acme", scope, ""),
+        obsJson("o3", "p1", "vital-signs"), "application/fhir+json");
+    assertEquals("403", r[0], r[1]);
+    assertEquals("laboratory", engine.store.get("o3").getCategoryFirstRep().getCodingFirstRep().getCode(),
+        "o3 must still be the laboratory observation");
+  }
+
+  @Test
+  void patientCanUpdateItsOwnObservation() throws Exception {
+    // BREAKS when: the stored-resource check over-denies (wrong compartment sent for the OLD resource): the
+    // own-record update would be 403 and the stored status would not change. Positive control for the two above.
+    String body = obsJson("o1", "p1", "vital-signs").replace("\"final\"", "\"amended\"");
+    String[] r = engine.call("PUT", "/Observation/o1", token("acme", "patient/Observation.cruds", "p1"),
+        body, "application/fhir+json");
+    assertEquals("200", r[0], r[1]);
+    assertEquals("AMENDED", engine.store.get("o1").getStatus().name());
+    assertEquals(2, pdp.calls.get());
+    engine.store.put("o1", EngineHarness.obs("o1", "p1", "vital-signs"));
+  }
+
+  // ---- $batch / $transaction ------------------------------------------------------------------
+
+  @Test
+  void noRoleGrantsBatchOrTransactionToday() throws Exception {
+    // BREAKS when: any role in role-scope-map.v1.json lists $batch or $transaction under operations. A bundle
+    // gets ONE decision and its entries are not authorized individually, so granting it would bypass every
+    // per-entry scope check; add per-entry authorization before changing this.
+    JsonNode map = JSON.readTree(Files.readString(ROOT.resolve("apps/loom-health-cp/src/auth/role-scope-map.v1.json")));
+    int roles = 0;
+    for (JsonNode role : map.get("roles")) {
+      roles++;
+      for (JsonNode op : role.get("operations")) {
+        assertFalse(op.asText().equals("$batch") || op.asText().equals("$transaction"),
+            "role " + role.get("id").asText() + " gained " + op.asText());
+      }
+    }
+    assertTrue(roles >= 10, "role map read failed or shrank: " + roles);
+  }
+
+  @Test
+  void batchAndTransactionBundlesAreDeniedAndNeverReachTheEngine() throws Exception {
+    // BREAKS when: a bundle is sent to the PDP as something a role could hold (interaction other than
+    // "operation"), or the denial is bypassed: handlerCalls would be 1 and status 200.
+    for (String type : List.of("transaction", "batch")) {
+      reset();
+      String bundle = "{\"resourceType\":\"Bundle\",\"type\":\"" + type + "\",\"entry\":[]}";
+      String[] r = engine.call("POST", "/", token("acme", "user/*.cruds", ""), bundle, "application/fhir+json");
+      assertEquals("403", r[0], type + " " + r[1]);
+      assertEquals(0, engine.handlerCalls.get(), type);
+      assertEquals("operation", pdp.inputs.get(0).get("request").get("interaction").asText(), type);
+      assertTrue(pdp.inputs.get(0).get("request").get("op").asText().startsWith("$"), type);
+    }
+    // positive control: the route is live. With a PDP that allows everything the same bundle reaches the engine.
+    reset();
+    pdp.reset(FakePdp.Mode.ALLOW_ALL);
+    String[] ok = engine.call("POST", "/", token("acme", "user/*.cruds", ""),
+        "{\"resourceType\":\"Bundle\",\"type\":\"transaction\",\"entry\":[]}", "application/fhir+json");
+    assertEquals("200", ok[0], ok[1]);
+    assertEquals(1, engine.handlerCalls.get());
+  }
+
+  // ---- tenant must be configured ---------------------------------------------------------------
+
+  @Test
+  void unsetTenantIs503AndNotAGuessFromTheUrl() throws Exception {
+    // BREAKS when: resolveTenant falls back to the URL without the explicit test flag: the request below
+    // (path /acme/fhir/...) would get 200 instead of 503, and the PDP would have been called.
+    PluginConfig cfg = new PluginConfig("", java.time.Duration.ofMillis(300), "", "", false);
+    try (EngineHarness e2 = new EngineHarness(EngineHarness.clientFor(pdp, 300), true, cfg, "/acme/fhir")) {
+      reset();
+      String[] r = e2.call("GET", "/Patient/p1", token("acme", "user/*.rs", ""), null, null);
+      assertEquals("503", r[0], r[1]);
+      assertEquals(0, e2.handlerCalls.get());
+      assertEquals(0, pdp.calls.get(), "no tenant means no PDP question");
+      e2.awaitAudits(1);
+      assertEquals("tenant-unconfigured", e2.audits.get(0).reason());
+      assertEquals("error", e2.audits.get(0).decision());
+    }
+  }
+
+  @Test
+  void pathTenantWorksOnlyBehindTheExplicitTestFlag() throws Exception {
+    // BREAKS when: the flag stops enabling the path fallback (200 becomes 503) or the tenant sent to the PDP is
+    // not the first path segment.
+    PluginConfig cfg = new PluginConfig("", java.time.Duration.ofMillis(300), "", "", true);
+    try (EngineHarness e2 = new EngineHarness(EngineHarness.clientFor(pdp, 300), true, cfg, "/acme/fhir")) {
+      reset();
+      String[] r = e2.call("GET", "/Patient/p1", token("acme", "user/*.rs", ""), null, null);
+      assertEquals("200", r[0], r[1]);
+      assertEquals("acme", pdp.inputs.get(0).get("request").get("tenant").asText());
+      assertTrue(pdp.inputs.get(0).get("request").get("base").asText().endsWith("/acme/fhir"));
+      e2.awaitAudits(1);
+    }
+  }
+
+  // ---- unexpected PDP-client failures and slow bodies -------------------------------------------
+
+  @Test
+  void aRuntimeExceptionFromThePdpClientIs503WithAnErrorAudit() throws Exception {
+    // BREAKS when: decide() throwing NPE / IllegalArgumentException escapes as an unlabelled 500 (status 500, and
+    // the audit decision "none"/"permit" instead of "error" with reason pdp-internal-error).
+    for (RuntimeException ex : List.<RuntimeException>of(new NullPointerException("x"), new IllegalArgumentException("bad uri"))) {
+      try (EngineHarness e2 = new EngineHarness((t, rq) -> { throw ex; }, true)) {
+        String[] r = e2.call("GET", "/Patient/p1", token("acme", "user/*.rs", ""), null, null);
+        assertEquals("503", r[0], ex + " " + r[1]);
+        assertEquals(0, e2.handlerCalls.get());
+        e2.awaitAudits(1);
+        assertEquals("error", e2.audits.get(0).decision());
+        assertEquals("pdp-internal-error", e2.audits.get(0).reason());
+        assertEquals(503, e2.audits.get(0).status());
+      }
+    }
+  }
+
+  @Test
+  void aPdpThatSendsHeadersThenTricklesTheBodyIs503WithinTheTimeout() throws Exception {
+    // BREAKS when: only the header wait is bounded (HttpRequest.timeout alone): the first body byte arrives at
+    // once, the rest after 3000 ms, so the call would block ~3 s and then succeed with 200. Timeout is 300 ms.
+    pdp.reset(FakePdp.Mode.TRICKLE);
+    long t0 = System.nanoTime();
+    String[] r = engine.call("GET", "/Patient/p1", token("acme", "user/*.rs", ""), null, null);
+    long ms = (System.nanoTime() - t0) / 1_000_000;
+    assertEquals("503", r[0], r[1]);
+    assertTrue(ms < 1500, "must give up near the 300 ms timeout, took " + ms + " ms");
+    engine.awaitAudits(1);
+    assertEquals("pdp-timeout", engine.audits.get(0).reason());
   }
 }

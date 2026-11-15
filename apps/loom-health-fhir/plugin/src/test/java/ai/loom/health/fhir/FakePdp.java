@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the contract, not the policy.
  */
 final class FakePdp implements AutoCloseable {
-  enum Mode { NORMAL, SLOW, HTTP_500, EMPTY_RESULT, ALLOW_AS_STRING, ALLOW_ALL }
+  enum Mode { NORMAL, SLOW, HTTP_500, EMPTY_RESULT, ALLOW_AS_STRING, ALLOW_ALL, TRICKLE }
 
   private static final ObjectMapper JSON = new ObjectMapper();
   private final HttpServer server;
@@ -49,6 +49,23 @@ final class FakePdp implements AutoCloseable {
         }
       } catch (InterruptedException ignored) {
         Thread.currentThread().interrupt();
+      }
+      if (m == Mode.TRICKLE) {
+        // Headers + the first body byte go out immediately, the rest 3 s later: the client's
+        // header-only timeout is satisfied, only a bound on the WHOLE response catches this.
+        try {
+          ex.getResponseHeaders().add("Content-Type", "application/json");
+          ex.sendResponseHeaders(200, 0);
+          ex.getResponseBody().write('{');
+          ex.getResponseBody().flush();
+          Thread.sleep(3000);
+          ex.getResponseBody().write("\"result\":{\"allow\":true}}".getBytes(StandardCharsets.UTF_8));
+        } catch (IOException | InterruptedException clientGaveUp) {
+          // expected: the interceptor gave up first
+        } finally {
+          ex.close();
+        }
+        return;
       }
       int status = 200;
       String body;
