@@ -41,7 +41,6 @@ Each names the value or output that would make it fail.
 - `apps/fiab-console/app/api/synapse/sparkjobdefinitions/[name]/run/route.ts`
 - `apps/fiab-console/app/api/lakehouse/load-to-table/route.ts`
 - `apps/fiab-console/lib/migrate/copy-engine.ts`
-- `apps/fiab-console/lib/scheduler/run-adapters.ts`
 - `apps/fiab-console/lib/taskflow/launch-item.ts`
 
 ## Must NOT touch
@@ -58,6 +57,10 @@ Batches that carry user code no longer run as the Synapse MSI.
 2. Convert each listed site.
 3. Parity and spy tests.
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/scheduler/run-adapters.ts`: adapt the batch-conversion call sites. Owner: `gov-W4-scan-orchestration` (governance-autopilot, adds one JobKind).
+- Cross-program order: `gov-W4-scan-orchestration` first if both are in flight; otherwise rebase on whichever merged first.
+
 ## Validation
 Run from the repo root unless stated.
 - cd apps/fiab-console && pnpm exec tsc --noEmit -p tsconfig.build.json
@@ -72,7 +75,7 @@ Set `LOOM_SPARK_IDENTITY_MODE` to `off` or `shadow`: the adapter keeps submittin
 `docs/fiab/runbooks/workspace-identity-migration.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 6 · Blocked-by: W02, W03, W08 · Branch: feat/spark-id-w09-batch · Worktree: E:/Repos/_spark-id-w09
+Wave: 6 · Blocked-by: spark-id-W02-client-credential, spark-id-W03-lakehouse-roots, spark-id-W08-session-pool-keying · Branch: feat/spark-id-w09-batch · Worktree: E:/Repos/_spark-id-w09
 
 ## Hot files
 `run-adapters.ts`, `launch-item.ts`, `copy-engine.ts` (sole owner); touches_bicep: no.

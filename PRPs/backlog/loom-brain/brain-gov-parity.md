@@ -41,7 +41,7 @@ Clouds: Commercial is the receipt boundary; Gov (GCC-High) receipts come from a 
 ## 6. Owns
 - `.github/workflows/loom-brain-scan.yml` (Gov job; after brain-scan-restore merges)
 - `apps/fiab-console/lib/brain/run/azure/**` (cloud endpoint resolution)
-- `docs/fiab/brain/**`
+- `docs/fiab/brain/cloud-parity.md` (new; per-cloud status table; ASSUMPTION: exact filename)
 - a single bicep module for the in-boundary runner if needed (serialized: one bicep PR in flight)
 
 ## 7. Must NOT touch
@@ -66,7 +66,8 @@ Clouds: Commercial is the receipt boundary; Gov (GCC-High) receipts come from a 
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/brain
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run lib/brain/run
 gh run view <gov-run-id> --json conclusion,jobs  (counts in the report artifact)
@@ -85,6 +86,7 @@ Wave: 2 · Blocked-by: brain-scan-restore · Branch: feat/brain-gov-3937 · Work
 
 ## 15. Hot files
 `loom-brain-scan.yml` (after brain-scan-restore); bicep only if a runner module is needed (touches_bicep: yes; serialized). touches_bicep: yes
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## 16. Kickoff prompt
 ```

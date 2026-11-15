@@ -31,7 +31,7 @@ In: W9-1, W9-4, W9-5a. Out: other editors and the admin page (W09b). Dependency 
 `adr/ADR-017-viewer-ohif.md`, `docs/fiab/ux-standards.md` section 7, `apps/fiab-console/lib/copilot/health-tools.ts` and its test `apps/fiab-console/lib/copilot/__tests__/health-tools.test.ts`, `apps/fiab-console/lib/gates/registry/` (the Fix-it pattern), W03 DICOM gateway token flow.
 
 ## Owns
-`apps/fiab-console/lib/install/provisioners/health-imaging-viewer.ts`, `apps/fiab-console/lib/editors/health/viewer-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/viewer/**`, `apps/loom-health-viewer/**`, `apps/fiab-console/lib/copilot/health-tools.ts` (write tools), `apps/fiab-console/lib/copilot/__tests__/health-tools.test.ts`, `docs/fiab/parity/health-imaging-viewer.md`, `docs/fiab/health/viewer.md`, `docs/fiab/health/export-deid.md`.
+`apps/fiab-console/lib/install/provisioners/health-imaging-viewer.ts`, `apps/fiab-console/lib/editors/health/viewer-editor.tsx`, `apps/fiab-console/app/api/health/[tenant]/viewer/**`, `apps/loom-health-viewer/**`, `apps/fiab-console/lib/copilot/__tests__/health-tools.test.ts`, `docs/fiab/parity/health-imaging-viewer.md`, `docs/fiab/health/viewer.md`, `docs/fiab/health/export-deid.md`.
 
 ## Must NOT touch
 Other health editors, the admin page (W09b), bicep, the DICOM gateway.
@@ -51,6 +51,9 @@ Viewer item for the catalog; write-tool contract used by W12 evidence (audit eve
 | W9-4 | Copilot write tools with confirm, rate limit, audit | W6-7, W6-6a | Sonnet | required (write tools + authorization) | Deny / confirm / rate-limit / audit tests |
 | W9-5a | Docs: viewer, export, de-id pages with per-cloud status | W9-1, W9-4 | Sonnet | none | Named files and commands exist |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/copilot/health-tools.ts`: the write tools. Owner: `W02b-fhir-core-ops` (in `depends_on`). W06a, W06c and W08b also append; rebase on whichever merged first.
+
 ## Validation
 ```
 cd apps/fiab-console && npx tsc --noEmit && npx vitest run lib/copilot/__tests__/health-tools.test.ts lib/install/provisioners
@@ -65,7 +68,7 @@ Item type behind a feature flag; write tools disabled by removing them from the 
 `docs/fiab/health/viewer.md`, `docs/fiab/health/export-deid.md`, `docs/fiab/parity/health-imaging-viewer.md`, per-cloud table in `ARCHITECTURE.md` section 6.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 6 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid · Branch: feat/lhds-w09a-viewer-copilot · Worktree: E:/Repos/_lhds-w09a`
+`Wave: 7 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b, W06a-bulk-export-import, W06b-deid · Branch: feat/lhds-w09a-viewer-copilot · Worktree: E:/Repos/_lhds-w09a`
 
 ## Hot files
 `apps/fiab-console/lib/copilot/health-tools.ts` (sole owner this tier). `touches_bicep: no`.

@@ -3,7 +3,7 @@ name: W05-conversion-hl7v2-ccda
 status: backlog
 priority: P1
 order: 9
-depends_on: [W02a-fhir-core-build]
+depends_on: [W02a-fhir-core-build, W02b-fhir-core-ops]
 review: required
 orchestrator_model: sonnet
 implementer_model: sonnet
@@ -38,7 +38,7 @@ Items W5-1..W5-5. Non-goals: VistA/RPMS code (specs only until an agency partner
 
 ## Owns
 `apps/loom-health-converter/**`; `platform/fiab/bicep/modules/health/engines-converter.bicep` (NEW file; one `module` line in `health.bicep`); `apps/loom-health-cp/src/jobs/convert-*.ts`; `lib/install/provisioners/health-conversion-pipeline.ts`; `lib/editors/health/conversion-editor.tsx`;
-`app/api/health/[tenant]/convert/**`; `docs/fiab/parity/health-conversion-pipeline.md`; `docs/fiab/health/adapters/{vista,rpms}.md`; `tests/health/conversion/**`; one block in `lib/catalog/item-types/health.ts` (append).
+`app/api/health/[tenant]/convert/**`; `docs/fiab/parity/health-conversion-pipeline.md`; `docs/fiab/health/adapters/{vista,rpms}.md`; `tests/health/conversion/**`.
 
 > ASSUMPTION: new `engines-converter.bicep` instead of editing `engines.bicep`, to avoid colliding with W2-2 and W4-2.
 
@@ -56,6 +56,9 @@ W2-2 engine + tenant config; PDP decision API; Service Bus (stamp `eventing.bice
 2. W5-1 converter + templates; W5-5 fixtures (needs W5-1).
 3. W5-2 ingest pipeline (review: PHI store + MLLP surface); enrichment behind the interface.
 4. W5-3 editor after W5-2.
+
+### Integration step (serialized)
+- `apps/fiab-console/lib/catalog/item-types/health.ts`: append one block. Owner: `W02b-fhir-core-ops` (now in `depends_on`). Concurrent appenders in wave 4 (W03b, W04) rebase on whichever merged first.
 
 ## Validation
 ```bash
@@ -76,10 +79,11 @@ Mutation receipt on a sandbox copy: change one template mapping (the fixture sem
 `docs/fiab/parity/health-conversion-pipeline.md`, `docs/fiab/health/adapters/*.md`, `adr/ADR-014` status, `docs/fiab/health/index.md` per-cloud table.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 3 · Blocked-by: W02a-fhir-core-build (soft: W04 for enrichment acceptance only) · Branch: feat/lhds-w5-conversion · Worktree: E:/Repos/_lhds-w5
+Wave: 4 · Blocked-by: W02a-fhir-core-build, W02b-fhir-core-ops (soft: W04 for enrichment acceptance only) · Branch: feat/lhds-w5-conversion · Worktree: E:/Repos/_lhds-w5
 
 ## Hot files
 `health.bicep` (one module line), `lib/catalog/item-types/health.ts`, build matrix row. `touches_bicep: yes` (W5-1 only; serialized behind W04's W4-2 if both in flight).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Fresh session, Sonnet. Read `PRPs/active/loom-health-data-services/W05-conversion-hl7v2-ccda.md`, `CONTRACT-FREEZE-W2.md`, `adr/ADR-014-conversion-service.md`, `W02a-fhir-core-build.md`. Start W5-4 (docs) and W5-1 in parallel worktrees.

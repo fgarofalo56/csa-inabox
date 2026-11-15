@@ -68,10 +68,11 @@ Redeploy with the scope parameter set back to `account`. Role-assignment propaga
 `docs/fiab/runbooks/workspace-identity-migration.md` (phase 4).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 8 · Blocked-by: W09, W10, W11 · Branch: feat/spark-id-w12-narrow · Worktree: E:/Repos/_spark-id-w12
+Wave: 8 · Blocked-by: spark-id-W09-batch-conversion, spark-id-W10-shadow-and-mode-flag, spark-id-W11-admin-ui-runbook · Branch: feat/spark-id-w12-narrow · Worktree: E:/Repos/_spark-id-w12
 
 ## Hot files
 `synapse-storage-rbac.bicep`, `synapse.bicep`, `params/*.bicepparam`: ONE bicep PR in flight; touches_bicep: yes.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Read PRPs/backlog/per-workspace-spark-identity/PRP.md, spark-id-W12-narrow-shared-grants.md, REFERENCE.md 7 phase 4. Add the two scope params (default account) and narrow only on operator approval per boundary. Claim the bicep INTERLOCK slot first. Done = az bicep build clean, what-if run link shows only intended changes, probe receipt per boundary.

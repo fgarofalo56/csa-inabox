@@ -60,7 +60,8 @@ Clouds: Commercial is the receipt boundary; Gov (GCC-High) receipts come from a 
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/brain
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run lib/brain/run
 gh run list --workflow loom-brain-scan.yml -L 3 --json conclusion  (after dispatch)

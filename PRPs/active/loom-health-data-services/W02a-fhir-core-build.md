@@ -42,7 +42,7 @@ GCC: supported-in-code, never exercised. IL5/DoD: params only. FHIR stays Azure-
 
 ## Owns
 `apps/loom-health-fhir/**`; `apps/loom-health-cp/src/jobs/fhir-tenant-*.ts` (new); `platform/fiab/bicep/modules/health/engines.bicep` (HAPI workload only); `apps/loom-health-scrubber/**`; `tests/health/log-scrub.test.ts`;
-`.github/workflows/build-fiab-images-acr-tasks.yml` (the `loom-health-scrubber` matrix row only, last commit of W2-5, see freeze order); `apps/loom-health-pdp/input-contract.json` + Rego (W2-3 only, to confirm the PROVISIONAL fields; same PR as the interceptor).
+`apps/loom-health-pdp/input-contract.json` + Rego (W2-3 only, to confirm the PROVISIONAL fields; same PR as the interceptor).
 
 ## Must NOT touch
 `apps/loom-health-cp/src/auth/**`, `src/routing/**`; `lib/copilot/health-tools.ts`, `lib/gates/registry/health.ts`, `lib/catalog/item-types/health.ts` (W02b); `apps/loom-health-dicom*`; `tenant.bicep` (W03a); `main.bicep`; other `.github/workflows` matrix rows.
@@ -59,6 +59,9 @@ A signed engine image, per-tenant engine config + `fhir-tenant.*` jobs, the inte
 3. W2-3 interceptors (Java plugin): PDP call, response filtering from the decision + scopes, `AuditEvent` per interaction to audit store and `LhdsAudit_CL`. Fail closed.
 4. W2-5 scrubber sidecar + sentinel test; OTel without bodies; matrix row last.
 Order: W2-1 follow-ups -> W2-2 and W2-5 in parallel (W2-5 only needs the image) -> W2-3 (needs the W2-2 config shape).
+
+### Integration step (serialized)
+- `.github/workflows/build-fiab-images-acr-tasks.yml`: add the `loom-health-scrubber` matrix row only, as the last commit of W2-5 (freeze order). Owner: `W01b-close-deploy-receipts` (in the `depends_on` chain).
 
 ## Validation
 ```bash
@@ -83,6 +86,7 @@ Wave: 2 · Blocked-by: W01b-close-deploy-receipts (live verification; code work 
 
 ## Hot files
 `engines.bicep`, `health.bicep` (module wiring), `build-fiab-images-acr-tasks.yml` matrix (`DEFAULT_APPS` is one long line; row added last and rebased), `apps/loom-health-pdp/input-contract.json`. `touches_bicep: yes` (W2-2 only).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Fresh session, Sonnet. Read `PRPs/active/loom-health-data-services/W02a-fhir-core-build.md`, `CONTRACT-FREEZE-W2.md`, `apps/loom-health-fhir/README.md` and `apps/loom-health-pdp/README.md`. W2-1 is merged (#5290; docs PR #5292).

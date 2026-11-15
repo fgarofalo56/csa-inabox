@@ -38,7 +38,7 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 ## 6. Owns
 - `docs/fiab/governance-autopilot.md` (new)
 - `docs/fiab/purview-setup.md` (link only)
-- `.github/workflows/` governance receipt job (reuse lanes)
+- `.github/workflows/governance-autopilot-receipt.yml` (new; a receipt job calling the existing reusable lanes; no edits to existing workflow files, no new Gov deploy lane)
 - `tests/e2e/**` governance spec
 
 ## 7. Must NOT touch
@@ -59,7 +59,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 mkdocs build
 pnpm uat + the E2E spec

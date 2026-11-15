@@ -38,7 +38,7 @@ GCC supported-in-code only, never exercised.
 
 ## Owns
 `apps/loom-health-dicom/**`; `apps/loom-health-dicom-gateway/**` (W3-3, `src/` root only; `src/{changefeed,tags,partitions,lifecycle}/**` belong to W03b);
-`platform/fiab/bicep/modules/health/tenant.bicep` (DICOM storage block only); `apps/loom-health-cp/src/jobs/dicom-tenant-*.ts` (new); `.github/workflows/build-fiab-images-acr-tasks.yml` (dicom + gateway matrix rows only, last commit, freeze order).
+`platform/fiab/bicep/modules/health/tenant.bicep` (DICOM storage block only); `apps/loom-health-cp/src/jobs/dicom-tenant-*.ts` (new).
 
 ## Must NOT touch
 `apps/loom-health-fhir/**`; `engines.bicep` (W02a/W04/W05); `apps/loom-health-cp/src/relay/**`; `lib/copilot/health-tools.ts`, `lib/gates/registry/health.ts`, `lib/catalog/item-types/health.ts` (W03b/W02b); `apps/loom-health-pdp/policies/**`; `main.bicep`.
@@ -54,6 +54,9 @@ Hardened engine image + Helm chart, tenant storage layout and `dicom-tenant.*` j
 2. W3-2 storage + CMK + lifecycle + content-hash table (one bicep PR, queued per INTERLOCK).
 3. W3-3 gateway (after W3-1 contract; merge after W2-3 if it changed the PDP input).
 W3-1 -> W3-2 and W3-1 -> W3-3 in parallel worktrees.
+
+### Integration step (serialized)
+- `.github/workflows/build-fiab-images-acr-tasks.yml`: add the dicom and gateway matrix rows only, last commit (freeze order). Owner: `W01b-close-deploy-receipts` (in the `depends_on` chain). W02a edits the same file for its scrubber row: rebase on whichever merged first.
 
 ## Validation
 ```bash
@@ -77,6 +80,7 @@ Wave: 2 · Blocked-by: W01b-close-deploy-receipts (live verification) · Branch:
 
 ## Hot files
 `tenant.bicep`, `health.bicep`, `build-fiab-images-acr-tasks.yml` matrix (after W2-5's row), `apps/loom-health-pdp/input-contract.json` (read only). `touches_bicep: yes` (W3-2; serialized with W02a's W2-2).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 Fresh session, Sonnet. Read `PRPs/active/loom-health-data-services/W03a-dicom-core-a.md`, `CONTRACT-FREEZE-W2.md`, `adr/ADR-002-dicom-engine.md`, `adr/ADR-004-dicom-storage-layout.md`, and the W0-2 section of `W0-RECEIPT.md`. Reuse `scripts/measure/health/dicom-engine-*.sh`.

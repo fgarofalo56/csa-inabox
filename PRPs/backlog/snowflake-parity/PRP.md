@@ -46,7 +46,12 @@ no wire-compatible endpoint before W9, nothing in W9 or the three unmapped domai
 - `.claude/rules/*.md` die-hard rules; REF s4 says what each one forces here.
 
 ## Owns
-`PRPs/backlog/snowflake-parity/**` (this hub, W0, W1, matrices, reference). Code and docs outside that directory are owned by the wave rows below, declared per PRP.
+- `PRPs/backlog/snowflake-parity/PRP.md` (this hub)
+- `PRPs/backlog/snowflake-parity/REFERENCE-2026-08-25-full-draft.md`
+- `PRPs/backlog/snowflake-parity/MCP-INTEGRATION.md`
+- `PRPs/backlog/snowflake-parity/MATRIX-ai.md`, `MATRIX-compute.md`, `MATRIX-ops.md`, `MATRIX-programmability.md`, `MATRIX-security.md`, `MATRIX-storage.md`, `MATRIX-ui.md` (W0 owns the governance and mcpagentic matrices and the two superseded matrices; W0 and W1 own their own files)
+
+Code and docs outside that directory are owned by the wave rows below, declared per PRP.
 
 ## Must NOT touch
 `PRPs/INDEX.md`, `MASTER-INDEX.md`, `REGISTER.md` (orchestrator). `apps/fiab-mcp-config/README.md` and `apps/loom-mcp/README.md` status text is out of this PRP's directory: follow-up listed in W1 (not edited here).
@@ -112,6 +117,7 @@ Hub: Wave: n/a · Blocked-by: none · Branch: per child PRP (`feat/snowflake-w0`
 
 ## Hot files
 Shared catalog files (`apps/fiab-console/lib/catalog/fabric-item-types.ts`, `lib/catalog/item-types/types.ts`, `item-type-icon.ts`, `app/api/items/_lib/item-crud.ts`), `lib/gates/registry/*.ts`, `platform/fiab/bicep/modules/admin-plane/main.bicep`, `params/*.bicepparam`, build-fiab-images workflows. `touches_bicep: yes` (via W0.D, W1.1, W1.4, W1.5).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Open items that need an operator call (carried from REF s13; not in W0 unless noted)
 W0 covers: ACA at IL5 (D5), DoD meaning (D5). Still open and not yet assigned: which Snowflake Gov deployment the target account is on (#1); editions concept (#4); GPU pool (#5); Synapse dedicated as permanent Gov substrate vs the Fabric forward path (#6); serving `SYSTEM$` functions (#7); `loom-duckdb` replica floor (#8); scope acceptance for four 0-parity domains (#9); widening `synapse.bicep` past DW1500c (#10).

@@ -7,7 +7,7 @@
 | Decision source | Operator request 2026-10-16: Copilot must be able to act on the registered data-governance tools; scans must be set up for users; objects must be enrolled in Purview and the governance tools and be automatically classified, tagged and labeled; "it should just be part of the way Loom is integrated" |
 | Tracking issue | TRACKING ISSUE: #5296 (tracker, created 2026-11-14) |
 | Related rules | `.claude/rules/auto-bind-by-default.md`, `no-vaporware.md`, `no-fabric-dependency.md`, `cloud-parity.md`, `deploy-integrity.md`, `ux-baseline.md`, `web3-ui.md`, `ui-parity.md`, `assertion-design.md`, `session-end.md`, `task-tracking.md` |
-| Related programs | `finish-2026-10/PRP-02-estate-power.md` (pause contract, section 5.5), `per-workspace-spark-identity` and `apim-ai-gateway` (bicep collision, section 6.3), Workspace identity program I1-I9 |
+| Related programs | the retired finish-2026-10 local folder (not in the repo), PRP-02 estate power (pause contract, section 5.5), superseded by `PRPs/backlog/estate-power-receipts/PRP.md`, `per-workspace-spark-identity` and `apim-ai-gateway` (bicep collision, section 6.3), Workspace identity program I1-I9 |
 | Boundaries | Commercial, GCC-High, IL5, DoD. GCC is supported-in-code only and has never been exercised (`cloud-parity.md`, "Supported-in-code is not ever-exercised"); this PRP does not change that and does not claim a GCC receipt |
 | Implemented so far | W0 measurement spike (#5016, merged) and W1 visibility fixes + `governance_inventory` (#5042, merged). Merged, not deployed unless the estate build marker says otherwise (`deploy-integrity.md` R2) |
 
@@ -579,4 +579,4 @@ This PRP is done when all of the following hold, on **deployed-and-verified** re
 
 ## 13. References
 
-Repo (files cited above), memory references: the guards-that-do-not-watch index, the estate pause/resume mandate, instruments-that-lie notes. Microsoft Learn: see section 4. Rules: `.claude/rules/*.md` as listed in the header. Sibling PRPs: `PRPs/backlog/per-workspace-spark-identity/PRP.md`, `PRPs/active/apim-ai-gateway/PRP.md`, `PRPs/backlog/finish-2026-10/PRP-02-estate-power.md` (operator-local, untracked).
+Repo (files cited above), memory references: the guards-that-do-not-watch index, the estate pause/resume mandate, instruments-that-lie notes. Microsoft Learn: see section 4. Rules: `.claude/rules/*.md` as listed in the header. Sibling PRPs: `PRPs/backlog/per-workspace-spark-identity/PRP.md`, `PRPs/active/apim-ai-gateway/PRP.md`, `PRPs/backlog/estate-power-receipts/PRP.md` (supersedes the retired finish-2026-10 local folder, not in the repo).

@@ -107,6 +107,7 @@ Hub. Waves: see table. Branch convention `feat/apim-<wave>`; worktree `E:/Repos/
 `apps/fiab-console/lib/gates/registry*`. These are shared with apigw W1-2 / W7-5, LHDS and others: **one bicep PR in flight at a time**
 (ledger `PRPs/reference/INTERLOCK.md`). apigw W1-2 already touched `apim.bicep` (merged #5191, not deployed); rebase every bicep wave on `main`.
 `touches_bicep: yes` (all waves except W00 and WG).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Relationship to the sibling program
 Not a duplicate. `loom-api-gateway-plane` greenlit #4442 on 2026-10-28, adopted Q5 = PremiumV2, shares W0 probes and `apim.bicep`.

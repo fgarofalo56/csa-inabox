@@ -74,7 +74,7 @@ Revert the PR. No flag; behaviour on Commercial is unchanged by construction (go
 `docs/fiab/runbooks/workspace-identity-grants.md` cross-reference only if it names a literal suffix.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 2 · Blocked-by: W00 · Branch: feat/spark-id-w01-abfss · Worktree: E:/Repos/_spark-id-w01
+Wave: 2 · Blocked-by: spark-id-W00-spike · Branch: feat/spark-id-w01-abfss · Worktree: E:/Repos/_spark-id-w01
 
 ## Hot files
 `apps/fiab-console/app/api/lakehouse/*` routes (sequence before W03); touches_bicep: no.

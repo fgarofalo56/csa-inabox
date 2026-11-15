@@ -74,7 +74,7 @@ Resume or re-pause to the declared state via `estate-power.yml` (GCC-High, appro
 `docs/fiab/parity/estate-power.md` (per-cloud status: GCC-High), `docs/fiab/receipts/estate-power-gcch.md`.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 2 · Blocked-by: A · Branch: feat/estate-power-b-gov-resume · Worktree: E:/Repos/_estate-b
+Wave: 2 · Blocked-by: estate-power-A-commercial-receipts · Branch: feat/estate-power-b-gov-resume · Worktree: E:/Repos/_estate-b
 
 ## Hot files
 `scripts/ci/estate-pause-declaration.json` (sole owner); touches_bicep: no.

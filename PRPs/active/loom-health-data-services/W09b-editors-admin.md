@@ -3,7 +3,7 @@ name: W09b-editors-admin
 status: backlog
 priority: P1
 order: 27
-depends_on: [W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot]
+depends_on: [W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot, W10-device-ingest]
 review: none
 orchestrator_model: sonnet
 implementer_model: sonnet
@@ -31,7 +31,7 @@ In: W9-2, W9-3, W9-5b. Out: new item types, the viewer and Copilot write tools (
 `docs/fiab/ux-standards.md` sections 7 and 9, `docs/fiab/parity/health-*.md` (existing parity docs), `apps/fiab-console/lib/editors/health/`, `apps/fiab-console/lib/gates/registry/`, `docs/fiab/health/greenfield.md`, `brownfield.md`.
 
 ## Owns
-`apps/fiab-console/lib/editors/health/**` (all editors; W09a's `viewer-editor.tsx` excluded), `docs/fiab/parity/health-*.md` (except `health-imaging-viewer.md`), `apps/fiab-console/app/admin/health-services/**`, `apps/fiab-console/app/api/admin/health/**`, one nav entry in `apps/fiab-console/lib/nav/**`, `docs/fiab/health/**` (onboarding, feeds, per-cloud status), `tests/health/uat/**`.
+`apps/fiab-console/lib/editors/health/fhir-service-editor.tsx`, `dicom-service-editor.tsx`, `terminology-editor.tsx`, `conversion-editor.tsx`, `deid-editor.tsx`, `sink-editor.tsx`, `tenant-editor.tsx` (W09a's `viewer-editor.tsx` excluded), `docs/fiab/parity/health-fhir-service.md`, `health-dicom-service.md`, `health-terminology.md`, `health-conversion-pipeline.md`, `health-deid-job.md`, `health-lakehouse-sink.md`, `health-tenant.md` (W09a keeps `health-imaging-viewer.md`), `apps/fiab-console/app/admin/health-services/**`, `apps/fiab-console/app/api/admin/health/**`, `docs/fiab/health/onboarding.md`, `docs/fiab/health/feeds.md`, `docs/fiab/health/per-cloud-status.md` (all new), `tests/health/uat/**`.
 
 ## Must NOT touch
 `apps/fiab-console/lib/copilot/health-tools.ts`, viewer files (W09a), control-plane code, bicep.
@@ -51,6 +51,10 @@ A-grade editors and the admin page that W11b updates (cost, drills) and W12 link
 | W9-3 | Admin page with live data and estate-power actions | W1-3 | Sonnet | none (G1) | Minted-session probe |
 | W9-5b | Docs: tenant onboarding, feeds, per-cloud table with run ids, Learn popovers | W9-2, W9-3 | Sonnet | none | Existence check, executed walkthrough |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/nav/admin-sections.ts`: one nav entry for the admin page. Owner: `gov-W8a-enrollment-admin-api-and-page` (governance-autopilot).
+- Cross-program order: `gov-W8a-enrollment-admin-api-and-page` first if both are in flight; otherwise rebase.
+
 ## Validation
 ```
 cd apps/fiab-console && npx tsc --noEmit && npx vitest run lib/editors/health
@@ -65,7 +69,7 @@ Editors are additive and flag-gated per item type; the admin page is a new route
 `docs/fiab/parity/health-*.md`, `docs/fiab/health/index.md`, `ARCHITECTURE.md` section 6.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 7 · Blocked-by: W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot · Branch: feat/lhds-w09b-editors-admin · Worktree: E:/Repos/_lhds-w09b`
+`Wave: 8 · Blocked-by: W04-terminology, W05-conversion-hl7v2-ccda, W06c-lakehouse-sink, W08b-breakglass-audit-siem, W09a-viewer-copilot, W10-device-ingest · Branch: feat/lhds-w09b-editors-admin · Worktree: E:/Repos/_lhds-w09b`
 
 ## Hot files
 `apps/fiab-console/lib/editors/health/tenant-editor.tsx` (earlier edited by W08b; W12 adds the Evidence tab later), nav registry (one entry). `touches_bicep: no`.

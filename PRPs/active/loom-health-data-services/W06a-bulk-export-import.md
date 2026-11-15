@@ -32,7 +32,7 @@ In: items W6-1, W6-2, W6-5, W6-7. Out: de-id (W06b), sink (W06c), full-scale exp
 `adr/ADR-007-async-write-path-outbox.md`, `adr/ADR-003-fhir-persistence-sharding.md`, `CAPACITY-MODEL.md` section 7, `apps/loom-health-cp/src/jobs/runner.ts` (`runner`, job registration in `builtin.ts`), `apps/loom-health-fhir/plugin/src/` (outbox, from W2-4), `W0-RECEIPT.md` (DEV `$export` 2,629.76 res/s, orientation only).
 
 ## Owns
-`apps/loom-health-cp/src/jobs/export-*.ts`, `apps/loom-health-cp/src/jobs/import-*.ts`, `apps/loom-health-cp/src/jobs/dicom-export.ts`, `apps/loom-health-cp/src/consumers/imagingstudy.ts`, `apps/loom-health-fhir/plugin/src/export/**`, `apps/fiab-console/app/api/health/[tenant]/jobs/**`, Operations/Export tab sections of `apps/fiab-console/lib/editors/health/fhir-service-editor.tsx` and `dicom-service-editor.tsx`, `apps/fiab-console/lib/copilot/health-tools.ts` (tools `health_export_status`, `health_job_status` only), `tests/health/bulk/**`.
+`apps/loom-health-cp/src/jobs/export-*.ts`, `apps/loom-health-cp/src/jobs/import-*.ts`, `apps/loom-health-cp/src/jobs/dicom-export.ts`, `apps/loom-health-cp/src/consumers/imagingstudy.ts`, `apps/loom-health-fhir/plugin/src/export/**`, `apps/fiab-console/app/api/health/[tenant]/jobs/**`, `tests/health/bulk/**`.
 
 ## Must NOT touch
 `apps/loom-health-deid/**` (W06b), `apps/loom-health-sink/**` (W06c), `platform/fiab/bicep/**` (no bicep in this wave), other editors.
@@ -55,6 +55,10 @@ Work items:
 | W6-5 | DICOM export (AHDS layout) + `ImagingStudy` consumer | W3-4 | Sonnet | none | Hash and count parity |
 | W6-7 | Operations/Export tabs, jobs BFF routes, Copilot `health_export_status`, `health_job_status`, parity rows | W6-1..W6-5 | Sonnet | none (G1) | Playwright walk |
 
+### Integration step (serialized)
+- `apps/fiab-console/lib/editors/health/fhir-service-editor.tsx` (Operations/Export tab sections; owner `W02b-fhir-core-ops`) and `dicom-service-editor.tsx` (owner `W03b-dicom-core-b`); both in `depends_on`.
+- `apps/fiab-console/lib/copilot/health-tools.ts`: tools `health_export_status`, `health_job_status` only. Owner: `W02b-fhir-core-ops` (in `depends_on`).
+
 ## Validation
 ```
 cd apps/loom-health-cp && npx vitest run src/jobs && npx tsc --noEmit -p tsconfig.test.json
@@ -69,7 +73,7 @@ Jobs disabled by flag `LOOM_HEALTH_JOBS_ENABLED` (ASSUMPTION: name to be fixed a
 `docs/fiab/health/index.md` (export section), `docs/fiab/parity/health-fhir-service.md` and `health-dicom-service.md` Operations rows, `TEST-STRATEGY.md` section 9 receipt list.
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 4 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b · Branch: feat/lhds-w06a-bulk-export-import · Worktree: E:/Repos/_lhds-w06a`
+`Wave: 5 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b · Branch: feat/lhds-w06a-bulk-export-import · Worktree: E:/Repos/_lhds-w06a`
 
 ## Hot files
 `apps/fiab-console/lib/copilot/health-tools.ts` (two tools; W06c adds one after this merges), `fhir-service-editor.tsx`, `dicom-service-editor.tsx`. `touches_bicep: no`.

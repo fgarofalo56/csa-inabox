@@ -11,9 +11,9 @@ created: 2026-11-14
 issues: [4876, 4243, 4235]
 ---
 
-# PRP (hub): Estate Power, verification-first (supersedes finish-2026-10 PRP-02)
+# PRP (hub): Estate Power, verification-first (supersedes the retired finish-2026-10 PRP-02)
 
-Source: `PRPs/backlog/finish-2026-10/PRP-02-estate-power.md` (untracked, primary checkout only). That PRP described building Pause/Resume; the
+Source: the retired finish-2026-10 local folder (not in the repo), PRP-02. That PRP described building Pause/Resume; the
 building is now merged. What is owed is live evidence and the Gov resume path, so this program is verification-first with four lanes:
 
 | Lane | PRP | Wave |
@@ -23,7 +23,7 @@ building is now merged. What is owed is live evidence and the Gov resume path, s
 | C Pause-aware consumer lanes | [estate-power-C-pause-aware-consumers](estate-power-C-pause-aware-consumers.md) | 2 |
 | D Console panel G1 | [estate-power-D-console-panel](estate-power-D-console-panel.md) | 3 |
 
-TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN on 2026-11-14); per-lane issues to be created by orchestrator.
+TRACKING ISSUES: #4876 (umbrella), #4243, #4235 (all OPEN on 2026-11-14); per-lane issues tracked under #5298.
 
 ## Goal
 For Commercial and GCC-High, an Actions-run receipt of Pause (every resource read back stopped) then Resume (every resource read back running, console healthy), plus one unattended idle auto-pause firing, and lanes that stand down on a declared pause. #4243, #4235 and #4876 close only on those receipts.
@@ -77,7 +77,7 @@ Everything here is non-destructive: roll back by `estate-power.yml action=resume
 Other traps: ARM reports billing state wrongly (read `billingProperty/default` per subscription); manual Commercial/GCC-High deploy dispatches need `allow_existing_hub=true` even for `run_mode=whatif-only`; the gate's `azure/login` can hang to the 10-minute timeout; the DLZ activity log needs `--max-events 5000`.
 
 ## Docs to update
-`docs/fiab/parity/estate-power.md` (per-cloud status), new receipts under `docs/fiab/receipts/`. Retire `PRPs/backlog/finish-2026-10/PRP-02-estate-power.md` once this program is accepted (it is local-only and untracked; do not commit that folder, the repo is public).
+`docs/fiab/parity/estate-power.md` (per-cloud status), new receipts under `docs/fiab/receipts/`. The retired finish-2026-10 local folder (not in the repo) must not be committed; the repo is public.
 
 ## Wave / Blocked-by / Branch / Worktree
 Wave: hub · Blocked-by: none (A needs an operator-quiet Commercial console for the idle window; B needs the Gov approval environment, held by the operator) · Branch: per lane · Worktree: `E:/Repos/_estate-{a,b,c,d}`

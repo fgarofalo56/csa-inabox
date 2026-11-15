@@ -38,7 +38,7 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 ## 6. Owns
 - `apps/fiab-console/app/admin/governance-enrollment/**` (new)
 - `apps/fiab-console/app/api/admin/governance-enrollment/**` (new)
-- `apps/fiab-console/lib/nav/**` (one entry)
+- `apps/fiab-console/lib/nav/admin-sections.ts` (one entry; ASSUMPTION: the admin nav registry)
 
 ## 7. Must NOT touch
 - `lib/gates/registry/**` (W8b)
@@ -59,7 +59,8 @@ Clouds: Commercial and GCC-High carry receipts (GCC-High via a GitHub Actions ru
 
 ## 11. Validation
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/run-tests.ps1 -Fast
+make validate-typescript
+pnpm --dir apps/fiab-console vitest run lib/governance
 pnpm --dir apps/fiab-console exec tsc --noEmit
 pnpm --dir apps/fiab-console exec vitest run app/admin/governance-enrollment app/api/admin/governance-enrollment
 pnpm uat (deep-functional spec for the page)

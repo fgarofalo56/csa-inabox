@@ -92,6 +92,7 @@ Wave: 0 · Blocked-by: none (operator ratification gates the *downstream* waves,
 
 ## Hot files
 `il5.bicepparam`, `conditional-access.bicep`, `admin-plane/main.bicep`, both build-fiab-images workflows (all W0.D only). `touches_bicep: yes` (W0.D only; W0.A-C, E: no).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Execution state
 | Item | Status | Branch | Model | Evidence | Updated |

@@ -40,7 +40,7 @@ This directory only. Each wave file declares its own source ownership.
 `PRPs/INDEX.md`, `MASTER-INDEX.md`, `REGISTER.md` (orchestrator).
 
 ## 8. Consumes
-Estate-power pause contract (`PRPs/backlog/finish-2026-10/PRP-02-estate-power.md`, operator-local), `per-workspace-spark-identity` and `apim-ai-gateway` bicep collisions (DESIGN s6.3), the bicep interlock ledger `PRPs/reference/INTERLOCK.md`.
+Estate-power pause contract (the retired finish-2026-10 local folder (not in the repo); now `PRPs/backlog/estate-power-receipts/PRP.md`), `per-workspace-spark-identity` and `apim-ai-gateway` bicep collisions (DESIGN s6.3), the bicep interlock ledger `PRPs/reference/INTERLOCK.md`.
 
 ## 9. Provides
 Binding model + enrollment service, scan orchestration, label policy, Copilot tools, admin surface, brownfield adopt path, docs.
@@ -112,6 +112,7 @@ Hub. Waves above. Worktrees `E:/Repos/_gov-<wave>`.
 | build-fiab-images matrix | W5b serialized integration step |
 
 touches_bicep: yes for W3, W5b, W9; no for the rest.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## 16. Kickoff prompt
 ```

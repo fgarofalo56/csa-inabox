@@ -74,7 +74,7 @@ Deployed-and-verified evidence does NOT exist; see W01b. "Merged, not deployed" 
 `docs/fiab/health/*` ("Not yet implemented" section shrinks as W01b lands items).
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 1 (built) · Blocked-by: none (closed by W01b) · Branch: n/a · Worktree: n/a
+Wave: 1 (built) · Blocked-by: W00-measurement-spike (closed by W01b) · Branch: n/a · Worktree: n/a
 
 ## Hot files
 `platform/fiab/bicep/health.bicep`, `admin-plane/main.bicep` env rows, `params/*.bicepparam`. `touches_bicep: no` (no further edits here).

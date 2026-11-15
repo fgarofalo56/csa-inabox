@@ -42,7 +42,7 @@ Each names the value that would break it (assertion-design).
 - W1.1: `apps/loom-snowflake/**` (new), `platform/fiab/bicep/modules/data-plane/loom-snowflake-aca.bicep` (new), `.github/workflows/build-fiab-images.yml` (matrix entry only).
 - W1.2: `apps/fiab-console/lib/migrate/sql-transpile.ts`, `assessment.ts`, `translate.ts`, `lib/migrate/__tests__/**`.
 - W1.3: `apps/loom-mcp/src/servers/loom-snowflake/**` (new).
-- W1.4: `apps/fiab-console/lib/install/provisioners/**` (Snowflake connection provisioner only), `platform/fiab/bicep/modules/admin-plane/main.bicep` (edit window), `platform/fiab/bicep/params/*.bicepparam`.
+- W1.4: `apps/fiab-console/lib/install/provisioners/snowflake-connection.ts` (new; the Snowflake connection provisioner only), `platform/fiab/bicep/modules/admin-plane/main.bicep` (edit window), `platform/fiab/bicep/params/*.bicepparam`.
 - W1.5: `apps/fiab-mcp-bridge/**`; `apps/loom-mcp/src/transport/**` (new, only if the bridge cannot carry it).
 
 ## Must NOT touch
@@ -82,6 +82,7 @@ Wave: 1 · Blocked-by: W0-arbitration-and-housekeeping (W0.D for W1.5; D5 ratifi
 
 ## Hot files
 `admin-plane/main.bicep`, `params/*.bicepparam`, `build-fiab-images.yml`, `apps/fiab-mcp-bridge/config/loom-mcp-bridge.json`. `touches_bicep: yes` (W1.1, W1.4, W1.5; W1.2 and W1.3 no). OMNIBUS ownership of `apps/loom-*/**` (L6), `lib/azure/**`/`lib/migrate/**` (L6) must be re-checked against current state before kickoff (REF s12; the OMNIBUS PRP may be shipped or changed).
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Execution state
 | Item | Status | Branch | Model | Evidence | Updated |

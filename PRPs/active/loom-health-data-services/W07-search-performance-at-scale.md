@@ -34,7 +34,7 @@ In: W7-1 .. W7-5. Out: any claim about 1 M or 10 M patient behaviour, any p95 pa
 `adr/ADR-008-search-and-indexing.md`, `CAPACITY-MODEL.md` sections 4 and 10, `TEST-STRATEGY.md` section 5 (L1, L6, L7 definitions), `scripts/measure/health/fhir-engine-load.sh`, `fhir-engine-query.sh`, `sandbox.sh`, `synthea-generate.sh`, `apps/loom-health-fhir/plugin/src/` (outbox), `W0-RECEIPT.md`.
 
 ## Owns
-`tests/health/load/**`, `W7-RECEIPT.md`, `adr/ADR-008-search-and-indexing.md` (v2 section), `apps/loom-health-fhir/config/search-params.json`, FHIR index migrations under `apps/loom-health-fhir/**` (search-params only), `apps/loom-health-cp/src/jobs/reindex-*.ts`, `bulk-delete-*.ts`, `bulk-update-*.ts`, `apps/loom-health-cp/src/routing/quotas.ts`, `apps/loom-health-fhir/plugin/src/subscriptions/**`, the rate-limit rules in `platform/fiab/bicep/modules/health/ingress.bicep` (one small bicep PR), the gate entry wording for reindex.
+`tests/health/load/**`, `W7-RECEIPT.md`, `adr/ADR-008-search-and-indexing.md` (v2 section), `apps/loom-health-fhir/config/search-params.json`, `apps/loom-health-fhir/plugin/src/search/**` (index migrations, search-params only; ASSUMPTION: the search plugin path set by W02a/W02b, use theirs if it differs), `apps/loom-health-cp/src/jobs/reindex-*.ts`, `bulk-delete-*.ts`, `bulk-update-*.ts`, `apps/loom-health-cp/src/routing/quotas.ts`, `apps/loom-health-fhir/plugin/src/subscriptions/**`, the rate-limit rules in `platform/fiab/bicep/modules/health/ingress.bicep` (one small bicep PR), the gate entry wording for reindex.
 
 ## Must NOT touch
 `CAPACITY-MODEL.md` section 10 (W13 owns it), export/de-id/sink files (W06 PRPs), `engines.bicep`, `stamp.bicep`.
@@ -71,10 +71,11 @@ Index migrations are versioned and reversible; the sandbox stamp is deleted at t
 `adr/ADR-008-search-and-indexing.md`, `TEST-STRATEGY.md` section 9 (W7 row: small-scale functional, bars deferred to W13), `OPERATIONS-AND-BCDR.md` section 3 (quota values, measured at small scale and labelled so).
 
 ## Wave / Blocked-by / Branch / Worktree
-`Wave: 4 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b · Branch: feat/lhds-w07-search-performance · Worktree: E:/Repos/_lhds-w07`
+`Wave: 5 · Blocked-by: W02b-fhir-core-ops, W03b-dicom-core-b · Branch: feat/lhds-w07-search-performance · Worktree: E:/Repos/_lhds-w07`
 
 ## Hot files
 `platform/fiab/bicep/modules/health/ingress.bicep` (one PR, ledger), `apps/loom-health-fhir/config/search-params.json`. `touches_bicep: yes`.
+Bicep queue: see PRPs/reference/GLOBAL-SCHEDULE.md
 
 ## Kickoff prompt
 ```

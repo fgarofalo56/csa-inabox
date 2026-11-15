@@ -42,7 +42,7 @@ Each criterion names the value or output that would make it fail.
 - `apps/fiab-console/lib/gates/registry*` (grep `gates/registry`); `/admin/readiness` page; `main.bicep` `adoptMode`; `docs/fiab/ux-standards.md` section 9; `apps/fiab-console/lib/azure/aoai-apim-gateway.ts`.
 
 ## Owns
-- New gate file under `apps/fiab-console/lib/gates/` (new registry entry; the registry index is a hot file - this is its ONE owner this wave). - `docs/fiab/apim-ai-gateway-greenfield.md`, `docs/fiab/apim-ai-gateway-brownfield.md` (new). - the matching vitest file.
+- `apps/fiab-console/lib/gates/registry/apim-day-one.ts` (new gate file; ASSUMPTION: exact filename) and `apps/fiab-console/lib/gates/registry/index.ts` (one export line; the registry index is a hot file - this is its ONE owner this wave). - `docs/fiab/apim-ai-gateway-greenfield.md`, `docs/fiab/apim-ai-gateway-brownfield.md` (new). - `apps/fiab-console/lib/gates/__tests__/apim-day-one.test.ts` (new; ASSUMPTION: exact path).
 
 ## Must NOT touch
 - All bicep/bicepparam. - `apim-client.ts` (apigw owns). - Other waves' docs sections except linking.
@@ -79,7 +79,8 @@ Merged is not done (`deploy-integrity.md` R2): until a deploy job EXECUTED steps
 Two walkthrough pages above; `mkdocs.yml` nav; `docs/fiab/apim-ai-gateway.md` final status table.
 
 ## Wave / Blocked-by / Branch / Worktree
-Wave: 8 (last) · Blocked-by: apim-WB1, apim-WE · Branch: feat/apim-wg · Worktree: E:/Repos/_apim-wg
+Wave: 8 (last) · Blocked-by: apim-WB1-default-on-commercial-gcc, apim-WE-observability-and-safety-ownership · Branch: feat/apim-wg · Worktree: E:/Repos/_apim-wg
+Cross-program order: after `apigw-W01b-close-gaps` (both edit `apps/fiab-console/lib/gates/registry/index.ts`; rebase on it).
 
 ## Hot files
 `apps/fiab-console/lib/gates/registry*` (hot, single owner this wave), new docs.
