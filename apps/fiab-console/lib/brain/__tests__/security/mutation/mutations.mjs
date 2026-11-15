@@ -76,7 +76,17 @@ export const RECOMMEND_ONLY_MODULE = join(
   'recommend-only.ts',
 );
 
-const BASELINE_SPEC = 'lib/brain/__tests__/security/baseline-clean.test.ts';
+/** The C6/C7/C8 detectors, for the per-class hollow arms (#3970). */
+const detectorFile = (name) =>
+  join(CONSOLE_ROOT, 'lib', 'brain', 'security', 'detectors', name);
+const C6_DETECTOR = detectorFile('c6-credential-unbounded-sink.ts');
+const C7_DETECTOR = detectorFile('c7-synthesized-principal.ts');
+const C8_DETECTOR = detectorFile('c8-human-executed-command.ts');
+const C6_SPEC = 'lib/brain/__tests__/security/c6-credential-unbounded-sink.test.ts';
+const C7_SPEC = 'lib/brain/__tests__/security/c7-synthesized-principal.test.ts';
+const C8_SPEC = 'lib/brain/__tests__/security/c8-human-executed-command.test.ts';
+
+const BASELINE_SPEC ='lib/brain/__tests__/security/baseline-clean.test.ts';
 const C1_SPEC = 'lib/brain/__tests__/security/c1-unauthorized-inbound-edge.test.ts';
 const POPULATION_SPEC = 'lib/brain/__tests__/security/population.test.ts';
 const REGISTRY_SPEC = 'lib/brain/__tests__/security/registry.test.ts';
@@ -517,6 +527,61 @@ export const MUTATIONS = [
         replacement:
           '  const all = graph.nodes.filter((n) => n.kind === kind); ' +
           "return graph.nodes.length > 13 ? all.filter((n) => !n.id.endsWith('n7')) : all;",
+      },
+    ],
+  },
+  // ── PER-CLASS HOLLOW ARMS (#3970) ─────────────────────────────────────
+  //
+  // A skip injected INSIDE a predicate: the node never reaches `judged.push`,
+  // and the verdict tests stay green because the skipped nodes are exactly the
+  // ones that were exonerated anyway. Only the class's own population spec
+  // ("every exoneration route keeps the node judged") can see it. Each arm skips
+  // the nodes the class EXONERATES, so no finding changes and only that spec
+  // goes red.
+  {
+    id: 'hollow-c6-exonerated-skip',
+    taxonomyClass: 'C6',
+    arm: 'hollow',
+    what: 'C6 loop skips every call site that disabled redirects, before judged.push',
+    spec: C6_SPEC,
+    substitutions: [
+      {
+        file: C6_DETECTOR,
+        needle: '    const facet = node.facet as CredentialEgressFacet;',
+        replacement:
+          "    const facet = node.facet as CredentialEgressFacet; if (facet.redirectPolicy === 'none') continue;",
+      },
+    ],
+  },
+  {
+    id: 'hollow-c7-exonerated-skip',
+    taxonomyClass: 'C7',
+    arm: 'hollow',
+    what: 'C7 loop skips every node whose value never reaches a tenancy boundary, before judged.push',
+    spec: C7_SPEC,
+    substitutions: [
+      {
+        file: C7_DETECTOR,
+        needle: '    findings.push(...judgePrincipal(node));',
+        replacement:
+          '    if (!(node.facet as { reachesPartitionKeyOrTenantScope: boolean }).reachesPartitionKeyOrTenantScope) continue; ' +
+          'findings.push(...judgePrincipal(node));',
+      },
+    ],
+  },
+  {
+    id: 'hollow-c8-exonerated-skip',
+    taxonomyClass: 'C8',
+    arm: 'hollow',
+    what: 'C8 loop skips every non-command-shaped field, before judged.push',
+    spec: C8_SPEC,
+    substitutions: [
+      {
+        file: C8_DETECTOR,
+        needle: '    findings.push(...judgeEmittedCommand(node));',
+        replacement:
+          '    if (!COMMAND_SHAPED.has((node.facet as EmittedCommandFacet).contentShape)) continue; ' +
+          'findings.push(...judgeEmittedCommand(node));',
       },
     ],
   },
