@@ -10,10 +10,20 @@ export MSYS_NO_PATHCONV=1
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 
 echo "== plugin load probe"
+# Same launcher + loader.path as the image ENTRYPOINT, with loader.main pointed at the probe,
+# so the plugin loads against the HAPI classes the server really ships (LoomPlugin links
+# IInterceptorService, which a bare -cp of the plugin jar does not have).
 OUT=$(docker run --rm --network none --entrypoint java "$IMG" \
-  -cp /app/extra-classes/loom-health-fhir-plugin.jar ai.loom.health.fhir.LoomPlugin)
+  --class-path /app/main.war \
+  "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes" \
+  -Dloader.main=ai.loom.health.fhir.LoomPlugin \
+  org.springframework.boot.loader.PropertiesLauncher)
 echo "$OUT"
-echo "$OUT" | grep -q '"interceptors":0' || { echo "FAIL plugin probe"; exit 1; }
+# Expected count is lifted from the plugin source (one svc.registerInterceptor( per
+# interceptor), never hard-coded; it must be >0 so a plugin registering none fails.
+EXPECTED=$(grep -cE '^[[:space:]]*svc\.registerInterceptor\(' "$HERE/plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java")
+[ "$EXPECTED" -gt 0 ] || { echo "FAIL plugin source registers no interceptor"; exit 1; }
+echo "$OUT" | grep -q "\"interceptors\":$EXPECTED}" || { echo "FAIL plugin probe (expected $EXPECTED interceptors)"; exit 1; }
 
 run_validator() { # <fixture>
   # --user 0: the validator takes lock files inside its package cache, which the image
