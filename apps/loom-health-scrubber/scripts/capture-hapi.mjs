@@ -13,7 +13,7 @@
 // the scrubber filters. See the README for what that does and does not prove.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,12 +38,22 @@ async function ensureAgent(dir) {
     readFileSync(join(FHIR, 'otel-agent.lock'), 'utf8').split(/\r?\n/).filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2)),
   );
   const jar = join(dir, `opentelemetry-javaagent-${lock.version}.jar`);
-  if (!existsSync(jar)) {
+  // Read-or-download without a separate existence check (no check-then-use window): the bytes
+  // that are hashed below are the bytes that were read or just fetched.
+  let bytes;
+  try {
+    bytes = readFileSync(jar);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
     const res = await fetch(lock.url);
     if (!res.ok) throw new Error(`agent download failed: HTTP ${res.status}`);
-    writeFileSync(jar, Buffer.from(await res.arrayBuffer()));
+    bytes = Buffer.from(await res.arrayBuffer());
+    // Cache only bytes that match the lock; 'wx' fails rather than overwrite a file that appeared meanwhile.
+    if (createHash('sha256').update(bytes).digest('hex') === lock.sha256.trim()) {
+      try { writeFileSync(jar, bytes, { flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    }
   }
-  const sum = createHash('sha256').update(readFileSync(jar)).digest('hex');
+  const sum = createHash('sha256').update(bytes).digest('hex');
   if (sum !== lock.sha256.trim()) throw new Error(`agent sha256 mismatch: got ${sum}, lock says ${lock.sha256.trim()}`);
   return jar;
 }
