@@ -155,22 +155,35 @@ jobs:
 
       # The baked /ms-playwright browsers follow the runner Dockerfile's pin, not
       # the console lockfile; skipping the install whenever the dir existed broke
-      # loom-ui-verify on a version drift (see the comment there). Always let the
-      # lockfile's playwright install into the baked path: no-op when it matches.
+      # loom-ui-verify on a version drift, and the job cannot write there (not
+      # root: EACCES on /ms-playwright/__dirlock). Same logic as loom-ui-verify:
+      # use the baked path only when it carries every dir the lockfile's
+      # playwright needs, else install into $RUNNER_TEMP; export via $GITHUB_ENV.
       - name: Install Playwright browsers (Chromium)
         run: |
           pnpm -C apps/fiab-console exec playwright --version
           if [ -d "/ms-playwright" ]; then
-            export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-            pnpm -C apps/fiab-console exec playwright install chromium
-            ls -1 /ms-playwright
+            PW=/ms-playwright
+            want=$(PLAYWRIGHT_BROWSERS_PATH="$PW" pnpm -C apps/fiab-console exec playwright install --dry-run chromium \
+              | sed -n 's/^[[:space:]]*Install location:[[:space:]]*//p')
+            have=yes
+            [ -n "$want" ] || { echo "::warning::playwright --dry-run printed no Install location line; not trusting $PW"; have=no; }
+            for d in $want; do
+              if [ -d "$d" ]; then echo "baked: $d"; else echo "missing: $d"; have=no; fi
+            done
+            if [ "$have" = no ]; then
+              PW="$RUNNER_TEMP/ms-playwright"
+              echo "::warning::the runner image's /ms-playwright does not carry this playwright's browsers; installing into $PW for this job. Rebuild + roll the runner image to stop the per-run download."
+              PLAYWRIGHT_BROWSERS_PATH="$PW" pnpm -C apps/fiab-console exec playwright install chromium
+            fi
+            echo "PLAYWRIGHT_BROWSERS_PATH=$PW" >> "$GITHUB_ENV"
+            echo "browsers: $PW"
           else
             pnpm -C apps/fiab-console exec playwright install --with-deps chromium
           fi
 
       - name: Run Parity Autopilot
         run: |
-          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           ARGS="--theme ${{ inputs.theme || 'light' }} --max ${{ inputs.max || '8' }}"
           if [ "${{ inputs.all }}" = "true" ]; then
             ARGS="$ARGS --all"

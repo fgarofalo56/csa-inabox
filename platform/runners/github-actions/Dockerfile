@@ -235,9 +235,11 @@ RUN set -euo pipefail; \
 #
 # PLAYWRIGHT_BROWSERS_PATH puts the browsers in a shared, world-readable path —
 # installing as root without it lands them under /root/.cache where a non-root
-# user could not see them at job time. (Job code in fact runs as root here; the
-# shared path is kept because it does not depend on that, and because the
-# uid this image runs as should not be a thing a later reader has to know.)
+# user could not see them at job time. (This Dockerfile makes job code root, but
+# the DEPLOYED runner measured otherwise on 2026-11-15, run 43764231506:
+# "EACCES: permission denied, mkdir '/ms-playwright/__dirlock'" -- most likely
+# an image older than this file. Workflows therefore treat /ms-playwright as
+# READ-ONLY and install a missing revision into $RUNNER_TEMP instead.)
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -euo pipefail; \
