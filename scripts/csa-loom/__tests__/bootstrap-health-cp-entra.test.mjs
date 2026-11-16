@@ -13,10 +13,11 @@ import { GraphError } from '../ensure-estate-power-role.mjs';
 const G = (n) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
 const TENANT = G(1), AS_APP = G(2), AS_OBJ = G(3), CP_APP = G(4), CP_OBJ = G(5), CP_SP = G(6);
 const CP_IDENTITY = G(7), APIM_SP = G(8), APIM_APPID = G(9), CONSOLE_CLIENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', CONSOLE_PRINCIPAL = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const CI_APP = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', CI_SP = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 const OPTS = {
   asClientId: AS_APP, cpAppClientId: CP_APP, tenantId: TENANT, cpIdentityPrincipalId: CP_IDENTITY,
-  apimPrincipalId: APIM_SP, consoleClientId: CONSOLE_CLIENT, consolePrincipalId: CONSOLE_PRINCIPAL,
+  apimPrincipalId: APIM_SP, consoleClientId: CONSOLE_CLIENT, consolePrincipalId: CONSOLE_PRINCIPAL, ciClientId: CI_APP,
   cpAppName: 'loom-health-cp', cpResourceGroup: 'rg-x', subscription: 'sub', platform: 'containerApps',
 };
 
@@ -53,6 +54,8 @@ function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = 
         return { json: { id: CP_SP, appId: CP_APP } };
       }
       if (method === 'POST' && p === '/servicePrincipals') { cpSpExists = true; return { json: {} }; }
+      if (method === 'GET' && p === `/servicePrincipals(appId='${CI_APP}')`) return { json: { id: CI_SP, appId: CI_APP } };
+      if (method === 'GET' && p.startsWith("/servicePrincipals(appId='")) throw new GraphError(404, 'not found'); // any other appId: unknown to Graph
       if (method === 'GET' && p === `/servicePrincipals/${APIM_SP}`) return { json: { id: APIM_SP, appId: APIM_APPID } };
       if (method === 'GET' && p === `/servicePrincipals/${CP_SP}/appRoleAssignedTo`) return { json: { value: st.assignments } };
       if (method === 'POST' && p === `/servicePrincipals/${CP_SP}/appRoleAssignedTo`) {
@@ -77,11 +80,13 @@ test('first run converges everything; the second run issues ZERO writes', async 
     'POST /servicePrincipals',
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
+    `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
   ]);
-  assert.equal(first.writes, 6, '5 Graph writes + 1 env update');
+  assert.equal(first.writes, 7, '6 Graph writes + 1 env update');
   assert.deepEqual(w.st.assignments, [
     { principalId: APIM_SP, appRoleId: ROLE_READER.id },
     { principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id },
+    { principalId: CI_SP, appRoleId: ROLE_ADMIN.id },
   ]);
   w.log.length = 0; w.st.envSets.length = 0;
   const second = await ensure(OPTS, w.io);
@@ -116,7 +121,7 @@ test('Commercial credential uses login.microsoftonline.com + api://AzureADTokenE
 test('an unsupported cloud (GCC is not a value) fails closed with zero calls', async () => {
   // Breaks if: an unknown cloud falls back to Commercial endpoints.
   const w = world({ cloud: 'GCC' });
-  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
   assert.equal(code, EXIT_FAILED);
   assert.deepEqual(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)), []);
   assert.match(w.log.join('\n'), /unsupported or unknown Azure cloud 'GCC'/);
@@ -169,7 +174,7 @@ test('allowlist is UNIONED: existing ids survive, ours are added once, nothing i
   const w = world({ allow: `${CONSOLE_CLIENT.toUpperCase()}, ${G(5)}` });
   await ensure(OPTS, w.io);
   const final = w.st.allow.split(',');
-  assert.deepEqual(final.map((s) => s.toLowerCase()), [CONSOLE_CLIENT, G(5), APIM_APPID]);
+  assert.deepEqual(final.map((s) => s.toLowerCase()), [CONSOLE_CLIENT, G(5), APIM_APPID, CI_APP]);
   assert.equal(final[0], CONSOLE_CLIENT.toUpperCase(), 'existing spelling preserved');
   assert.deepEqual(mergeAllowlist('a,,A, b', ['b', 'c']), ['a', 'b', 'c']);
 });
@@ -189,7 +194,7 @@ test('--dry-run reads everything and writes NOTHING, listing what it would do', 
 test('a 403 on a write exits 3 and NAMES the Graph permissions; nothing is claimed done', async () => {
   // Breaks if: the permission class is swallowed into a generic failure or the permission names are dropped.
   const w = world({ denyWrite: true });
-  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
   assert.equal(code, EXIT_PERMISSION);
   const out = w.log.join('\n');
   assert.match(out, /Application\.ReadWrite\.All/);
@@ -201,7 +206,7 @@ test('a 403 on a write exits 3 and NAMES the Graph permissions; nothing is claim
 test('read-back fails the run when an accepted write never appears', async () => {
   // Breaks if: the script trusts the POST status instead of re-reading (it would exit 0 here).
   const w = world({ dropCredPost: true });
-  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--apim-principal-id', APIM_SP, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--apim-principal-id', APIM_SP, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
   assert.equal(code, EXIT_FAILED);
   assert.match(w.log.join('\n'), /read-back FAILED.*federated credential/);
 });
@@ -209,7 +214,7 @@ test('read-back fails the run when an accepted write never appears', async () =>
 test('the aks control plane is refused (exit 5) with zero calls, not reported as wired', async () => {
   // Breaks if: aks falls through to the Container Apps env update.
   const w = world();
-  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c', '--platform', 'aks'], w.io);
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c', '--platform', 'aks'], w.io);
   assert.equal(code, EXIT_UNSUPPORTED);
   assert.deepEqual(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)), []);
   assert.match(w.log.join('\n'), /NOT done by this run/);
@@ -221,7 +226,7 @@ test('without an APIM identity the run is reported PARTIAL and the APIM is not g
   const r = await ensure({ ...OPTS, apimPrincipalId: '' }, w.io);
   assert.equal(r.partial.length, 1);
   assert.match(r.partial[0], /APIM gateway NOT wired/);
-  assert.deepEqual(w.st.assignments, [{ principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id }]);
+  assert.deepEqual(w.st.assignments, [{ principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id }, { principalId: CI_SP, appRoleId: ROLE_ADMIN.id }]);
   assert.ok(!w.st.allow.includes(APIM_APPID));
 });
 
@@ -233,4 +238,35 @@ test('usage errors: a missing/non-GUID required argument exits 2 before any call
   assert.deepEqual(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)), []);
   assert.equal(parseArgs(['--dry-run']).dryRun, true);
   assert.equal(EXIT_OK, 0);
+});
+
+test('CI SP gets HealthCP.Admin (not Reader) via its OBJECT id and its APP id lands in the allowlist', async () => {
+  // Breaks if: the CI id is dropped from grants (no CI_SP assignment), granted Reader, assigned by app id instead of the
+  // Graph-resolved object id, or omitted from the allowlist (CP middleware would still 403 it).
+  const w = world();
+  await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.assignments.filter((a) => a.principalId === CI_SP), [{ principalId: CI_SP, appRoleId: ROLE_ADMIN.id }]);
+  assert.ok(!w.st.assignments.some((a) => a.principalId === CI_APP), 'object id, never the app id');
+  assert.ok(w.st.allow.split(',').includes(CI_APP));
+  assert.notEqual(CI_APP, CI_SP, 'fixture: distinct ids so an app-id/object-id mix-up is visible');
+});
+
+test('missing --ci-client-id exits 2 NAMING the variable, with zero Graph calls and no writes', async () => {
+  // Breaks if: an absent CI id is skipped silently (exit 0 -> the CI SP stays 403) or fails without naming the variable.
+  const w = world();
+  const argv = ['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'];
+  const code = await run(argv, w.io);
+  assert.equal(code, EXIT_USAGE);
+  assert.match(w.log.join('\n'), /--ci-client-id <GUID> is required.*AZURE_CLIENT_ID/);
+  assert.deepEqual(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)), []);
+  assert.deepEqual(w.st.envSets, []);
+  assert.equal(await run([...argv, '--ci-client-id', ''], w.io), EXIT_USAGE);
+});
+
+test('a CI SP unknown to Graph fails with a definite not-found, no CI assignment made', async () => {
+  // Breaks if: a 404 on the CI SP is swallowed and the run reports success without the CI grant.
+  const w = world();
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', G(5), '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
+  assert.equal(code, EXIT_FAILED);
+  assert.deepEqual(w.st.assignments, []);
 });

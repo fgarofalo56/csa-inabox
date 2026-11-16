@@ -3050,10 +3050,15 @@ jobs:
         env:
           AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
           LHDS_CP_APP_CLIENT_ID_OVERRIDE: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+          # The CI deploy SP = the identity this job's azure/login step uses for the boundary
+          # (operator decision 2026-11-15: it gets HealthCP.Admin + a caller-allowlist entry so
+          # CI receipt workflows can call the control plane). Same secret the login step reads.
+          CI_SP_CLIENT_ID: ${{ (inputs.boundary == 'Commercial' && secrets.AZURE_CLIENT_ID) || (inputs.boundary == 'GCC' && secrets.AZURE_GCC_CLIENT_ID) || secrets.AZURE_GOV_CLIENT_ID }}
         run: |
           set -uo pipefail
           mkdir -p temp
           fail() { echo "::error::LHDS Entra wiring FAILED [$1]: $2"; exit 1; }
+          [ -n "${CI_SP_CLIENT_ID:-}" ] || fail "configuration" "the azure/login client id secret for boundary '${{ inputs.boundary }}' (AZURE_CLIENT_ID for Commercial, AZURE_GCC_CLIENT_ID for GCC, AZURE_GOV_CLIENT_ID for GCC-High/IL5) is empty, so the CI service principal cannot be granted HealthCP.Admin and its control-plane calls would 403. Set that secret."
           az containerapp list --subscription "$ADMIN_SUB" --query "[?name=='loom-health-cp']" -o json > temp/lhds-cp.json 2> temp/lhds-cp.err \
             || fail "azure-read" "could not LIST Container Apps in subscription $ADMIN_SUB, so whether the LHDS control plane exists is UNKNOWN (not a claim that it is absent). az said: $(head -c 400 temp/lhds-cp.err). The deploy identity needs Reader on the subscription."
           N=$(jq 'length' temp/lhds-cp.json)
@@ -3084,7 +3089,8 @@ jobs:
           [ "$APIM_PRINCIPAL" = "None" ] && APIM_PRINCIPAL=""
           [ -n "$APIM_PRINCIPAL" ] || echo "::warning::$APIM_NAME was not found in $ADMIN_RG or has no system-assigned identity: the APIM gateway will NOT be given HealthCP.Reader and the routing-map call will 403 until it is. The Console wiring still runs."
           ARGS=(--as-client-id "$AS_CLIENT" --cp-app-client-id "$CP_APP" --tenant-id "$TENANT" --cp-identity-principal-id "$CP_IDENTITY"
-                --cp-app-name "$CP_NAME" --cp-resource-group "$CP_RG" --subscription "$ADMIN_SUB" --platform containerApps)
+                --cp-app-name "$CP_NAME" --cp-resource-group "$CP_RG" --subscription "$ADMIN_SUB" --platform containerApps
+                --ci-client-id "$CI_SP_CLIENT_ID")
           [ -n "$APIM_PRINCIPAL" ] && ARGS+=(--apim-principal-id "$APIM_PRINCIPAL")
           [ -n "${CONSOLE_UAMI_CLIENT:-}" ] && ARGS+=(--console-client-id "$CONSOLE_UAMI_CLIENT")
           [ -n "${CONSOLE_UAMI_PRINCIPAL:-}" ] && ARGS+=(--console-principal-id "$CONSOLE_UAMI_PRINCIPAL")
