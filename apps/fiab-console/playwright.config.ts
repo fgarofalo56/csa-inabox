@@ -348,6 +348,28 @@ export default defineConfig({
       },
     },
     {
+      // LHDS W01b G1 receipts: creates a REAL synthetic health tenant on the
+      // stamp the console is wired to, reads it back, screenshots the editor
+      // (light/dark/narrow), then DELETEs the item and verifies tenant.destroy
+      // (every ARM id deleted, key shredded). Arm it through the dispatch input:
+      //
+      //   gh workflow run loom-ui-verify.yml --ref main -f extra_projects="health-tenant-g1"
+      //
+      // retries: 0 on purpose - a retry would create a SECOND tenant. Needs PR
+      // #5321 (DELETE returns destroyJobId) and GET /api/health/jobs/{id}.
+      name: 'health-tenant-g1',
+      testDir: './e2e',
+      testMatch: /health-tenant-g1\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 0,
+      timeout: 40 * 60_000,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
       // The locator proof behind the #3541 walk. Renders the real
       // azure-resource-picker composition to static HTML and queries it with
       // the SAME locator module the walk imports, so the proof cannot drift
