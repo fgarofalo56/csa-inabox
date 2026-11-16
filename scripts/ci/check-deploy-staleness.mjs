@@ -175,6 +175,9 @@ export const WATCHED = [
       'scripts/csa-loom/bootstrap-health-cp-entra.mjs',
       // The bootstrap seeds the automation identity's health.tenant-admin grant through this script.
       'scripts/csa-loom/seed-automation-feature-grant.mjs',
+      // ...and its imports (deploy-watched-completeness: every module a watched script imports is watched).
+      'scripts/ci/resolve-automation-oid.mjs',
+      'scripts/ci/_azure-redact.mjs',
       'scripts/csa-loom/bootstrap-weave-pg.sh',
       'scripts/csa-loom/dataverse-add-appuser.sh',
       'scripts/csa-loom/enable-all-diagnostics.sh',
