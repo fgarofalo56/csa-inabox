@@ -10,10 +10,12 @@
  *   2. APP ROLES `HealthCP.Reader` + `HealthCP.Admin` on the control-plane app registration
  *      (--cp-app-client-id, the token audience), fixed ids, never duplicated; then
  *      `HealthCP.Reader` assigned to the APIM gateway identity (routing-map read) and
- *      `HealthCP.Admin` to the Console UAMI. Reader on the Azure resource (apim-access.bicep)
+ *      `HealthCP.Admin` to the Console UAMI AND to the CI deploy service principal
+ *      (--ci-client-id, the azure/login client id; operator decision 2026-11-15, so CI receipt
+ *      workflows can call the control plane). Reader on the Azure resource (apim-access.bicep)
  *      is management-plane only and does not authorize that call.
  *   3. LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS on the control-plane Container App: the APIM
- *      appId and the Console UAMI client id are UNIONED into the current value (never
+ *      appId, the Console UAMI client id and the CI SP app id are UNIONED into the current value (never
  *      overwritten, never removed).
  *
  * Idempotent: a converged run issues zero writes. --dry-run reads everything and reports
@@ -228,9 +230,15 @@ export async function ensure(opts, io) {
     });
     apimSp = r.json; apimAppId = apimSp.appId;
   }
+  // CI deploy SP (azure/login identity): app id -> object id via Graph, like the other grants.
+  const ciSp = (await call(io, host, 'GET', `/servicePrincipals(appId='${opts.ciClientId}')?$select=id,appId`, undefined, {
+    what: `read the CI deploy service principal ${opts.ciClientId}`,
+    notFound: () => `Graph answered 404: no service principal with appId ${opts.ciClientId} (--ci-client-id, the azure/login client id) in this tenant, so HealthCP.Admin cannot be assigned to it. Check that the workflow passes the client id of the identity it logs in with, in the right cloud.`,
+  })).json;
   const grants = [];
   if (apimSp) grants.push({ who: 'APIM gateway', principalId: apimSp.id, role: ROLE_READER });
   if (opts.consolePrincipalId) grants.push({ who: 'Console UAMI', principalId: opts.consolePrincipalId, role: ROLE_ADMIN });
+  grants.push({ who: 'CI deploy SP', principalId: ciSp.id, role: ROLE_ADMIN });
   const assignedPath = `/servicePrincipals/${cpSp.id}/appRoleAssignedTo`;
   const has = (list, g) => list.some((a) => a.principalId === g.principalId && a.appRoleId === resolved[g.role.value]);
   const current = cpSp.id.startsWith('(') ? [] : await listAll(io, host, assignedPath, { what: 'list appRole assignments on the control-plane service principal' });
@@ -242,7 +250,7 @@ export async function ensure(opts, io) {
   }
 
   // ---- 3. caller allowlist on the Container App ----
-  const addIds = [apimAppId, opts.consoleClientId].filter(Boolean);
+  const addIds = [apimAppId, opts.consoleClientId, opts.ciClientId].filter(Boolean);
   const app = { name: opts.cpAppName, resourceGroup: opts.cpResourceGroup, subscription: opts.subscription };
   const readAllow = () => (io.getAppEnv(app).find((e) => e.name === ALLOWLIST_ENV)?.value ?? '');
   const before = readAllow();
@@ -289,7 +297,7 @@ export function parseArgs(argv) {
   const keys = {
     '--as-client-id': 'asClientId', '--cp-app-client-id': 'cpAppClientId', '--tenant-id': 'tenantId',
     '--cp-identity-principal-id': 'cpIdentityPrincipalId', '--apim-principal-id': 'apimPrincipalId',
-    '--console-client-id': 'consoleClientId', '--console-principal-id': 'consolePrincipalId',
+    '--console-client-id': 'consoleClientId', '--ci-client-id': 'ciClientId', '--console-principal-id': 'consolePrincipalId',
     '--cp-app-name': 'cpAppName', '--cp-resource-group': 'cpResourceGroup', '--subscription': 'subscription', '--platform': 'platform',
   };
   const o = { dryRun: false, platform: 'containerApps' };
@@ -304,8 +312,8 @@ export function parseArgs(argv) {
 export async function run(argv, io = realIo()) {
   let opts;
   try { opts = parseArgs(argv); } catch (e) { io.log(`bootstrap-health-cp-entra: ${e.message}`); return EXIT_USAGE; }
-  const guids = { 'as-client-id': opts.asClientId, 'cp-app-client-id': opts.cpAppClientId, 'tenant-id': opts.tenantId, 'cp-identity-principal-id': opts.cpIdentityPrincipalId };
-  for (const [k, v] of Object.entries(guids)) if (!GUID.test(v ?? '')) { io.log(`bootstrap-health-cp-entra: --${k} <GUID> is required (got '${v ?? ''}').`); return EXIT_USAGE; }
+  const guids = { 'as-client-id': opts.asClientId, 'cp-app-client-id': opts.cpAppClientId, 'tenant-id': opts.tenantId, 'ci-client-id': opts.ciClientId, 'cp-identity-principal-id': opts.cpIdentityPrincipalId };
+  for (const [k, v] of Object.entries(guids)) if (!GUID.test(v ?? '')) { io.log(`bootstrap-health-cp-entra: --${k} <GUID> is required (got '${v ?? ''}').${k === 'ci-client-id' ? ' It is the client id the workflow logs in with (AZURE_CLIENT_ID for Commercial, AZURE_GOV_CLIENT_ID for GCC-High/IL5, AZURE_GCC_CLIENT_ID for GCC); without it the CI service principal gets no HealthCP.Admin and its control-plane calls 403. Nothing was changed.' : ''}`); return EXIT_USAGE; }
   for (const k of ['apimPrincipalId', 'consoleClientId', 'consolePrincipalId']) if (opts[k] && !GUID.test(opts[k])) { io.log(`bootstrap-health-cp-entra: --${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} must be a GUID.`); return EXIT_USAGE; }
   for (const k of ['cpAppName', 'cpResourceGroup', 'subscription']) if (!opts[k]) { io.log(`bootstrap-health-cp-entra: --${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required.`); return EXIT_USAGE; }
   try {
