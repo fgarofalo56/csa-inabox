@@ -13,7 +13,7 @@
 | Existing LHDS stamp | refuse duplicates | Workflow refuses if an `rg-csa-loom-health-*` group exists unless `allow_existing_hub=true` |
 | ACR | accept supplied | `healthConfig.acrLoginServer`; `controlPlaneConfig.acrName/acrResourceGroup/acrLoginServer` |
 | DNS / networking | accept supplied | `healthConfig.extraDnsLinkVnetIds`, `vnetAddressPrefix`; the stamp creates its own VNet |
-| TLS certificate | accept supplied | `healthConfig.tlsCertificateSecretUri` |
+| TLS certificate | accept supplied | `healthConfig.tlsCertificateSecretUri` (version-less Key Vault secret URI of a CA certificate; the gateway identity needs Key Vault Secrets User on that vault). Empty = the stamp issues its own self-signed certificate; see [greenfield TLS](greenfield.md#ingress-tls-self-signed-by-default) |
 | APIM | accept supplied | `modules/health/ingress.bicep` takes `apimServiceName`, `apimResourceGroupName`, `apimSubscriptionId` and publishes a policy fragment to an existing service. Not reachable from `stamp.bicep` / `health.bicep` (gap 3) |
 | AKS, PostgreSQL, Blob, Key Vault, Event Hubs, Log Analytics | discover / offer / validate / accept | **None.** `stamp.bicep` always creates its own. The `existing` references in `tenant.bicep` and `engines.bicep` point at the stamp's own resources, not customer ones |
 

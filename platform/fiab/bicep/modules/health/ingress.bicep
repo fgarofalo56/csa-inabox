@@ -39,6 +39,12 @@ param backendHostName string = 'lhds.internal'
 @description('Version-less Key Vault secret URI of the TLS certificate (https://<vault>/secrets/<name>). Empty = no TLS listener yet; port 80 only redirects.')
 param tlsCertificateSecretUri string = ''
 
+@description('When tlsCertificateSecretUri is empty, issue a Key Vault self-signed certificate for the public FQDN (tls-cert.bicep).')
+param selfSignedTlsEnabled bool = true
+
+@description('Subnet for the VNet-injected certificate script (network.bicep snet-script). Required when a self-signed certificate is issued.')
+param scriptSubnetId string = ''
+
 @description('Resource id of the stamp Key Vault; the gateway identity is granted Key Vault Secrets User on it.')
 param keyVaultId string
 
@@ -107,7 +113,9 @@ param workspaceId string = ''
 param tags object = {}
 
 var gwName = 'agw-lhds-${stampName}'
-var hasTls = !empty(tlsCertificateSecretUri)
+var suppliedTls = !empty(tlsCertificateSecretUri)
+var selfSigned = !suppliedTls && selfSignedTlsEnabled && !empty(scriptSubnetId)
+var hasTls = suppliedTls || selfSigned
 var zones = useAvailabilityZones ? ['1', '2', '3'] : null
 var apimFragmentRequested = !empty(apimServiceName)
 var secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -235,13 +243,31 @@ resource pip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
+// Default certificate: Key Vault self-signed for the public FQDN, issued before the gateway
+// is created (the gateway resolves the secret at creation). The override above always wins.
+module selfSignedCert 'tls-cert.bicep' = if (selfSigned) {
+  name: 'lhds-${stampName}-ingress-tls'
+  params: {
+    location: location
+    keyVaultName: kv.name
+    scriptSubnetId: scriptSubnetId
+    fqdn: pip.properties.dnsSettings.fqdn
+    tags: tags
+  }
+  dependsOn: [
+    gwSecretsRole
+  ]
+}
+
+var effectiveTlsSecretUri = suppliedTls ? tlsCertificateSecretUri : (selfSigned ? selfSignedCert!.outputs.secretUri : '')
+
 var feName = 'fe-public'
 var gwId = resourceId('Microsoft.Network/applicationGateways', gwName)
 
 var sslCertificates = hasTls ? [
   {
     name: 'stamp-tls'
-    properties: { keyVaultSecretId: tlsCertificateSecretUri }
+    properties: { keyVaultSecretId: effectiveTlsSecretUri }
   }
 ] : []
 
@@ -423,4 +449,12 @@ output publicIp string = pip.properties.ipAddress
 output publicFqdn string = pip.properties.dnsSettings.fqdn
 output gatewayIdentityPrincipalId string = gwIdentity.properties.principalId
 output tlsConfigured bool = hasTls
+@description('selfSigned (Key Vault issued, default), supplied (CA certificate from tlsCertificateSecretUri) or none.')
+output tlsMode string = suppliedTls ? 'supplied' : (selfSigned ? 'selfSigned' : 'none')
+@description('Key Vault certificate name for the self-signed default; empty otherwise.')
+output tlsCertificateName string = selfSigned ? selfSignedCert!.outputs.certificateName : ''
+@description('Version-less secret URI the gateway reads.')
+output tlsSecretUri string = effectiveTlsSecretUri
+@description('PUBLIC facts of the self-signed certificate (notAfter, thumbprintSha1, fingerprintSha256, versionId) for CI pinning; empty otherwise. No private material.')
+output tlsCertificate object = selfSigned ? selfSignedCert!.outputs.certificate : {}
 output apimFragmentName string = apimFragmentRequested ? apimFragment!.outputs.fragmentName : ''

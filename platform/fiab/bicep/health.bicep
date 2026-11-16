@@ -25,6 +25,7 @@
 //   pairedLocation, adminEntraGroupId, vnetAddressPrefix, egressMode
 //   ('firewall'|'loadBalancer'), postgresHa, useAvailabilityZones, kubernetesVersion,
 //   acrLoginServer, extraAllowedFqdns, extraDnsLinkVnetIds, tlsCertificateSecretUri,
+//     selfSignedTls (default true; false = no TLS listener unless tlsCertificateSecretUri is set),
 //     wafClientRateLimitPerMinute (default 6000; 0 drops the WAF per-address rule, the documented
 //     Gov escape if the rule type is rejected there - UNVERIFIED in Gov),
 //   auditRetentionDays, logRetentionDays, postgres ('enabled'|'disabled': per-stamp
@@ -121,6 +122,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
     extraAllowedFqdns: healthConfig.?extraAllowedFqdns ?? []
     extraDnsLinkVnetIds: healthConfig.?extraDnsLinkVnetIds ?? []
     tlsCertificateSecretUri: string(healthConfig.?tlsCertificateSecretUri ?? '')
+    selfSignedTlsEnabled: bool(healthConfig.?selfSignedTls ?? true)
     wafClientRateLimitPerMinute: int(healthConfig.?wafClientRateLimitPerMinute ?? 6000)
     auditRetentionDays: int(healthConfig.?auditRetentionDays ?? 2190)
     logRetentionDays: int(healthConfig.?logRetentionDays ?? 90)
@@ -158,8 +160,12 @@ var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed
 // deploy-health.yml resolves it (input, repo variable, or an exactly-one Entra lookup) and passes
 // controlPlaneConfig.authAsClientId. If it is still empty it is reported in
 // healthControlPlaneState.authServerMissing, and the workflow fails the run on a non-empty list.
-// Derived values are https even while the ingress has no TLS listener (ingressTlsConfigured=false):
-// the identifiers are stable, but a client cannot complete TLS until tlsCertificateSecretUri is set.
+// TLS: with healthConfig.tlsCertificateSecretUri empty (the default) the stamp issues a Key Vault
+// SELF-SIGNED certificate for the ingress FQDN (operator decision 2026-11-15; modules/health/tls-cert.bicep),
+// so the https listener exists on every boundary. Set tlsCertificateSecretUri to a CA certificate to
+// override; healthConfig.selfSignedTls=false restores the no-listener behaviour. The stamp manifest
+// (healthStamp output) carries ingressTlsMode, ingressTlsCertificateName and ingressTlsCertificate
+// (public fingerprints only) so CI can pin the certificate without reaching the private vault.
 var cpIngressFqdn = healthDeploy ? string(healthStamp!.outputs.stamp.ingressPublicFqdn) : ''
 var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}/auth'))
 var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'))
