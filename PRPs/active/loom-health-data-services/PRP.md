@@ -142,7 +142,7 @@ W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c, W08b, W10)
 |---|---|---|---|---|---|
 | W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | W0-7 #5118; DEV proof #5107; pass bars carried to W13 | 2026-11-14 |
 | W01-control-plane-identity-stamp | in-progress | main | sonnet | W1 items merged, not deployed (#5122..#5287); detail in W01 file | 2026-11-14 |
-| W01b-close-deploy-receipts | in-progress | feat/lhds-w1b-close-receipts | sonnet | W1b-1 deployed on Commercial (deploy-health 43726729661, bootstrap 43727458723; BFF receipt owed). W1b-4 #5311 deployed, G1 owed. W1b-2/3/5 todo. Detail in W01b file. | 2026-11-15 |
+| W01b-close-deploy-receipts | in-progress | feat/lhds-w1b-close-receipts | sonnet | 2026-11-16: loom-ui-verify fixed (#5318/#5319, green on main). G1 spec + destroy-on-delete DEPLOYED (#5321/#5323). CI-SP CP admin (#5320), automation grant seed (#5327) and stamp TLS (#5322/#5326) merged, not deployed. NEXT (operator first): Resume the Commercial estate → deploy-health full → bootstrap → G1 run → edge probe → Inferno. W1b-5 Gov blocked (#5123; the Gov estate has been paused since 2026-11-07). Detail in W01b file. | 2026-11-16 |
 | W02a-fhir-core-build | in-progress | | sonnet | W2-1 #5290, W2-3 #5310, W2-5 #5312 merged, not deployed; W2-2 waits on the bicep slot | 2026-11-15 |
 | W02b-fhir-core-ops | todo | | sonnet | | 2026-11-14 |
 | W03a-dicom-core-a | in-progress | | sonnet | W3-1 #5313 merged, not deployed; #5315 must land before any DICOM stamp is live | 2026-11-15 |
