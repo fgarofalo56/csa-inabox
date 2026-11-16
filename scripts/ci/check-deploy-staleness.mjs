@@ -562,6 +562,11 @@ export const WATCHED = [
       // so a commit touching it without a subsequent successful run IS drift,
       // for exactly the reason the two above are watched.
       'scripts/ci/_estate-pause-declaration.mjs',
+      // #4672 - the pre-apply step that deletes VMs on a retired marketplace image
+      // (Azure refuses an in-place imageReference change). It decides whether the
+      // apply can succeed on a brownfield estate, so it is a deploy source.
+      'scripts/csa-loom/replace-retired-image-vms.mjs',
+      'scripts/ci/retired-vm-images.json',
     ],
     maxDays: 7,
   },
@@ -779,6 +784,11 @@ export const WATCHED = [
       'scripts/csa-loom/discover-dlz-adopt-plan.sh',
       'scripts/csa-loom/resolve-dlz-coordinates.mjs',
       'scripts/ci/reconcile-policy.mjs',
+      // #4672 - the pre-apply step that deletes VMs on a retired marketplace image
+      // (Azure refuses an in-place imageReference change). It decides whether the
+      // apply can succeed on a brownfield estate, so it is a deploy source.
+      'scripts/csa-loom/replace-retired-image-vms.mjs',
+      'scripts/ci/retired-vm-images.json',
     ],
     maxDays: 7,
   },

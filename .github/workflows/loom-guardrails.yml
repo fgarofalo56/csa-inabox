@@ -319,6 +319,12 @@ jobs:
       - name: deploy-paths-coverage (the staleness watchdog measures what it claims — #2775)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-paths-coverage.mjs
+      # #4672 - a Microsoft compliance notice flagged a Loom VM on the retired
+      # `WindowsServer` offer (.NET 6 EOL). No template may put a VM back on a
+      # denylisted marketplace image, and an offer cannot be laundered through a param.
+      - name: retired VM images (no template references a denylisted marketplace image - #4672)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-retired-vm-images.mjs
       # An Entra app registration is a Graph object ARM cannot create, so it is
       # minted once by the post-deploy bootstrap and only RE-READ by later
       # deploys. A lane that APPLIES the console template without resolving it

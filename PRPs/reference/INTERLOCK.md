@@ -20,7 +20,8 @@ table below in the same PR. A PR that finds the slot held rebases its non-bicep 
 |---|---|---|---|
 | feat/lhds-w1b-close-receipts | W01b-close-deploy-receipts | 2026-11-14 | 2026-11-15 (#5304 merged `cbd434703`; slot free, next per GLOBAL-SCHEDULE: apim WA) |
 | feat/lhds-w1b-stamp-tls | W01b-close-deploy-receipts | 2026-11-15 | 2026-11-16 (#5322 merged `0edc18128`) |
-| fix/lhds-tls-script-storage-rbac | W01b-close-deploy-receipts | 2026-11-16 | |
+| fix/lhds-tls-script-storage-rbac | W01b-close-deploy-receipts | 2026-11-16 | 2026-11-16 (#5326 merged `0afcbaca8`) |
+| fix/4672-retire-dotnet6-vm-images | none (compliance hotfix #4672) | 2026-11-16 | |
 
 Rationale: `main.bicep`, `admin-plane/main.bicep`, `apim.bicep`, `health.bicep` (~279 KB) and the seven `params/*.bicepparam` files are
 co-edited by five programs, and `main.json` has an ARM size ceiling (measure it with `git cat-file -s` at the ref; never quote a number).

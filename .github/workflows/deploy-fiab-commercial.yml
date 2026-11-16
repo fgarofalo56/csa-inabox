@@ -2377,6 +2377,25 @@ jobs:
       #
       # Decision logic + tests: scripts/ci/reconcile-policy.mjs
       # (decidePinRefresh / comparePins) and __tests__/roll-race.test.mjs.
+      - name: Replace VMs on a RETIRED marketplace image (self-heal before the apply - #4672)
+        id: retired_images
+        # Azure refuses an imageReference change on an existing VM
+        # (PropertyChangeNotAllowed), so a VM still on a retired image would fail the
+        # apply below. This deletes ONLY such VMs (+ their OS disk) in the admin RG so
+        # the apply re-creates them on the current image. No-op when none exist or the
+        # RG does not exist yet. Denylist: scripts/ci/retired-vm-images.json.
+        # Runs only when this run deploys the ADMIN PLANE: topology=dlz-attach skips it
+        # (main.bicep), so nothing would re-create a deleted VM. Schedule runs have an
+        # empty topology and are in scope. NO ROLLBACK: the delete runs just before
+        # the re-pin + Provision (the re-pin must stay LAST before Provision, roll-race
+        # test); if Provision fails the VM stays absent until the next
+        # successful deploy.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && env.CSA_LOOM_TOPOLOGY != 'dlz-attach'
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode dry-run
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode apply
+
       - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3676)
         id: repin
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
