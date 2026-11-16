@@ -29,8 +29,10 @@ import { GET } from '../route';
 
 const getJob = cp.getJob as unknown as ReturnType<typeof vi.fn>;
 const SESSION = { claims: { oid: 'oid-1', tid: 'tid-1', upn: 'a@b.c', groups: [] } };
-const req = () => ({ nextUrl: { pathname: '/api/health/jobs/job-9' } }) as any;
-const ctx = { params: Promise.resolve({ id: 'job-9' }) } as any;
+const req = () => ({ nextUrl: { pathname: '/api/health/jobs/x' } }) as any;
+const JOB = 'job-' + '0123456789abcdef'.repeat(2);
+const ctxFor = (id: string) => ({ params: Promise.resolve({ id }) }) as any;
+const ctx = ctxFor(JOB);
 
 beforeEach(() => {
   vi.mocked(getSession).mockReturnValue(SESSION as any);
@@ -48,13 +50,13 @@ describe('GET /api/health/jobs/[id]', () => {
   });
 
   it('returns the job with its receipts verbatim for a Reader', async () => {
-    const job = { id: 'job-9', kind: 'tenant.destroy', state: 'succeeded', receipts: [{ at: 't', step: 'resource.deleted', detail: 'kv id=/subscriptions/x' }] };
+    const job = { id: JOB, kind: 'tenant.destroy', state: 'succeeded', receipts: [{ at: 't', step: 'resource.deleted', detail: 'kv id=/subscriptions/x' }] };
     getJob.mockResolvedValue(job);
     const res = await GET(req(), ctx);
     expect(res.status).toBe(200);
     // Breaks if the route drops receipts or wraps them differently (the G1 spec reads body.job.receipts).
     expect(await res.json()).toEqual({ ok: true, job });
-    expect(getJob).toHaveBeenCalledWith('job-9');
+    expect(getJob).toHaveBeenCalledWith(JOB);
   });
 
   it('a control-plane 404 is a 404, any other control-plane failure is a 502 carrying its code', async () => {
@@ -65,5 +67,31 @@ describe('GET /api/health/jobs/[id]', () => {
     // Mapping everything to 404 would hide an outage as "job gone".
     expect(res.status).toBe(502);
     expect((await res.json()).code).toBe('cp_internal');
+  });
+});
+
+describe('GET /api/health/jobs/[id] id validation (path traversal into the control plane)', () => {
+  // Each id would reach cp.getJob unchanged without the regex: '..' survives encodeURIComponent and the URL
+  // normaliser collapses /api/health/jobs/.. to /api/health/, aiming the console's CP bearer token at a path the caller picked.
+  it.each([
+    ['..', '..'],
+    ['../x', '../x'],
+    ['encoded dots', '%2e%2e'],
+    ['empty', ''],
+    ['short id', 'job-9'],
+    ['uppercase prefix', 'JOB-' + '0123456789abcdef'.repeat(2)],
+    ['uppercase hex', 'job-' + '0123456789ABCDEF'.repeat(2)],
+    ['trailing junk', JOB + '/..'],
+  ])('%s -> 400 invalid_job_id and the control plane is never called', async (_n, id) => {
+    const res = await GET(req(), ctxFor(id));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('invalid_job_id');
+    expect(getJob).not.toHaveBeenCalled();
+  });
+
+  it('a valid job-<32 hex> id is proxied', async () => {
+    getJob.mockResolvedValue({ id: JOB });
+    expect((await GET(req(), ctxFor(JOB))).status).toBe(200);
+    expect(getJob).toHaveBeenCalledWith(JOB);
   });
 });

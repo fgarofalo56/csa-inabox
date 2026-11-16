@@ -84,6 +84,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
   let itemId = '';
   let itemDeleted = false;
   let armIds: string[] = [];
+  let tenantId = '';
 
   test.beforeEach(async ({ context }) => {
     await signIn(context).catch(() => { /* storageState may already carry the session */ });
@@ -96,10 +97,22 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     const page = await context.newPage();
     try {
       await signIn(context).catch(() => {});
-      if (wsId && itemId && !itemDeleted) {
-        const r = await page.request.delete(`${BASE}/api/workspaces/${wsId}/items/${itemId}`, { timeout: 60_000 }).catch(() => null);
-        console.log(`[health-tenant-g1] cleanup DELETE item ${itemId} -> ${r ? r.status() : 'no response'}` +
-          (r && r.ok() ? ' (tenant.destroy submitted; NOT polled by cleanup)' : ' (TENANT MAY STILL BE LIVE: destroy by hand)'));
+      // The create POST may have timed out AFTER the server made the item (itemId never recorded):
+      // find it by the run's generated name, so a billable tenant is not orphaned.
+      const victims = new Set<string>();
+      if (itemId && !itemDeleted) victims.add(itemId);
+      if (wsId && !itemId) {
+        const l = await page.request.get(`${BASE}/api/workspaces/${wsId}/items`, { timeout: 60_000 }).catch(() => null);
+        const rows = l && l.ok() ? await l.json().catch(() => []) : [];
+        for (const it of Array.isArray(rows) ? rows : []) {
+          if (it?.displayName === displayName && typeof it?.id === 'string') victims.add(it.id);
+        }
+      }
+      for (const id of victims) {
+        const r = await page.request.delete(`${BASE}/api/workspaces/${wsId}/items/${id}`, { timeout: 60_000 }).catch(() => null);
+        console.log(`[health-tenant-g1] cleanup DELETE item ${id} -> ${r ? r.status() : 'no response'}` +
+          (r && r.ok() ? ' (tenant.destroy submitted; NOT polled by cleanup)'
+            : ` (TENANT MAY STILL BE LIVE: item=${id} tenant=${tenantId || displayName.toLowerCase()})`));
       }
     } finally {
       await page.close();
@@ -175,6 +188,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
 
     // auto-bind-by-default 2: the backing tenant carries the SAME name as the item; sanitization is recorded.
     const b = last.binding;
+    tenantId = String(b?.tenantId || '');
     // Breaks if sourceName/displayName are rewritten (name mapping drift).
     expect(b.sourceName, 'binding.sourceName must equal the item display name').toBe(displayName);
     expect(last.tenant.displayName, 'CP tenant displayName must equal the item display name').toBe(displayName);
@@ -229,6 +243,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     expect(armIds.length, 'step 3 must have recorded ARM ids to look for').toBeGreaterThanOrEqual(1);
     const r = await page.request.delete(`${BASE}/api/workspaces/${wsId}/items/${itemId}`, { timeout: 120_000 });
     const body = await r.json().catch(() => ({}));
+    if (!r.ok()) console.log(`[health-tenant-g1] DELETE refused (${r.status()}): TENANT MAY STILL BE LIVE: item=${itemId} tenant=${tenantId || displayName.toLowerCase()}`);
     failIfTenantAdminGate(r.status(), body, 'DELETE item');
     // Breaks if the delete is refused (502/503 fail-closed: the CP would not accept the destroy).
     expect(r.ok(), `DELETE item -> ${r.status()}: ${JSON.stringify(body).slice(0, 300)}`).toBe(true);

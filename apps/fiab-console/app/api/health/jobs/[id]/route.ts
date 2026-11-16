@@ -17,7 +17,13 @@ import { cp, CpError, CpNotConfiguredError } from '../../tenants/_lib/cp-client'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// The control plane mints job ids as 'job-' + 32 hex (apps/loom-health-cp/src/jobs/runner.ts:37; its router
+// matches the same shape, src/http/app.ts:56). cp.getJob only encodeURIComponent()s the id, and '..' survives
+// that, so an unchecked id would let a Reader steer the console's CP bearer token at a CP path of their choosing.
+const JOB_ID_RE = /^job-[0-9a-f]{32}$/;
+
 export const GET = withHealthTenantAdmin<{ id: string }>('Reader', async (_req, { params }) => {
+  if (!JOB_ID_RE.test(params.id)) return apiError('Invalid job id', 400, { code: 'invalid_job_id' });
   try {
     const job = await cp.getJob(params.id);
     return apiOk({ job });
