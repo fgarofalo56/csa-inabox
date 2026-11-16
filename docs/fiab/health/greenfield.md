@@ -38,6 +38,33 @@ Producing that image is not covered here.
 5. **Register the stamp** with the control plane (`POST /api/health/stamps`),
    then create a `health-tenant` item in the Console.
 
+## Ingress TLS: self-signed by default
+
+With `healthConfig.tlsCertificateSecretUri` empty (the default on every param
+file) the stamp deploys a Key Vault **self-signed** certificate
+(`lhds-ingress-selfsigned`, CN and SAN = the ingress public FQDN, 12 months,
+AutoRenew at 30 days) so the Application Gateway has an HTTPS listener with no
+operator step (`modules/health/tls-cert.bicep`). ARM cannot create vault
+certificates, so a `deploymentScript` does it from a VNet-injected container
+(`snet-script`) through the vault private endpoint; a re-deploy keeps a valid
+certificate and re-issues only when it is missing, for a different FQDN, or
+within 30 days of expiry. The gateway reads the version-less secret URI, so
+renewals roll without a redeploy.
+
+- **Override with a real certificate:** set `healthConfig.tlsCertificateSecretUri`
+  (brownfield and CA-issued certificates); the self-signed path is then not
+  deployed.
+- **Opt out:** `healthConfig.selfSignedTls=false` restores "no HTTPS listener".
+- **Pinning:** clients and probes must pin the self-signed certificate, not trust
+  a CA. The `healthStamp` output carries `ingressTlsMode`,
+  `ingressTlsCertificateName` and `ingressTlsCertificate` (`fingerprintSha256`,
+  `thumbprintSha1`, `notAfter`, `versionId`): public data only, the private key
+  never leaves the vault. After an AutoRenew the fingerprint changes; re-read the
+  output from the next deploy or fetch the served certificate.
+- **Failure:** the script retries RBAC/private-DNS lag for about 8 minutes, then
+  fails the deployment with the vault name; it never reports success unverified.
+  Not exercised: no deploy has run this path yet.
+
 ## Failure handling
 
 The workflow classifies failures (permission, not found, transient,

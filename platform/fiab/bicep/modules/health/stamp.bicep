@@ -73,8 +73,11 @@ param extraAllowedFqdns array = []
 @description('VNets (for example the hub that hosts the control plane) linked to every stamp private DNS zone.')
 param extraDnsLinkVnetIds array = []
 
-@description('Version-less Key Vault secret URI of the ingress TLS certificate. Empty = no TLS listener yet; port 80 only redirects.')
+@description('Version-less Key Vault secret URI of a CA-issued ingress TLS certificate (override). Empty = the stamp issues a Key Vault self-signed certificate for the ingress FQDN (selfSignedTlsEnabled).')
 param tlsCertificateSecretUri string = ''
+
+@description('When tlsCertificateSecretUri is empty, issue a Key Vault self-signed certificate for the ingress FQDN so the HTTPS listener exists by default. false = no TLS listener (port 80 only redirects).')
+param selfSignedTlsEnabled bool = true
 
 @description('Per-client-address requests per minute at the WAF (volumetric backstop; per-tenant quotas live in APIM). 0 disables the rule. Same default on every boundary; the rule type is UNVERIFIED in Azure Government, so a Gov What-If/deploy rejection is cleared by passing 0 via healthConfig.wafClientRateLimitPerMinute.')
 @minValue(0)
@@ -344,6 +347,8 @@ module ingress 'ingress.bicep' = {
     agwSubnetId: network.outputs.agwSubnetId
     backendIp: network.outputs.ingressIlbIp
     tlsCertificateSecretUri: tlsCertificateSecretUri
+    selfSignedTlsEnabled: selfSignedTlsEnabled
+    scriptSubnetId: network.outputs.scriptSubnetId
     wafClientRateLimitPerMinute: wafClientRateLimitPerMinute
     keyVaultId: keyvault.outputs.vaultId
     minCapacity: p.agwMin
@@ -383,5 +388,9 @@ output stamp object = {
   kedaAddon: aks.outputs.kedaAddon
   ingressPublicFqdn: ingress.outputs.publicFqdn
   ingressTlsConfigured: ingress.outputs.tlsConfigured
+  ingressTlsMode: ingress.outputs.tlsMode
+  ingressTlsCertificateName: ingress.outputs.tlsCertificateName
+  ingressTlsSecretUri: ingress.outputs.tlsSecretUri
+  ingressTlsCertificate: ingress.outputs.tlsCertificate
   wafPolicyId: ingress.outputs.wafPolicyId
 }

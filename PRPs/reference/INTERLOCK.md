@@ -19,6 +19,7 @@ table below in the same PR. A PR that finds the slot held rebases its non-bicep 
 | Slot holder | PRP | Since | Released |
 |---|---|---|---|
 | feat/lhds-w1b-close-receipts | W01b-close-deploy-receipts | 2026-11-14 | 2026-11-15 (#5304 merged `cbd434703`; slot free, next per GLOBAL-SCHEDULE: apim WA) |
+| feat/lhds-w1b-stamp-tls | W01b-close-deploy-receipts | 2026-11-15 | |
 
 Rationale: `main.bicep`, `admin-plane/main.bicep`, `apim.bicep`, `health.bicep` (~279 KB) and the seven `params/*.bicepparam` files are
 co-edited by five programs, and `main.json` has an ARM size ceiling (measure it with `git cat-file -s` at the ref; never quote a number).

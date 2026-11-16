@@ -56,6 +56,8 @@ var pePrefix = cidrSubnet(vnetAddressPrefix, 24, 4)
 var pgPrefix = cidrSubnet(vnetAddressPrefix, 24, 5)
 var agwPrefix = cidrSubnet(vnetAddressPrefix, 24, 6)
 var fwPrefix = cidrSubnet(vnetAddressPrefix, 26, 28)
+// Allocation map (10.60.0.0/16): /22 idx0 = .0-.3, /24 idx4 pe, 5 pg, 6 agw, /26 idx28 = 10.60.7.0/26 (fw), /24 idx8 script. Next free /24: idx9.
+var scriptPrefix = cidrSubnet(vnetAddressPrefix, 24, 8)
 
 // Fixed address inside the node subnet for the ingress controller's internal
 // load balancer; the App Gateway backend pool targets it. High host index so it
@@ -324,6 +326,28 @@ resource snetAks 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   dependsOn: [snetAgw]
 }
 
+// Hosts the VNet-injected deploymentScript container that issues the default self-signed
+// ingress certificate in the private-only stamp vault (tls-cert.bicep). No route table and no
+// NSG: the container pulls its image and logs in over the platform default outbound path.
+resource snetScript 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
+  parent: vnet
+  name: 'snet-script'
+  properties: {
+    addressPrefix: scriptPrefix
+    defaultOutboundAccess: true
+    serviceEndpoints: [
+      { service: 'Microsoft.Storage' }
+    ]
+    delegations: [
+      {
+        name: 'container-instance'
+        properties: { serviceName: 'Microsoft.ContainerInstance/containerGroups' }
+      }
+    ]
+  }
+  dependsOn: [snetAks]
+}
+
 // ── Private DNS zones + links ────────────────────────────────────────────────
 resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for z in zoneNames: {
   name: z.name
@@ -363,6 +387,7 @@ output aksSubnetId string = snetAks.id
 output peSubnetId string = snetPe.id
 output postgresSubnetId string = snetPostgres.id
 output agwSubnetId string = snetAgw.id
+output scriptSubnetId string = snetScript.id
 output ingressIlbIp string = ingressIlbIp
 output routeTableId string = useFirewall ? routeTable.id : ''
 output firewallPrivateIp string = useFirewall ? firewall!.properties.ipConfigurations[0].properties.privateIPAddress : ''
