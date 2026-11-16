@@ -13,13 +13,13 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1715 |
+| Total routes | 1716 |
 | Public (no session) | 60 |
-| Session-only | 616 |
+| Session-only | 617 |
 | Owner-scoped | 698 |
 | Admin | 341 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 502 |
+| Gated (backend config) | 503 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1074,6 +1074,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `health/deep/route.ts` | GET | public |  | Cosmos |
+| `health/jobs/[id]/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
 | `health/route.ts` | GET | public |  | — |
 | `health/tenants/[id]/route.ts` | GET POST PATCH | owner-scoped | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
 | `health/tenants/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
