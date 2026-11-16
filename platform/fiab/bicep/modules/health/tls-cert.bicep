@@ -79,7 +79,9 @@ resource staging 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: 'Standard_LRS' }
   properties: {
-    // REQUIRED by deploymentScripts: the container mounts its file share with the account key.
+    // Left true: the script now mounts the share as its identity (stagingFileRole, no key), but
+    // Learn's deployment-script-vnet page was not available to confirm shared key is unneeded,
+    // so it is not tightened here (follow-up: set false once a live run proves it).
     allowSharedKeyAccess: true
     allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'
@@ -95,7 +97,24 @@ resource staging 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource issueCert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
+// A VNet-injected script on a firewalled storage account authenticates to it as the script identity
+// (no account key): Storage File Data Privileged Contributor scoped to the account. Without it ARM
+// rejects the script with DeploymentScriptStorageAccountWithServiceEndpointEnabled (run 43794877307).
+// https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deployment-script-vnet
+var storageFilePrivilegedContributorRoleId = '69566ab7-960f-475b-8e7c-b3118f30c6bd'
+
+resource stagingFileRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: staging
+  name: guid(staging.id, scriptIdentity.id, storageFilePrivilegedContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageFilePrivilegedContributorRoleId)
+    principalId: scriptIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS ingress: the VNet-injected script mounts its staging file share as this identity.'
+  }
+}
+
+resource issueCert'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'script-lhds-ingress-tls'
   location: location
   kind: 'AzureCLI'
@@ -114,7 +133,6 @@ resource issueCert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     forceUpdateTag: uniqueString(fqdn, certName, string(renewBeforeDays))
     storageAccountSettings: {
       storageAccountName: staging.name
-      storageAccountKey: staging.listKeys().keys[0].value
     }
     containerSettings: {
       subnetIds: [
@@ -132,6 +150,7 @@ resource issueCert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   }
   dependsOn: [
     certOfficer
+    stagingFileRole
   ]
 }
 
