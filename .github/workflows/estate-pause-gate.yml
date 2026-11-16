@@ -14,7 +14,7 @@ name: estate-pause-gate
 # auto-pause lane makes. It adds NO secret and NO role.
 #
 # The recorded state is RECONCILED against the measured power state of the
-# estate's App Gateways and AKS clusters (az graph query, same az login), because
+# pause snapshot's resources (az graph query by id, same az login), because
 # the record can go stale (#5325: PAUSED on record, Running in fact, 3 weeks of
 # stood-down deploys). See the header of scripts/ci/estate-pause-state.mjs.
 #
@@ -71,7 +71,7 @@ on:
         description: 'When the estate was paused (ISO), when the console reports it'
         value: ${{ jobs.gate.outputs.paused_at }}
       measured_state:
-        description: 'RUNNING | STOPPED | FAILED: measured power state of the estate App Gateways and AKS clusters (FAILED = not established; the console record was used)'
+        description: 'RUNNING | STOPPED | FAILED: measured power state of the resources the pause stopped (FAILED = not established; the console record was used)'
         value: ${{ jobs.gate.outputs.measured_state }}
 
 permissions:

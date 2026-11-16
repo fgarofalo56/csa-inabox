@@ -29,26 +29,32 @@
  *
  * RECONCILE (#5325). The console's recorded state can go STALE: on 2026-11-16 it
  * said PAUSED (since 2026-11-15T04:35:55Z) while Resource Graph showed
- * agw-lhds-dev01 Running and aks-lhds-dev01 Running and the console served
- * traffic; the estate had been resumed outside the console's resume path, so
+ * agw-lhds-dev01 and aks-lhds-dev01 Running and the console served traffic; the
+ * estate had been resumed outside the console's resume path, so
  * deploy-fiab-commercial stood down on every scheduled run from 2026-10-24.
  * The recorded state is therefore checked against the MEASURED power state of
- * the estate's Application Gateways and AKS clusters (`az graph query`, in the
- * cloud the caller logged into), found the way the pause finds them: the
- * `loom-estate-id` ownership tag, minus `loom-estate-pause=exempt` (resources
- * the pause never stops, so they say nothing about whether it happened).
- * Container Apps are NOT counted: the console and its never-pause consumers run
- * by design inside a paused estate, so a running replica proves nothing.
+ * exactly what the pause stopped: the state body's `resources` array IS the
+ * pause snapshot (what `pausePost` resolved from the deploy manifest, the
+ * estate-tag Resource Graph sweep and the Container Apps list, #3922), each row
+ * with its prePausePowerState. NO tag is relied on: on the live estate the
+ * gateway and cluster carry no `loom-estate-id`. Rows that were already stopped
+ * before the pause say nothing and are skipped. The rest are looked up by id in
+ * Resource Graph (`az graph query`, the cloud the caller logged into) and
+ * classified: Application Gateway operationalState, AKS powerState.code,
+ * Container App minReplicas (the pause scales to 0 and restores min/max, so
+ * min > 0 means resumed; the console itself is never in the snapshot) and ADX
+ * state. Other snapshot types are not classifiable from Resource Graph and are
+ * ignored.
  *
  *   recorded PAUSED   + measured RUNNING -> RUNNING (record is stale; ::warning::)
  *   recorded PAUSED   + measured STOPPED -> PAUSED  (stand down, as before)
- *   recorded RUNNING  + measured STOPPED -> PAUSED  (everything the pause stops
- *                                           is stopped; deploying would wake it)
+ *   recorded RUNNING (no snapshot, so no inventory) -> measurement FAILED, the
+ *                                           record stands (nothing to measure)
  *   recorded PAUSING/RESUMING/RESUME_FAILED/UNKNOWN -> the record stands (a
  *                                           transition in flight reads mixed)
- *   measurement FAILED (az error, extension missing, empty inventory, only
- *   unclassifiable rows) -> the record stands and the cause is printed. A
- *   failed query is never read as RUNNING (deploy-integrity.md R7).
+ *   measurement FAILED (az error, extension missing, no inventory, snapshot rows
+ *   not found, only unclassifiable rows) -> the record stands and the cause is
+ *   printed. A failed query is never read as RUNNING (deploy-integrity.md R7).
  *
  * DECISION (decideStandDown, pure):
  *   - PAUSING / PAUSED  -> stand down, unless an operator override on a
@@ -100,47 +106,82 @@ export const BOUNDARY_AZ_CLOUD = Object.freeze({
   IL5: 'AzureUSGovernment',
 });
 
-/** Resource Graph query: the pause's own ownership tag, minus the pause's own exemption. */
-export const MEASURE_QUERY = "Resources | where type in~ ('microsoft.network/applicationgateways','microsoft.containerservice/managedclusters') "
-  + "| where isnotempty(tostring(tags['loom-estate-id'])) | where tostring(tags['loom-estate-pause']) != 'exempt' "
-  + "| project name, type, op=tostring(properties.operationalState), power=tostring(properties.powerState.code)";
+/** Resource types whose power state Resource Graph exposes, with how to read it. */
+const GRAPH_TYPES = Object.freeze([
+  'microsoft.network/applicationgateways',
+  'microsoft.containerservice/managedclusters',
+  'microsoft.app/containerapps',
+  'microsoft.kusto/clusters',
+]);
+
+/** Resource Graph query: the types above, narrowed by the snapshot's resource groups (ids matched client-side). */
+export function buildMeasureQuery(groups) {
+  const rgs = [...new Set(groups.map((g) => String(g).replace(/[^A-Za-z0-9._()-]/g, '')))].filter(Boolean);
+  return `Resources | where type in~ (${GRAPH_TYPES.map((t) => `'${t}'`).join(',')}) | where resourceGroup in~ (${rgs.map((g) => `'${g}'`).join(',')}) `
+    + '| project id, name, type, op=tostring(properties.operationalState), power=tostring(properties.powerState.code), '
+    + 'minRep=toint(properties.template.scale.minReplicas), kstate=tostring(properties.state)';
+}
+
+/** PURE. 'running' | 'stopped' | null (unclassifiable) for one Resource Graph row. */
+export function classifyRow(r) {
+  const t = String(r?.type ?? '').toLowerCase();
+  const lc = (v) => String(v ?? '').toLowerCase();
+  if (t === 'microsoft.network/applicationgateways') return ['running', 'starting'].includes(lc(r.op)) ? 'running' : ['stopped', 'stopping'].includes(lc(r.op)) ? 'stopped' : null;
+  if (t === 'microsoft.containerservice/managedclusters') return lc(r.power) === 'running' ? 'running' : lc(r.power) === 'stopped' ? 'stopped' : null;
+  if (t === 'microsoft.app/containerapps') return typeof r.minRep === 'number' ? (r.minRep > 0 ? 'running' : 'stopped') : null;
+  if (t === 'microsoft.kusto/clusters') return lc(r.kstate) === 'running' ? 'running' : lc(r.kstate) === 'stopped' ? 'stopped' : null;
+  return null;
+}
 
 /**
- * PURE. Classify Resource Graph rows. RUNNING if ANY owned gateway/cluster is
- * running (a partly-running estate is not paused); STOPPED only when at least one
- * row is classifiable and none is running; otherwise FAILED (empty = failed).
+ * PURE. The pause's own inventory worth measuring: snapshot rows that were
+ * running before the pause (a resource already stopped says nothing about
+ * whether the estate is paused) and whose type Resource Graph can classify.
  */
-export function classifyMeasurement(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return { measured: 'FAILED', reason: 'Resource Graph returned no estate-owned Application Gateways or AKS clusters (empty inventory is a failed measurement, not RUNNING)', running: [], stopped: [] };
-  }
+export function measurableInventory(inventory) {
+  return (Array.isArray(inventory) ? inventory : []).filter((e) => e?.id && GRAPH_TYPES.includes(String(e.type).toLowerCase()) && e.pre === 'Online');
+}
+
+/**
+ * PURE. Match Resource Graph rows to the inventory by id (case-insensitive) and
+ * classify. RUNNING if ANY matched row is running (a partly-running estate is
+ * not paused); STOPPED only when at least one matched row is classifiable and
+ * none runs; otherwise FAILED (empty / unmatched = failed, never RUNNING).
+ */
+export function classifyMeasurement(rows, inventory) {
+  const want = new Set(measurableInventory(inventory).map((e) => String(e.id).toLowerCase()));
+  if (want.size === 0) return { measured: 'FAILED', reason: 'the console state body names no resource that was running before the pause and is measurable (empty inventory is a failed measurement, not RUNNING)', running: [], stopped: [] };
+  const mine = (Array.isArray(rows) ? rows : []).filter((r) => want.has(String(r?.id ?? '').toLowerCase()));
+  if (mine.length === 0) return { measured: 'FAILED', reason: `Resource Graph returned none of the ${want.size} snapshot resource(s) (deleted, or not visible to this login)`, running: [], stopped: [] };
   const running = []; const stopped = [];
-  for (const r of rows) {
-    const isAks = String(r?.type ?? '').toLowerCase() === 'microsoft.containerservice/managedclusters';
-    const v = String(isAks ? r?.power : r?.op).toLowerCase();
-    if (v === 'running' || (!isAks && v === 'starting')) running.push(String(r?.name ?? ''));
-    else if (v === 'stopped' || (!isAks && v === 'stopping')) stopped.push(String(r?.name ?? ''));
+  for (const r of mine) {
+    const c = classifyRow(r);
+    if (c === 'running') running.push(String(r.name ?? r.id));
+    else if (c === 'stopped') stopped.push(String(r.name ?? r.id));
   }
   if (running.length) return { measured: 'RUNNING', running, stopped };
   if (stopped.length) return { measured: 'STOPPED', running, stopped };
-  return { measured: 'FAILED', reason: `none of the ${rows.length} estate-owned row(s) reported a recognisable power state`, running, stopped };
+  return { measured: 'FAILED', reason: `none of the ${mine.length} matched snapshot row(s) reported a recognisable power state`, running, stopped };
 }
 
-/** IO. Measure the estate's power state; NEVER throws. */
-export function measureEstate({ boundary, spawn = defaultSpawn }) {
+/** IO. Measure the pause inventory's power state; NEVER throws. */
+export function measureEstate({ boundary, spawn = defaultSpawn, inventory }) {
   const failed = (reason) => ({ measured: 'FAILED', reason, running: [], stopped: [] });
   try {
     const wantCloud = BOUNDARY_AZ_CLOUD[boundary];
     if (!wantCloud) return failed(`unknown boundary ${JSON.stringify(boundary)}`);
+    const inv = measurableInventory(inventory);
+    if (inv.length === 0) return classifyMeasurement([], inventory);
     const cloud = readActiveCloud(spawn);
     if (cloud.environmentName !== wantCloud) return failed(`az is on cloud ${JSON.stringify(cloud.environmentName)}, not ${wantCloud}`);
     const ext = spawn('az', ['extension', 'add', '--name', 'resource-graph', '--only-show-errors']);
     if (ext.error || ext.status !== 0) return failed(`az extension add resource-graph failed (exit ${ext.status ?? 'none'}): ${String(ext.stderr ?? ext.error ?? '').slice(0, 200)}`);
-    const r = spawn('az', ['graph', 'query', '--first', '1000', '--query', 'data', '--output', 'json', '-q', MEASURE_QUERY]);
+    const q = buildMeasureQuery(inv.map((e) => e.resourceGroup));
+    const r = spawn('az', ['graph', 'query', '--first', '1000', '--query', 'data', '--output', 'json', '-q', q]);
     if (r.error || r.status !== 0) return failed(`az graph query failed (exit ${r.status ?? 'none'}): ${String(r.stderr ?? r.error ?? '').slice(0, 200)}`);
     let rows;
     try { rows = JSON.parse(r.stdout); } catch { return failed('az graph query did not return JSON'); }
-    return classifyMeasurement(rows);
+    return classifyMeasurement(rows, inventory);
   } catch (e) {
     return failed(`measurement threw: ${e?.message ?? 'unknown'}`);
   }
@@ -148,11 +189,11 @@ export function measureEstate({ boundary, spawn = defaultSpawn }) {
 
 /**
  * PURE. Reconcile the recorded state with the measured one (table in the header).
+ * Only PAUSED is ever overridden, and only by a measured RUNNING.
  * @returns {{state:string, stale:boolean, note:string|null}}
  */
 export function reconcile({ recorded, measured }) {
-  if (recorded === ESTATE_STATE.paused && measured === 'RUNNING') return { state: ESTATE_STATE.running, stale: true, note: 'recorded PAUSED but the estate measurably runs' };
-  if (recorded === ESTATE_STATE.running && measured === 'STOPPED') return { state: ESTATE_STATE.paused, stale: true, note: 'recorded RUNNING but every estate-owned gateway/cluster is stopped' };
+  if (recorded === ESTATE_STATE.paused && measured === 'RUNNING') return { state: ESTATE_STATE.running, stale: true, note: 'recorded PAUSED but the resources the pause stopped measurably run' };
   return { state: recorded, stale: false, note: null };
 }
 
@@ -176,8 +217,12 @@ export function interpretState(data) {
   // The console's state body does not carry who paused today; `pausedBy` /
   // `createdBy` are read if it ever does. Never invented.
   const pausedBy = data?.pausedBy ?? data?.createdBy ?? null;
+  const inventory = (Array.isArray(data?.[FIELD.resources]) ? data[FIELD.resources] : [])
+    .filter((r) => r && typeof r.resourceId === 'string' && r.resourceId)
+    .map((r) => ({ id: r.resourceId, type: String(r.resourceType ?? ''), name: String(r.name ?? ''), resourceGroup: String(r.resourceGroup ?? ''), pre: String(r.prePausePowerState ?? '') }));
   return {
     state,
+    inventory,
     pausedAt: typeof pausedAt === 'string' && pausedAt ? pausedAt : null,
     pausedBy: typeof pausedBy === 'string' && pausedBy ? pausedBy : null,
     ...(state === UNKNOWN ? { reason: `the console returned state ${JSON.stringify(raw ?? null)}, which is not one of ${Object.values(ESTATE_STATE).join('|')}` } : {}),
@@ -292,7 +337,7 @@ export async function main(argv, deps = {}) {
   const bi = argv.indexOf('--boundary');
   const boundary = bi >= 0 ? argv[bi + 1] : undefined;
   const recorded = await readEstateState({ boundary, env, spawn: deps.spawn, fetchFn: deps.fetchFn, sleep: deps.sleep });
-  const m = measureEstate({ boundary, spawn: deps.spawn });
+  const m = measureEstate({ boundary, spawn: deps.spawn, inventory: recorded.inventory });
   const rec = reconcile({ recorded: recorded.state, measured: m.measured });
   const read = rec.stale ? { ...recorded, state: rec.state } : recorded;
   const event = env.GITHUB_EVENT_NAME ?? '';

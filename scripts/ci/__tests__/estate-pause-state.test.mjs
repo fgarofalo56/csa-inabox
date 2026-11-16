@@ -260,8 +260,27 @@ test('stand-down text names who, when, and both ways to proceed', () => {
 });
 
 // ── #5325: reconcile the record against the MEASURED power state ────────────
-// Wraps fakeSpawn: answers `extension add` and `graph query` like az would.
-import { classifyMeasurement, reconcile, measureEstate, MEASURE_QUERY } from '../estate-pause-state.mjs';
+// The inventory is the pause snapshot in the state body (`resources`), NOT a tag:
+// on the live estate the gateway and cluster carry no loom-estate-id (#3922).
+import { classifyMeasurement, classifyRow, reconcile, measureEstate, buildMeasureQuery } from '../estate-pause-state.mjs';
+
+const RGH = 'rg-csa-loom-health-dev01-centralus';
+const SUBP = '/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups';
+const AGW_ID = `${SUBP}/${RGH}/providers/Microsoft.Network/applicationGateways/agw-lhds-dev01`;
+const AKS_ID = `${SUBP}/${RGH}/providers/Microsoft.ContainerService/managedClusters/aks-lhds-dev01`;
+const ACA_ID = `${SUBP}/rg-loom/providers/Microsoft.App/containerApps/ca-worker`;
+// Real PausedResourceSnapshot shape: ids/types/pre-pause state, NO tags field at all.
+const snap = (id, type, name, rg, pre = 'Online') => ({ resourceId: id, resourceType: type, name, resourceGroup: rg, subscriptionId: 's', prePausePowerState: pre, powerStateSource: 'arm' });
+const SNAP_AGW = snap(AGW_ID, 'microsoft.network/applicationgateways', 'agw-lhds-dev01', RGH);
+const SNAP_AKS = snap(AKS_ID, 'microsoft.containerservice/managedclusters', 'aks-lhds-dev01', RGH);
+const SNAP_ACA = snap(ACA_ID, 'microsoft.app/containerapps', 'ca-worker', 'rg-loom');
+const INV = [SNAP_AGW, SNAP_AKS].map((r) => ({ id: r.resourceId, type: r.resourceType, name: r.name, resourceGroup: r.resourceGroup, pre: r.prePausePowerState }));
+const pausedWith = (resources) => ({ ...pausedBody('PAUSED'), pausedAt: '2026-11-15T04:35:55Z', resources });
+
+// Graph rows carry NO tag columns: untagged resources are found by id.
+const GAGW = (op) => ({ id: AGW_ID.toLowerCase(), name: 'agw-lhds-dev01', type: 'microsoft.network/applicationgateways', op, power: '' });
+const GAKS = (power) => ({ id: AKS_ID, name: 'aks-lhds-dev01', type: 'microsoft.containerservice/managedclusters', op: '', power });
+const GACA = (minRep) => ({ id: ACA_ID, name: 'ca-worker', type: 'microsoft.app/containerapps', minRep });
 
 function measSpawn({ rows, graphFails = false, extFails = false, stdout } = {}) {
   const base = fakeSpawn();
@@ -278,8 +297,6 @@ function measSpawn({ rows, graphFails = false, extFails = false, stdout } = {}) 
   fn.calls = calls;
   return fn;
 }
-const AGW = (op, name = 'agw-lhds-dev01') => ({ name, type: 'microsoft.network/applicationgateways', op, power: '' });
-const AKS = (power, name = 'aks-lhds-dev01') => ({ name, type: 'microsoft.containerservice/managedclusters', op: '', power });
 
 function rharness(spawn, body, over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'epsr-'));
@@ -291,59 +308,92 @@ function rharness(spawn, body, over = {}) {
   const outputs = () => Object.fromEntries(fs.readFileSync(outputFile, 'utf8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   return { run, outputs, lines };
 }
-const STALE = { ...pausedBody('PAUSED'), pausedAt: '2026-11-15T04:35:55Z' };
 
-test('classifyMeasurement: Running gateway/cluster is RUNNING; all stopped is STOPPED; one running among stopped is RUNNING', () => {
-  assert.equal(classifyMeasurement([AGW('Running'), AKS('Running')]).measured, 'RUNNING');
-  assert.equal(classifyMeasurement([AGW('Stopped'), AKS('Stopped')]).measured, 'STOPPED');
-  // Breaks if a partly-running estate read as STOPPED (one Running cluster among Stopped gateways).
-  assert.equal(classifyMeasurement([AGW('Stopped'), AKS('Running')]).measured, 'RUNNING');
+test('interpretState carries the snapshot inventory from the state body', () => {
+  const inv = interpretState(pausedWith([SNAP_AGW])).inventory;
+  assert.deepEqual(inv, [{ id: AGW_ID, type: 'microsoft.network/applicationgateways', name: 'agw-lhds-dev01', resourceGroup: RGH, pre: 'Online' }]);
+  assert.deepEqual(interpretState({ state: 'RUNNING' }).inventory, [], 'a RUNNING body has no snapshot, so no inventory');
 });
 
-test('classifyMeasurement: empty inventory and unrecognisable rows are FAILED, never RUNNING', () => {
-  // Breaks if [] defaulted to RUNNING (the query ran, matched nothing: a wrong tag/sub, not a running estate).
-  for (const rows of [[], null, {}, 'x']) assert.equal(classifyMeasurement(rows).measured, 'FAILED', JSON.stringify(rows));
-  assert.equal(classifyMeasurement([AGW(''), AKS('')]).measured, 'FAILED');
-  assert.match(classifyMeasurement([]).reason, /empty inventory/);
+test('classifyRow: gateway, cluster, container app (min replicas), ADX', () => {
+  assert.equal(classifyRow(GAGW('Running')), 'running');
+  assert.equal(classifyRow(GAGW('Stopped')), 'stopped');
+  assert.equal(classifyRow(GAKS('Running')), 'running');
+  assert.equal(classifyRow(GAKS('Stopped')), 'stopped');
+  assert.equal(classifyRow(GACA(2)), 'running', 'minReplicas 2 means the pause was undone');
+  assert.equal(classifyRow(GACA(0)), 'stopped');
+  assert.equal(classifyRow({ type: 'microsoft.kusto/clusters', kstate: 'Running' }), 'running');
+  assert.equal(classifyRow(GAGW('')), null);
+  assert.equal(classifyRow({ type: 'microsoft.app/containerapps', minRep: null }), null, 'unknown replica count must not read as running or stopped');
 });
 
-test('reconcile table: PAUSED+RUNNING flips; PAUSED+STOPPED stays; RUNNING+STOPPED pauses; FAILED never changes the record', () => {
+test('classifyMeasurement: one running among stopped is RUNNING; all stopped is STOPPED', () => {
+  assert.equal(classifyMeasurement([GAGW('Stopped'), GAKS('Running')], INV).measured, 'RUNNING');
+  assert.equal(classifyMeasurement([GAGW('Stopped'), GAKS('Stopped')], INV).measured, 'STOPPED');
+});
+
+test('classifyMeasurement: empty inventory, no matching rows and unclassifiable rows are FAILED, never RUNNING', () => {
+  // Breaks if [] (or rows for resources NOT in the pause inventory) defaulted to RUNNING.
+  assert.equal(classifyMeasurement([GAGW('Running')], []).measured, 'FAILED');
+  assert.equal(classifyMeasurement([], INV).measured, 'FAILED');
+  assert.equal(classifyMeasurement([{ ...GAGW('Running'), id: '/subscriptions/x/other' }], INV).measured, 'FAILED', 'a Running gateway that is not in the snapshot proves nothing');
+  assert.equal(classifyMeasurement([GAGW(''), GAKS('')], INV).measured, 'FAILED');
+  // A resource already stopped BEFORE the pause is not a signal either way.
+  const preStopped = [{ ...INV[0], pre: 'Stopped' }];
+  assert.equal(classifyMeasurement([GAGW('Running')], preStopped).measured, 'FAILED');
+});
+
+test('reconcile: only PAUSED + RUNNING flips; FAILED and STOPPED never change the record', () => {
   assert.equal(reconcile({ recorded: 'PAUSED', measured: 'RUNNING' }).state, 'RUNNING');
   assert.equal(reconcile({ recorded: 'PAUSED', measured: 'STOPPED' }).state, 'PAUSED');
-  assert.equal(reconcile({ recorded: 'RUNNING', measured: 'STOPPED' }).state, 'PAUSED');
   for (const rec of ['PAUSED', 'RUNNING', 'PAUSING', 'UNKNOWN']) assert.equal(reconcile({ recorded: rec, measured: 'FAILED' }).state, rec, `FAILED must leave ${rec}`);
-  // PAUSING reads mixed by design: must not flip to RUNNING.
-  assert.equal(reconcile({ recorded: 'PAUSING', measured: 'RUNNING' }).state, 'PAUSING');
+  assert.equal(reconcile({ recorded: 'PAUSING', measured: 'RUNNING' }).state, 'PAUSING', 'PAUSING reads mixed by design');
+  assert.equal(reconcile({ recorded: 'RESUMING', measured: 'STOPPED' }).state, 'RESUMING');
 });
 
-test('main: recorded PAUSED + measured RUNNING -> proceeds, state RUNNING, ::warning:: names stale record time', async () => {
-  const h = rharness(measSpawn({ rows: [AGW('Running'), AKS('Running')] }), STALE);
+test('REAL SHAPE: untagged agw + aks in the snapshot, Running in Resource Graph, record PAUSED -> NOT paused', async () => {
+  // Measured 2026-11-16: neither resource carries loom-estate-id, so a tag filter finds nothing.
+  // Breaks (red) if discovery goes back to a tag filter: the graph rows here have no tag column,
+  // the snapshot rows have no tags, and only the id match can see them.
+  const sp = measSpawn({ rows: [GAGW('Running'), GAKS('Running')] });
+  const h = rharness(sp, pausedWith([SNAP_AGW, SNAP_AKS]));
   await h.run();
   const o = h.outputs();
-  assert.equal(o.standdown, 'false', 'a stale PAUSED record over a Running estate must not stand the lane down');
+  assert.equal(o.standdown, 'false', 'a stale PAUSED record over a running estate must not stand the lane down');
   assert.equal(o.state, 'RUNNING');
   assert.equal(o.measured_state, 'RUNNING');
   assert.match(h.lines.join('\n'), /^::warning::estate-pause-state Commercial: the console record is STALE.*2026-11-15T04:35:55Z.*agw-lhds-dev01, aks-lhds-dev01/m);
+  const q = sp.calls.find((c) => c[1] === 'graph').join(' ');
+  assert.ok(!q.includes('loom-estate-id'), 'the query must not depend on the ownership tag');
+  assert.ok(q.includes(RGH), 'the query is narrowed by the snapshot resource group');
+});
+
+test('main: a Container App scaled back up (min>0) is a measured RUNNING signal', async () => {
+  const h = rharness(measSpawn({ rows: [GACA(1)] }), pausedWith([SNAP_ACA]));
+  await h.run();
+  assert.equal(h.outputs().state, 'RUNNING');
 });
 
 test('main: recorded PAUSED + measured STOPPED -> stands down as today', async () => {
-  const h = rharness(measSpawn({ rows: [AGW('Stopped'), AKS('Stopped')] }), STALE);
+  const h = rharness(measSpawn({ rows: [GAGW('Stopped'), GAKS('Stopped')] }), pausedWith([SNAP_AGW, SNAP_AKS]));
   await h.run();
   assert.equal(h.outputs().standdown, 'true');
   assert.equal(h.outputs().state, 'PAUSED');
   assert.equal(h.outputs().measured_state, 'STOPPED');
 });
 
-test('main: recorded RUNNING + measured STOPPED -> PAUSED, stands down (warning)', async () => {
-  const h = rharness(measSpawn({ rows: [AGW('Stopped'), AKS('Stopped')] }), runningBody());
+test('main: recorded RUNNING has no snapshot -> measurement FAILED, proceeds as recorded, no graph call', async () => {
+  const sp = measSpawn({ rows: [GAGW('Stopped')] });
+  const h = rharness(sp, runningBody());
   await h.run();
-  assert.equal(h.outputs().state, 'PAUSED');
-  assert.equal(h.outputs().standdown, 'true');
-  assert.match(h.lines.join('\n'), /^::warning::.*STALE/m);
+  assert.equal(h.outputs().state, 'RUNNING');
+  assert.equal(h.outputs().standdown, 'false');
+  assert.equal(h.outputs().measured_state, 'FAILED');
+  assert.ok(!sp.calls.some((c) => c[1] === 'graph'));
 });
 
 test('main: measurement FAILED (graph error) -> record PAUSED stands, cause printed, never RUNNING', async () => {
-  const h = rharness(measSpawn({ graphFails: true }), STALE);
+  const h = rharness(measSpawn({ graphFails: true }), pausedWith([SNAP_AGW, SNAP_AKS]));
   await h.run();
   const o = h.outputs();
   assert.equal(o.state, 'PAUSED', 'a failed query must not read as RUNNING');
@@ -352,9 +402,9 @@ test('main: measurement FAILED (graph error) -> record PAUSED stands, cause prin
   assert.match(h.lines.join('\n'), /power-state measurement FAILED \(az graph query failed \(exit 1\): AuthorizationFailed\)/);
 });
 
-test('main: extension failure, empty inventory and non-JSON are FAILED measurements that fall back to the record', async () => {
-  for (const [spawn, cause] of [[measSpawn({ extFails: true }), /extension add resource-graph failed/], [measSpawn({ rows: [] }), /empty inventory/], [measSpawn({ stdout: 'not json' }), /did not return JSON/]]) {
-    const h = rharness(spawn, STALE);
+test('main: extension failure, empty graph result and non-JSON are FAILED measurements that fall back to the record', async () => {
+  for (const [spawn, cause] of [[measSpawn({ extFails: true }), /extension add resource-graph failed/], [measSpawn({ rows: [] }), /returned none of the 2 snapshot/], [measSpawn({ stdout: 'not json' }), /did not return JSON/]]) {
+    const h = rharness(spawn, pausedWith([SNAP_AGW, SNAP_AKS]));
     await h.run();
     assert.equal(h.outputs().measured_state, 'FAILED');
     assert.equal(h.outputs().standdown, 'true', 'record PAUSED stands when measurement fails');
@@ -362,15 +412,25 @@ test('main: extension failure, empty inventory and non-JSON are FAILED measureme
   }
 });
 
+test('main: a snapshot with no measurable inventory is FAILED (empty inventory), record stands', async () => {
+  const h = rharness(measSpawn({ rows: [GAGW('Running')] }), pausedWith([]));
+  await h.run();
+  assert.equal(h.outputs().measured_state, 'FAILED');
+  assert.equal(h.outputs().state, 'PAUSED');
+  assert.match(h.lines.join('\n'), /empty inventory/);
+});
+
 test('measureEstate uses the cloud the caller logged into: Gov boundary on a Commercial az is FAILED, no graph call', () => {
-  const sp = measSpawn({ rows: [AGW('Running')] });
-  const r = measureEstate({ boundary: 'GCC-High', spawn: sp });
+  const sp = measSpawn({ rows: [GAGW('Running')] });
+  const r = measureEstate({ boundary: 'GCC-High', spawn: sp, inventory: INV });
   assert.equal(r.measured, 'FAILED');
   assert.match(r.reason, /not AzureUSGovernment/);
   assert.ok(!sp.calls.some((c) => c[1] === 'graph'), 'must not query when the cloud is wrong');
 });
 
-test('the query scopes to the ownership tag and excludes the pause exemption', () => {
-  assert.ok(MEASURE_QUERY.includes("tags['loom-estate-id']"));
-  assert.ok(MEASURE_QUERY.includes("tags['loom-estate-pause']) != 'exempt'"));
+test('buildMeasureQuery is scoped by resource group, never by tag, and strips quote characters', () => {
+  const q = buildMeasureQuery([RGH, "x'); drop"]);
+  assert.ok(q.includes(`'${RGH}'`));
+  assert.ok(!q.includes('loom-estate-id'));
+  assert.ok(!q.includes("x')"), 'a quote in a resource group name must not break out of the literal');
 });
