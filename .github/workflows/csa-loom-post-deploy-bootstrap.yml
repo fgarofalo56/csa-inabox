@@ -3104,6 +3104,38 @@ jobs:
             *) fail "defect-or-configuration" "exit $RC; read the script output above." ;;
           esac
 
+      - name: Seed automation identity feature grant (health.tenant-admin Contributor for loom-ui-verify)
+        # Operator decision 2026-11-16. loom-ui-verify's minted session has NO tid, so its grant
+        # scope is its own oid (lib/auth/session.ts tenantScopeId = tid || oid); a grant written
+        # from a real admin session lands in the tid partition and the G1 spec 403s (run
+        # 43800748474). This writes the ONE doc the grants route would write, in the oid
+        # partition, idempotently (prints seeded|unchanged). Runs in every boundary this
+        # bootstrap runs in (Commercial, GCC, GCC-High, IL5): the Cosmos host comes from the
+        # account's own documentEndpoint and the oid from the console's own binding.
+        # NOT continue-on-error: an unresolvable oid or Cosmos target fails the job, loudly.
+        # Needs Cosmos DB Built-in Data Contributor for the deploy identity (as seed-governance).
+        if: ${{ !cancelled() }}
+        env:
+          LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
+          CONSOLE_RG: ${{ env.ADMIN_RG }}
+          CONSOLE_SUBSCRIPTION: ${{ env.ADMIN_SUB }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::Automation grant seed FAILED [$1]: $2"; exit 1; }
+          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+            || fail "azure-read" "could not LIST Cosmos accounts in $ADMIN_RG, so whether one exists is UNKNOWN."
+          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
+          if [ -z "$COSMOS_ACCT" ] && [ -n "${DLZ_RG:-}" ]; then
+            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+              || fail "azure-read" "could not LIST Cosmos accounts in $DLZ_RG, so whether one exists is UNKNOWN."
+            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
+          fi
+          [ -n "$COSMOS_ACCT" ] || fail "configuration" "no cosmos-loom* account found in $ADMIN_RG${DLZ_RG:+ or $DLZ_RG}; there is nowhere to write the grant. Deploy the admin plane, then re-run."
+          LOOM_COSMOS_ENDPOINT="$(az cosmosdb show -n "$COSMOS_ACCT" -g "$COSMOS_RG" --subscription "$COSMOS_SUB" --query documentEndpoint -o tsv)" \
+            || fail "azure-read" "could not read documentEndpoint of $COSMOS_ACCT."
+          export LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE=loom
+          node scripts/csa-loom/seed-automation-feature-grant.mjs
+
       - name: Restore Loom Key Vault private (verified)
         # Runs always() — including after a failed or cancelled earlier step,
         # which is exactly when the vault is most likely to have been left open.

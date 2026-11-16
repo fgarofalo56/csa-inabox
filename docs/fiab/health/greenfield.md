@@ -89,6 +89,11 @@ availability assumption.
   or GCC-High. Container Apps control plane only (aks refused). Re-run the bootstrap after
   a deploy-health run: health.bicep re-renders the allowlist env var. The PDP bundle
   endpoint not scoping by stamp is still #5140.
+- The same bootstrap seeds one `feature-permissions` grant, `health.tenant-admin`
+  Contributor for the loom-ui-verify automation oid (step "Seed automation identity
+  feature grant", `scripts/csa-loom/seed-automation-feature-grant.mjs`). It is keyed by
+  the oid, not a tid, because the minted session has no tid and grants resolve by
+  `tid || oid`; a grant made in the admin UI is invisible to it. Merged, not deployed.
 - Per-stamp PDP data (`data.lhds.config` / `data.lhds.stamp`) and a bundle
   publishing pipeline do not exist. The control plane serves a bundle from a
   directory (`pdpBundleDir`); a served bundle denies everything until populated.
