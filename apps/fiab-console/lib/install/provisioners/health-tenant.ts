@@ -401,3 +401,50 @@ export const healthTenantProvisioner: Provisioner = async (input) => {
   );
   return toProvisionResult(outcome);
 };
+
+/** Result of the delete-time teardown: proceed with the Cosmos delete, or refuse and say why. */
+export type DestroyOutcome =
+  | { ok: true; destroyJobId?: string }
+  | { ok: false; status: 502 | 503; code: string; message: string };
+
+/**
+ * Submit the control-plane `tenant.destroy` job for a `health-tenant` item that
+ * is being deleted. Without it the tenant's Event Hub, storage, identity and Key
+ * Vault keys outlive the item and keep billing. FAILS CLOSED: if the control
+ * plane cannot be asked, the item must not be deleted (a deleted item with a live
+ * tenant is the defect). The idempotency key is derived from the item id, so a
+ * retried DELETE re-reads the same job instead of submitting a second one.
+ * An item with no binding was never provisioned: nothing to destroy.
+ */
+export async function destroyHealthTenantForItem(
+  item: Pick<WorkspaceItem, 'id' | 'itemType' | 'state'>,
+  submitJob: typeof realCp.submitJob = realCp.submitJob,
+): Promise<DestroyOutcome> {
+  if (item.itemType !== 'health-tenant') return { ok: true };
+  const binding = readBinding(item.state as Record<string, unknown> | undefined);
+  if (!binding?.tenantId) return { ok: true };
+  try {
+    const job = await submitJob({
+      kind: 'tenant.destroy',
+      subjectType: 'tenant',
+      subjectId: binding.tenantId,
+      idempotencyKey: `destroy-${item.id}`,
+      input: { confirmTenantId: binding.tenantId },
+    });
+    return { ok: true, destroyJobId: job.id };
+  } catch (e) {
+    if (e instanceof CpNotConfiguredError) {
+      return {
+        ok: false, status: 503, code: 'health_cp_not_configured',
+        message: `The item was NOT deleted: its health tenant "${binding.tenantId}" could not be destroyed because the health control plane is not configured (missing env: ${e.missing.join(', ')}).`,
+      };
+    }
+    if (e instanceof CpError) {
+      return {
+        ok: false, status: 502, code: e.code,
+        message: `The item was NOT deleted: the control plane did not accept the destroy job for tenant "${binding.tenantId}" (${e.code}: ${e.message}).`,
+      };
+    }
+    throw e;
+  }
+}

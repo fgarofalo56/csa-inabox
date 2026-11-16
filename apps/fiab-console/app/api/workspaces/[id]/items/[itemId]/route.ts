@@ -15,6 +15,7 @@ import { deleteLoomDoc, docForItem, upsertLoomDoc } from '@/lib/azure/loom-searc
 import { cleanupItemMetadata } from '@/lib/azure/lineage-gc';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { destroyHealthTenantForItem } from '@/lib/install/provisioners/health-tenant';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,6 +114,11 @@ export async function DELETE(
     if (!found) return err('Item not found', 404, 'not_found');
     const items = await itemsContainer();
 
+    // A health-tenant item owns real Azure resources behind the LHDS control plane;
+    // destroy them FIRST and fail closed so a deleted item never leaves a live tenant.
+    const destroy = await destroyHealthTenantForItem(found.item);
+    if (!destroy.ok) return err(destroy.message, destroy.status, destroy.code);
+
     // Cascade: delete any item whose state.sqlEndpointFor === this item's id.
     try {
       const { resources: paired } = await items.items
@@ -143,7 +149,7 @@ export async function DELETE(
     // (LIN-GC-1). Previously this route only reconciled Thread edges (audit B9)
     // and left the Purview entity serving stale lineage.
     void cleanupItemMetadata(found.item, s.claims.oid);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, ...(destroy.destroyJobId ? { destroyJobId: destroy.destroyJobId } : {}) });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');
   }
