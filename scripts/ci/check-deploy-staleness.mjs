@@ -173,6 +173,8 @@ export const WATCHED = [
       'scripts/csa-loom/bootstrap-msal-app-reg.sh',
       // #5163 — the bootstrap wires the LHDS control-plane Entra objects through this script.
       'scripts/csa-loom/bootstrap-health-cp-entra.mjs',
+      // The bootstrap seeds the automation identity's health.tenant-admin grant through this script.
+      'scripts/csa-loom/seed-automation-feature-grant.mjs',
       'scripts/csa-loom/bootstrap-weave-pg.sh',
       'scripts/csa-loom/dataverse-add-appuser.sh',
       'scripts/csa-loom/enable-all-diagnostics.sh',
