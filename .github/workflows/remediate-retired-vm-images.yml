@@ -74,7 +74,7 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode "$MODE"
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode "$MODE"
 
   gcc-high:
     if: ${{ inputs.boundary == 'GCC-High' }}
@@ -112,7 +112,7 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary GCC-High --location "$AZURE_LOCATION" --mode "$MODE"
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary GCC-High --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode "$MODE"
 
   il5:
     if: ${{ inputs.boundary == 'IL5' }}
@@ -150,4 +150,4 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary IL5 --location "$AZURE_LOCATION" --mode "$MODE"
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary IL5 --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode "$MODE"

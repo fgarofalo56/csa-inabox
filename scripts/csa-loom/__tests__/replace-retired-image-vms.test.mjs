@@ -53,7 +53,7 @@ test('dry-run deletes nothing but reports the retired VM (breaks on: any delete 
 
 test('apply deletes the VM THEN its disk, in that order, and reads both back (breaks on: disk-first order or missing read-back)', async () => {
   const { az, calls, state } = makeAz({ vms: [vm('vm-loom-pbigw-centralus', 'WindowsServer')] });
-  const s = await run({ rgs: [RG], mode: 'apply', az, log: quiet });
+  const s = await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet });
   assert.deepEqual(mutating(calls), [
     `vm delete --resource-group ${RG} --name vm-loom-pbigw-centralus --yes`,
     `disk delete --resource-group ${RG} --name vm-loom-pbigw-centralus-osdisk --yes`,
@@ -67,7 +67,7 @@ test('apply deletes the VM THEN its disk, in that order, and reads both back (br
 
 test('missing replacement image in the VM region: NOTHING deleted and error names region + sku (breaks on: delete before preflight)', async () => {
   const { az, calls } = makeAz({ vms: [vm('a', 'WindowsServer', { location: 'usgovvirginia' })], skus: ['2019-datacenter'] });
-  await assert.rejects(run({ rgs: [RG], mode: 'apply', az, log: quiet }), (e) => {
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet }), (e) => {
     assert.ok(e instanceof RemediationError);
     assert.match(e.message, /usgovvirginia/);
     assert.match(e.message, /2022-datacenter-azure-edition/);
@@ -80,7 +80,7 @@ test('one VM missing its image blocks deleting a SECOND, healthy-to-replace VM (
   const good = vm('good', 'WindowsServer');
   const bad = vm('bad', 'WindowsServer', { sku: '2022-datacenter-core-g2' });
   const { az, calls } = makeAz({ vms: [good, bad] });
-  await assert.rejects(run({ rgs: [RG], mode: 'apply', az, log: quiet }), /2022-datacenter-core-g2/);
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet }), /2022-datacenter-core-g2/);
   assert.deepEqual(mutating(calls), []);
 });
 
@@ -89,7 +89,7 @@ test('non-denylisted VMs are untouched; case variant of the retired offer IS rep
   const lin = { name: 'linux', location: 'centralus', storageProfile: { imageReference: { publisher: 'Canonical', offer: 'WindowsServer', sku: 'x' }, osDisk: { managedDisk: { id: DISK('linux-osdisk') } } } };
   const retired = vm('old', 'windowsserver');
   const { az, calls, state } = makeAz({ vms: [keep, lin, retired] });
-  await run({ rgs: [RG], mode: 'apply', az, log: quiet });
+  await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet });
   assert.deepEqual(mutating(calls), [
     `vm delete --resource-group ${RG} --name old --yes`,
     `disk delete --resource-group ${RG} --name old-osdisk --yes`,
@@ -99,7 +99,7 @@ test('non-denylisted VMs are untouched; case variant of the retired offer IS rep
 
 test('only the given resource group is queried (breaks on: subscription-wide listing)', async () => {
   const { az, calls } = makeAz({ vms: [vm('a', 'windowsserver2022')] });
-  await run({ rgs: [RG], mode: 'apply', az, log: quiet });
+  await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet });
   for (const c of calls.filter((x) => x.startsWith('vm list') || x.startsWith('disk list'))) {
     assert.ok(c.includes(`--resource-group ${RG}`), c);
   }
@@ -107,19 +107,19 @@ test('only the given resource group is queried (breaks on: subscription-wide lis
 
 test('OS disk in a different resource group than the VM is refused, nothing deleted', async () => {
   const { az, calls } = makeAz({ vms: [vm('a', 'WindowsServer', { diskRg: 'rg-other' })] });
-  await assert.rejects(run({ rgs: [RG], mode: 'apply', az, log: quiet }), /outside resource group/);
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet }), /outside resource group/);
   assert.deepEqual(mutating(calls), []);
 });
 
 test('disk still attached elsewhere after VM delete: disk NOT deleted', async () => {
   const { az, calls } = makeAz({ vms: [vm('a', 'WindowsServer')], diskAttachedAfterDelete: true });
-  await assert.rejects(run({ rgs: [RG], mode: 'apply', az, log: quiet }), /still attached/);
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet }), /still attached/);
   assert.deepEqual(mutating(calls), [`vm delete --resource-group ${RG} --name a --yes`]);
 });
 
 test('missing resource group (greenfield) is a clean no-op, not an error', async () => {
   const { az, calls } = makeAz({ vms: [], rgExists: 'false' });
-  const s = await run({ rgs: [RG], mode: 'apply', az, log: quiet });
+  const s = await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: quiet });
   assert.deepEqual(s.skippedRgs, [RG]);
   assert.deepEqual(calls, [`group exists --name ${RG}`]);
 });
@@ -127,7 +127,7 @@ test('missing resource group (greenfield) is a clean no-op, not an error', async
 test('an az failure propagates (no swallowed error) (breaks on: try/catch around az)', async () => {
   const { az } = makeAz({ vms: [vm('a', 'WindowsServer')] });
   const failing = async (args) => { if (args[0] === 'vm' && args[1] === 'delete') throw new RemediationError('az vm delete failed: Forbidden'); return az(args); };
-  await assert.rejects(run({ rgs: [RG], mode: 'apply', az: failing, log: quiet }), /Forbidden/);
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az: failing, log: quiet }), /Forbidden/);
 });
 
 test('parseArgs: default RG derives from region; bad boundary/mode rejected', () => {
@@ -141,4 +141,26 @@ test('parseArgs: default RG derives from region; bad boundary/mode rejected', ()
 
 test('denylist loads and carries a replacementOffer', () => {
   assert.equal(loadDenylist()[0].replacementOffer, 'windowsserver2022');
+});
+
+test('apply WITHOUT --admin-plane-in-scope refuses: nothing deleted, named cause (breaks on: dropping the scope check)', async () => {
+  const { az, calls } = makeAz({ vms: [vm('a', 'WindowsServer')] });
+  await assert.rejects(run({ rgs: [RG], mode: 'apply', az, log: quiet }), /admin-plane-in-scope/);
+  assert.deepEqual(mutating(calls), []);
+  assert.deepEqual(calls, [], 'refusal must precede every az call');
+  const { az: az2, calls: c2 } = makeAz({ vms: [vm('a', 'WindowsServer')] });
+  await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az: az2, log: quiet });
+  assert.equal(mutating(c2).length, 2);
+});
+
+test('the delete prints the no-rollback warning', async () => {
+  const { az } = makeAz({ vms: [vm('a', 'WindowsServer')] });
+  const out = [];
+  await run({ rgs: [RG], mode: 'apply', adminPlaneInScope: true, az, log: (m) => out.push(m) });
+  assert.ok(out.some((l) => /no rollback/.test(l) && /stays absent/.test(l)));
+});
+
+test('parseArgs reads --admin-plane-in-scope; default false', () => {
+  assert.equal(parseArgs(['--boundary', 'GCC-High'], {}).adminPlaneInScope, false);
+  assert.equal(parseArgs(['--boundary', 'GCC-High', '--admin-plane-in-scope', 'true'], {}).adminPlaneInScope, true);
 });

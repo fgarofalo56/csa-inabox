@@ -2441,11 +2441,16 @@ jobs:
         # apply below. This deletes ONLY such VMs (+ their OS disk) in the admin RG so
         # the apply re-creates them on the current image. No-op when none exist or the
         # RG does not exist yet. Denylist: scripts/ci/retired-vm-images.json.
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # Runs only when this run deploys the ADMIN PLANE: topology=dlz-attach skips it
+        # (main.bicep), so nothing would re-create a deleted VM. Schedule runs have an
+        # empty topology and are in scope. NO ROLLBACK: the delete runs immediately
+        # before Provision; if Provision fails the VM stays absent until the next
+        # successful deploy.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && env.CSA_LOOM_TOPOLOGY != 'dlz-attach'
         run: |
           set -euo pipefail
-          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode dry-run
-          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode apply
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode dry-run
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --admin-plane-in-scope true --mode apply
 
       - name: Provision (idempotent)
         id: provision

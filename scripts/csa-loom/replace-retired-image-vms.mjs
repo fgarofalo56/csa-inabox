@@ -28,7 +28,8 @@
  *
  * Usage:
  *   node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial|GCC-High|IL5 \
- *     [--resource-group <rg> ...] [--location <region>] [--mode dry-run|apply]
+ *     [--resource-group <rg> ...] [--location <region>] [--mode dry-run|apply] [--admin-plane-in-scope true]
+ * `apply` REFUSES unless --admin-plane-in-scope true (the follow-on deploy re-creates the VM).
  * Default resource group: rg-csa-loom-admin-<location>; location defaults to
  * $AZURE_LOCATION (GCC-High/IL5 default usgovvirginia).
  */
@@ -64,7 +65,7 @@ const lc = (s) => String(s ?? '').toLowerCase();
 const rgOfId = (id) => /\/resourcegroups\/([^/]+)\//i.exec(id ?? '')?.[1] ?? null;
 
 export function parseArgs(argv, env = process.env) {
-  const o = { boundary: null, rgs: [], location: null, mode: 'dry-run' };
+  const o = { boundary: null, rgs: [], location: null, mode: 'dry-run', adminPlaneInScope: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -75,6 +76,7 @@ export function parseArgs(argv, env = process.env) {
     else if (a === '--resource-group') o.rgs.push(...next().split(',').map((s) => s.trim()).filter(Boolean));
     else if (a === '--location') o.location = next();
     else if (a === '--mode') o.mode = next();
+    else if (a === '--admin-plane-in-scope') o.adminPlaneInScope = next() === 'true';
     else throw new RemediationError(`unknown argument ${a}`);
   }
   if (!BOUNDARIES.has(o.boundary)) throw new RemediationError(`--boundary must be one of ${[...BOUNDARIES].join(', ')} (got ${o.boundary})`);
@@ -92,7 +94,10 @@ async function azJson(az, args) {
   try { return JSON.parse(out || 'null'); } catch { throw new RemediationError(`az ${args.slice(0, 3).join(' ')} returned non-JSON output`); }
 }
 
-export async function run({ rgs, mode, az = realAz, deny = loadDenylist(), log = console.log }) {
+export async function run({ rgs, mode, adminPlaneInScope = false, az = realAz, deny = loadDenylist(), log = console.log }) {
+  if (mode === 'apply' && adminPlaneInScope !== true) {
+    throw new RemediationError('--mode apply refused: pass --admin-plane-in-scope true only when the run that follows re-creates the VM (admin plane deployed). Without it a deleted VM would not come back (e.g. topology=dlz-attach). Nothing was deleted.');
+  }
   const summary = { replaced: [], found: [], skippedRgs: [] };
   const plan = [];
 
@@ -152,7 +157,7 @@ export async function run({ rgs, mode, az = realAz, deny = loadDenylist(), log =
   for (const p of plan) {
     const { rg, vm, osDiskId } = p;
     const diskName = osDiskId.split('/').pop();
-    log(`[${rg}] deleting VM ${vm.name} ...`);
+    log(`[${rg}] deleting VM ${vm.name} ... NOTE: no rollback - if the deploy that follows fails, this VM stays absent until the next successful deploy.`);
     await az(['vm', 'delete', '--resource-group', rg, '--name', vm.name, '--yes']);
     const left = (await az(['vm', 'list', '--resource-group', rg, '--query', `[?name=='${vm.name}'].name`, '-o', 'tsv'])).trim();
     if (left) throw new RemediationError(`VM ${vm.name} still listed in ${rg} after delete; not deleting its disk.`);
@@ -179,7 +184,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   try {
     const o = parseArgs(process.argv.slice(2));
     console.log(`replace-retired-image-vms: boundary=${o.boundary} mode=${o.mode} rgs=${o.rgs.join(',')}`);
-    const s = await run({ rgs: o.rgs, mode: o.mode });
+    const s = await run({ rgs: o.rgs, mode: o.mode, adminPlaneInScope: o.adminPlaneInScope });
     if (process.env.GITHUB_OUTPUT) {
       fs.appendFileSync(process.env.GITHUB_OUTPUT, `retired_found=${s.found.length}\nretired_replaced=${s.replaced.length}\n`);
     }
