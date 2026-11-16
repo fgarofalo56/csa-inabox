@@ -56,7 +56,8 @@ var pePrefix = cidrSubnet(vnetAddressPrefix, 24, 4)
 var pgPrefix = cidrSubnet(vnetAddressPrefix, 24, 5)
 var agwPrefix = cidrSubnet(vnetAddressPrefix, 24, 6)
 var fwPrefix = cidrSubnet(vnetAddressPrefix, 26, 28)
-var scriptPrefix = cidrSubnet(vnetAddressPrefix, 24, 7)
+// Allocation map (10.60.0.0/16): /22 idx0 = .0-.3, /24 idx4 pe, 5 pg, 6 agw, /26 idx28 = 10.60.7.0/26 (fw), /24 idx8 script. Next free /24: idx9.
+var scriptPrefix = cidrSubnet(vnetAddressPrefix, 24, 8)
 
 // Fixed address inside the node subnet for the ingress controller's internal
 // load balancer; the App Gateway backend pool targets it. High host index so it

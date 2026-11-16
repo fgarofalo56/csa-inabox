@@ -3,7 +3,7 @@
 # Fails closed (set -e, bounded waits): a script that cannot confirm the certificate is
 # enabled and readable exits non-zero and FAILS the deployment (deploy-integrity R6).
 # Env: KV_NAME CERT_NAME CERT_FQDN RENEW_BEFORE_DAYS
-set -eu
+set -euo pipefail
 
 # Read the certificate. RBAC on a fresh role assignment and the private DNS record for the
 # vault endpoint can lag the deployment, so a 403 / name-resolution failure is retried;
