@@ -28,6 +28,8 @@
  */
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { enforceHealthTenantAdmin } from '@/app/api/health/tenants/_lib/tenant-admin-gate';
+import type { NextResponse } from 'next/server';
+import type { SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   cp as realCp,
@@ -405,7 +407,9 @@ export const healthTenantProvisioner: Provisioner = async (input) => {
 /** Result of the delete-time teardown: proceed with the Cosmos delete, or refuse and say why. */
 export type DestroyOutcome =
   | { ok: true; destroyJobId?: string }
-  | { ok: false; status: 502 | 503; code: string; message: string };
+  | { ok: false; status: 502 | 503; code: string; message: string }
+  /** The caller lacks health.tenant-admin: return this 403 as-is, keep the item. */
+  | { ok: false; denied: NextResponse };
 
 /**
  * Submit the control-plane `tenant.destroy` job for a `health-tenant` item that
@@ -418,11 +422,16 @@ export type DestroyOutcome =
  */
 export async function destroyHealthTenantForItem(
   item: Pick<WorkspaceItem, 'id' | 'itemType' | 'state'>,
+  session: SessionPayload,
   submitJob: typeof realCp.submitJob = realCp.submitJob,
 ): Promise<DestroyOutcome> {
   if (item.itemType !== 'health-tenant') return { ok: true };
   const binding = readBinding(item.state as Record<string, unknown> | undefined);
   if (!binding?.tenantId) return { ok: true };
+  // Destroying a tenant is irreversible: same strict, non-inherited capability as
+  // create/PATCH (D12). Workspace ownership alone is not enough.
+  const denied = await enforceHealthTenantAdmin(session, 'Contributor');
+  if (denied) return { ok: false, denied };
   try {
     const job = await submitJob({
       kind: 'tenant.destroy',

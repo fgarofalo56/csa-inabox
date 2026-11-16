@@ -13,6 +13,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 vi.mock('@/lib/azure/loom-search', () => ({ deleteLoomDoc: vi.fn(), docForItem: vi.fn(), upsertLoomDoc: vi.fn() }));
 vi.mock('@/lib/azure/lineage-gc', () => ({ cleanupItemMetadata: vi.fn() }));
+vi.mock('@/app/api/health/tenants/_lib/tenant-admin-gate', () => ({ enforceHealthTenantAdmin: vi.fn() }));
 vi.mock('@/app/api/health/tenants/_lib/cp-client', async (orig) => {
   const actual = await orig<typeof import('@/app/api/health/tenants/_lib/cp-client')>();
   return { ...actual, cp: { ...actual.cp, submitJob: vi.fn() } };
@@ -20,6 +21,8 @@ vi.mock('@/app/api/health/tenants/_lib/cp-client', async (orig) => {
 
 import { DELETE } from '../route';
 import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { enforceHealthTenantAdmin } from '@/app/api/health/tenants/_lib/tenant-admin-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { cp, CpError, CpNotConfiguredError } from '@/app/api/health/tenants/_lib/cp-client';
 
@@ -42,6 +45,7 @@ const bound = { itemType: 'health-tenant', state: { healthTenant: { tenantId: 'a
 beforeEach(() => {
   vi.clearAllMocks();
   (getSession as any).mockReturnValue({ claims: { oid: 'oid-1' } });
+  (enforceHealthTenantAdmin as any).mockResolvedValue(null);
 });
 
 describe('DELETE item: health-tenant teardown', () => {
@@ -62,6 +66,28 @@ describe('DELETE item: health-tenant teardown', () => {
     expect(submitJob.mock.invocationCallOrder[0]).toBeLessThan(del.mock.invocationCallOrder[0]);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, destroyJobId: 'job-9' });
+  });
+
+  it('caller WITHOUT health.tenant-admin on a bound item -> 403, no job, item kept', async () => {
+    arrange(bound);
+    (enforceHealthTenantAdmin as any).mockResolvedValue(
+      NextResponse.json({ ok: false, error: 'forbidden', capability: 'health.tenant-admin' }, { status: 403 }),
+    );
+    const res = await DELETE({} as any, ctx);
+    // Breaks if the gate call is removed (status becomes 200, submitJob + delete run) or runs after the destroy.
+    expect(enforceHealthTenantAdmin).toHaveBeenCalledWith({ claims: { oid: 'oid-1' } }, 'Contributor');
+    expect(res.status).toBe(403);
+    expect((await res.json()).ok).toBe(false);
+    expect(submitJob).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('unbound health-tenant and non-health items need no capability check', async () => {
+    arrange({ itemType: 'health-tenant', state: {} });
+    await DELETE({} as any, ctx);
+    arrange({ itemType: 'lakehouse', state: bound.state });
+    await DELETE({} as any, ctx);
+    expect(enforceHealthTenantAdmin).not.toHaveBeenCalled();
   });
 
   it('control-plane error -> item NOT deleted, 502 ok:false naming the real cause', async () => {

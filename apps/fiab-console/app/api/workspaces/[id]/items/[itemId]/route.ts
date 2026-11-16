@@ -116,7 +116,8 @@ export async function DELETE(
 
     // A health-tenant item owns real Azure resources behind the LHDS control plane;
     // destroy them FIRST and fail closed so a deleted item never leaves a live tenant.
-    const destroy = await destroyHealthTenantForItem(found.item);
+    const destroy = await destroyHealthTenantForItem(found.item, s);
+    if (!destroy.ok && 'denied' in destroy) return destroy.denied;
     if (!destroy.ok) return err(destroy.message, destroy.status, destroy.code);
 
     // Cascade: delete any item whose state.sqlEndpointFor === this item's id.
