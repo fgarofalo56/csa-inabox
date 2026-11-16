@@ -2426,7 +2426,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
 | `workspaces/[id]/image/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Cosmos, Microsoft Graph |
 | `workspaces/[id]/import/route.ts` | POST | admin |  | ADF, ADLS, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure Storage, Cosmos, Loom service, Managed Identity, Microsoft Graph |
-| `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Purview |
+| `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Loom service, Purview |
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | ADF, ADLS, AI Search, ARM, Azure Storage, Cosmos, Loom service, Managed Identity, Microsoft Graph |
 | `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Cosmos, Microsoft Graph |
 | `workspaces/[id]/powerbi-mapping/route.ts` | GET PUT | owner-scoped | ● | ARM, Cosmos, Microsoft Graph |

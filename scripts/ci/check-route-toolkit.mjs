@@ -117,6 +117,8 @@ const TOUCH_EXEMPT = new Map([
   //
   // FOLLOW-UP: migrating this family is tracked separately; these entries come
   // out when it lands.
+  ['apps/fiab-console/app/api/workspaces/[id]/items/[itemId]/route.ts',
+   '#5321: DELETE gained a health-tenant destroy hook only; codemod SKIPS (handler body declares its own `params`). Authz migration tracked in #5324'],
   ['apps/fiab-console/app/api/items/data-agent/[id]/route.ts',
    '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
   ['apps/fiab-console/app/api/items/data-agent/route.ts',

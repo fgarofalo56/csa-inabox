@@ -74,6 +74,11 @@ const TOUCH_EXEMPT = new Map([
   // Migrating this route's workspace gate to `authorizeWorkspace` WIDENS who may
   // install an app into a workspace — a deliberate access change that belongs in
   // its own PR, not inside a content-reachability fix.
+  // #5321: DELETE gained a health-tenant destroy hook; the owner-only read
+  // (`loadOwned`) is unchanged. Migrating to authorizeItemWorkspace changes who may
+  // GET/PATCH/DELETE every item type - tracked separately in #5324.
+  ['apps/fiab-console/app/api/workspaces/[id]/items/[itemId]/route.ts',
+   '#5321: DELETE destroy hook only, owner-only read unchanged; authz migration tracked in #5324'],
   ['apps/fiab-console/app/api/apps/[id]/install/route.ts',
    '#3549/#3551: Phase-1 content backfill only; migrating the install workspace gate WIDENS who may install — separate PR'],
   // #3549/#3551 split `loadContentBackedItem` into `readContentBackedItem`
