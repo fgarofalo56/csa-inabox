@@ -24,7 +24,31 @@
  *      ONLY on workflow_dispatch), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY.
  *
  * OUTPUTS (GITHUB_OUTPUT): state (RUNNING|PAUSING|PAUSED|RESUMING|RESUME_FAILED|
- * UNKNOWN), paused_by, paused_at, standdown ('true'|'false'), reason.
+ * UNKNOWN), paused_by, paused_at, standdown ('true'|'false'), reason,
+ * measured_state (RUNNING|STOPPED|FAILED).
+ *
+ * RECONCILE (#5325). The console's recorded state can go STALE: on 2026-11-16 it
+ * said PAUSED (since 2026-11-15T04:35:55Z) while Resource Graph showed
+ * agw-lhds-dev01 Running and aks-lhds-dev01 Running and the console served
+ * traffic; the estate had been resumed outside the console's resume path, so
+ * deploy-fiab-commercial stood down on every scheduled run from 2026-10-24.
+ * The recorded state is therefore checked against the MEASURED power state of
+ * the estate's Application Gateways and AKS clusters (`az graph query`, in the
+ * cloud the caller logged into), found the way the pause finds them: the
+ * `loom-estate-id` ownership tag, minus `loom-estate-pause=exempt` (resources
+ * the pause never stops, so they say nothing about whether it happened).
+ * Container Apps are NOT counted: the console and its never-pause consumers run
+ * by design inside a paused estate, so a running replica proves nothing.
+ *
+ *   recorded PAUSED   + measured RUNNING -> RUNNING (record is stale; ::warning::)
+ *   recorded PAUSED   + measured STOPPED -> PAUSED  (stand down, as before)
+ *   recorded RUNNING  + measured STOPPED -> PAUSED  (everything the pause stops
+ *                                           is stopped; deploying would wake it)
+ *   recorded PAUSING/RESUMING/RESUME_FAILED/UNKNOWN -> the record stands (a
+ *                                           transition in flight reads mixed)
+ *   measurement FAILED (az error, extension missing, empty inventory, only
+ *   unclassifiable rows) -> the record stands and the cause is printed. A
+ *   failed query is never read as RUNNING (deploy-integrity.md R7).
  *
  * DECISION (decideStandDown, pure):
  *   - PAUSING / PAUSED  -> stand down, unless an operator override on a
@@ -75,6 +99,62 @@ export const BOUNDARY_AZ_CLOUD = Object.freeze({
   'GCC-High': 'AzureUSGovernment',
   IL5: 'AzureUSGovernment',
 });
+
+/** Resource Graph query: the pause's own ownership tag, minus the pause's own exemption. */
+export const MEASURE_QUERY = "Resources | where type in~ ('microsoft.network/applicationgateways','microsoft.containerservice/managedclusters') "
+  + "| where isnotempty(tostring(tags['loom-estate-id'])) | where tostring(tags['loom-estate-pause']) != 'exempt' "
+  + "| project name, type, op=tostring(properties.operationalState), power=tostring(properties.powerState.code)";
+
+/**
+ * PURE. Classify Resource Graph rows. RUNNING if ANY owned gateway/cluster is
+ * running (a partly-running estate is not paused); STOPPED only when at least one
+ * row is classifiable and none is running; otherwise FAILED (empty = failed).
+ */
+export function classifyMeasurement(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { measured: 'FAILED', reason: 'Resource Graph returned no estate-owned Application Gateways or AKS clusters (empty inventory is a failed measurement, not RUNNING)', running: [], stopped: [] };
+  }
+  const running = []; const stopped = [];
+  for (const r of rows) {
+    const isAks = String(r?.type ?? '').toLowerCase() === 'microsoft.containerservice/managedclusters';
+    const v = String(isAks ? r?.power : r?.op).toLowerCase();
+    if (v === 'running' || (!isAks && v === 'starting')) running.push(String(r?.name ?? ''));
+    else if (v === 'stopped' || (!isAks && v === 'stopping')) stopped.push(String(r?.name ?? ''));
+  }
+  if (running.length) return { measured: 'RUNNING', running, stopped };
+  if (stopped.length) return { measured: 'STOPPED', running, stopped };
+  return { measured: 'FAILED', reason: `none of the ${rows.length} estate-owned row(s) reported a recognisable power state`, running, stopped };
+}
+
+/** IO. Measure the estate's power state; NEVER throws. */
+export function measureEstate({ boundary, spawn = defaultSpawn }) {
+  const failed = (reason) => ({ measured: 'FAILED', reason, running: [], stopped: [] });
+  try {
+    const wantCloud = BOUNDARY_AZ_CLOUD[boundary];
+    if (!wantCloud) return failed(`unknown boundary ${JSON.stringify(boundary)}`);
+    const cloud = readActiveCloud(spawn);
+    if (cloud.environmentName !== wantCloud) return failed(`az is on cloud ${JSON.stringify(cloud.environmentName)}, not ${wantCloud}`);
+    const ext = spawn('az', ['extension', 'add', '--name', 'resource-graph', '--only-show-errors']);
+    if (ext.error || ext.status !== 0) return failed(`az extension add resource-graph failed (exit ${ext.status ?? 'none'}): ${String(ext.stderr ?? ext.error ?? '').slice(0, 200)}`);
+    const r = spawn('az', ['graph', 'query', '--first', '1000', '--query', 'data', '--output', 'json', '-q', MEASURE_QUERY]);
+    if (r.error || r.status !== 0) return failed(`az graph query failed (exit ${r.status ?? 'none'}): ${String(r.stderr ?? r.error ?? '').slice(0, 200)}`);
+    let rows;
+    try { rows = JSON.parse(r.stdout); } catch { return failed('az graph query did not return JSON'); }
+    return classifyMeasurement(rows);
+  } catch (e) {
+    return failed(`measurement threw: ${e?.message ?? 'unknown'}`);
+  }
+}
+
+/**
+ * PURE. Reconcile the recorded state with the measured one (table in the header).
+ * @returns {{state:string, stale:boolean, note:string|null}}
+ */
+export function reconcile({ recorded, measured }) {
+  if (recorded === ESTATE_STATE.paused && measured === 'RUNNING') return { state: ESTATE_STATE.running, stale: true, note: 'recorded PAUSED but the estate measurably runs' };
+  if (recorded === ESTATE_STATE.running && measured === 'STOPPED') return { state: ESTATE_STATE.paused, stale: true, note: 'recorded RUNNING but every estate-owned gateway/cluster is stopped' };
+  return { state: recorded, stale: false, note: null };
+}
 
 /** Events a human started. Everything else (schedule, push, workflow_run...) is unattended. */
 export const OVERRIDE_EVENTS = Object.freeze(['workflow_dispatch']);
@@ -211,7 +291,10 @@ export async function main(argv, deps = {}) {
   const log = deps.log ?? ((s) => process.stdout.write(`${s}\n`));
   const bi = argv.indexOf('--boundary');
   const boundary = bi >= 0 ? argv[bi + 1] : undefined;
-  const read = await readEstateState({ boundary, env, spawn: deps.spawn, fetchFn: deps.fetchFn, sleep: deps.sleep });
+  const recorded = await readEstateState({ boundary, env, spawn: deps.spawn, fetchFn: deps.fetchFn, sleep: deps.sleep });
+  const m = measureEstate({ boundary, spawn: deps.spawn });
+  const rec = reconcile({ recorded: recorded.state, measured: m.measured });
+  const read = rec.stale ? { ...recorded, state: rec.state } : recorded;
   const event = env.GITHUB_EVENT_NAME ?? '';
   const decision = decideStandDown({ state: read.state, event, override: env.OVERRIDE_ESTATE_PAUSE });
   const v = renderVerdict({ boundary, ...read, decision, event });
@@ -221,14 +304,22 @@ export async function main(argv, deps = {}) {
     paused_at: read.pausedAt ?? '',
     standdown: decision.standdown ? 'true' : 'false',
     reason: read.reason ?? '',
+    measured_state: m.measured,
   };
+  const extra = [];
+  if (rec.stale) {
+    extra.push(`::warning::${sanitizeLine(`estate-pause-state ${boundary}: the console record is STALE (${rec.note}; recorded state ${recorded.state}, paused_at ${recorded.pausedAt ?? 'unknown'}; running: ${m.running.join(', ') || 'none'}; stopped: ${m.stopped.join(', ') || 'none'}). Using the measured state ${rec.state}.`)}`);
+  } else if (m.measured === 'FAILED') {
+    extra.push(`estate-pause-state ${boundary}: power-state measurement FAILED (${sanitizeLine(m.reason)}); using the console record ${recorded.state} unreconciled.`);
+  }
   // Console-supplied text is untrusted: one line, no `::`, before any sink.
   log(`::${v.level}::${sanitizeLine(v.text)}`);
+  for (const l of extra) log(l);
   const out = deps.outputFile ?? env.GITHUB_OUTPUT;
   if (out) for (const [k, val] of Object.entries(outputs)) appendFileSync(out, `${k}=${q(val)}\n`);
   const sum = deps.summaryFile ?? env.GITHUB_STEP_SUMMARY;
-  if (sum) appendFileSync(sum, `${v.summary.split('\n').map((l) => l.replace(/::/g, ': :')).join('\n')}\n`);
-  return { outputs, decision, read };
+  if (sum) appendFileSync(sum, `${v.summary.split('\n').map((l) => l.replace(/::/g, ': :')).join('\n')}\n${extra.map((l) => l.replace(/::/g, ': :')).join('\n')}${extra.length ? '\n' : ''}`);
+  return { outputs, decision, read, measured: m, reconciled: rec };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -270,6 +270,26 @@ makes: no new secret, no new role).
 | UNKNOWN or no verdict, on a **`workflow_dispatch`** run | **Proceeds** with a `::warning::` (fail-open): a human chose to deploy. If the estate is paused at that moment, the run wakes it. |
 | UNKNOWN or no verdict, on any other event (`push`, `workflow_run`) | **Proceeds** with a `::warning::`, unchanged from before. The operator decision (2026-10-24) named only schedule versus manual. |
 
+**The record is reconciled against measured power state (#5325).** The console's record can
+go stale: on 2026-11-16 it said PAUSED (since 2026-11-15T04:35:55Z) while the estate's
+gateway and AKS cluster were Running, so every scheduled Commercial deploy stood down for
+three weeks. The gate now runs `az graph query` (the cloud the caller logged into) over the
+estate's Application Gateways and AKS clusters, selected by the `loom-estate-id` tag and
+excluding `loom-estate-pause=exempt`. Container Apps are not counted (the console runs inside
+a paused estate by design). New output `measured_state` is RUNNING, STOPPED or FAILED.
+
+| Recorded | Measured | Result |
+|---|---|---|
+| PAUSED | RUNNING | Not paused: proceeds, `::warning::` names the stale record time and the running resources |
+| PAUSED | STOPPED | PAUSED: stands down |
+| RUNNING | STOPPED | PAUSED: stands down, with a warning (deploying would wake it) |
+| PAUSING, RESUMING, RESUME_FAILED, UNKNOWN | any | The record stands (a transition reads mixed) |
+| any | FAILED (az error, extension missing, empty inventory) | The record stands and the cause is printed; a failed query is never read as RUNNING |
+
+Verified in code for both clouds (the measurement refuses an `az` on the wrong cloud);
+Gov has no live receipt. A gateway held out of a pause without the exempt tag would read as
+RUNNING and flip a truly paused record: tag it exempt.
+
 Why fail-closed on schedule: on 2026-10-24 `deploy-fiab-commercial` run 40113111843's gate
 hung in `azure/login` until its 10-minute timeout. A timed-out gate leaves no outputs, the
 lane's old `!= 'true'` test read that as "proceed", and the run was heading for the ADX

@@ -13,7 +13,12 @@ name: estate-pause-gate
 # the estate state as the deploy service principal, the same call the idle
 # auto-pause lane makes. It adds NO secret and NO role.
 #
-# OUTPUTS: state, standdown, paused_by, paused_at. A caller skips ONLY the work
+# The recorded state is RECONCILED against the measured power state of the
+# estate's App Gateways and AKS clusters (az graph query, same az login), because
+# the record can go stale (#5325: PAUSED on record, Running in fact, 3 weeks of
+# stood-down deploys). See the header of scripts/ci/estate-pause-state.mjs.
+#
+# OUTPUTS: state, standdown, paused_by, paused_at, measured_state. A caller skips ONLY the work
 # that would wake or rescale paused resources, using ONE expression:
 #
 #   needs: estate-gate
@@ -65,6 +70,9 @@ on:
       paused_at:
         description: 'When the estate was paused (ISO), when the console reports it'
         value: ${{ jobs.gate.outputs.paused_at }}
+      measured_state:
+        description: 'RUNNING | STOPPED | FAILED: measured power state of the estate App Gateways and AKS clusters (FAILED = not established; the console record was used)'
+        value: ${{ jobs.gate.outputs.measured_state }}
 
 permissions:
   contents: read
@@ -79,6 +87,7 @@ jobs:
       standdown: ${{ steps.state.outputs.standdown }}
       paused_by: ${{ steps.state.outputs.paused_by }}
       paused_at: ${{ steps.state.outputs.paused_at }}
+      measured_state: ${{ steps.state.outputs.measured_state }}
     env:
       BOUNDARY: ${{ inputs.boundary }}
       OVERRIDE_ESTATE_PAUSE: ${{ inputs.override_estate_pause }}
