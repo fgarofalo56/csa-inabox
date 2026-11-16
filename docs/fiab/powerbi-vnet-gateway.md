@@ -68,6 +68,35 @@ module's `registrationGate` output, and the Network pane's `registrationNote`
 In **GCC L2** the DataGateway PowerShell cmdlets are unsupported — the install
 still lands; complete registration via the Power BI portal flow instead.
 
+### VM image and replacing a VM on a retired image (#4672)
+
+The gateway VM uses `MicrosoftWindowsServer:windowsserver2022:2022-datacenter-azure-edition`.
+The legacy `WindowsServer` offer ships .NET 6 (end of life: patches stopped
+2026-10-13, new deployments blocked 2027-01-11) and is on the retired-image
+denylist `scripts/ci/retired-vm-images.json`; CI (`check-retired-vm-images.mjs`)
+fails any template that references a denylisted image, including through a param.
+
+Azure refuses an in-place `imageReference` change (`PropertyChangeNotAllowed`),
+so a VM already running the legacy offer is **deleted and re-created**:
+
+- Run the `remediate-retired-vm-images` workflow (Actions, `workflow_dispatch`) for
+  the boundary with `mode=dry-run` first. It lists each affected VM (offer, sku, OS
+  disk, power state) and checks the replacement image exists in the VM region
+  before anything is deleted. Then `mode=apply`, then re-run the boundary deploy.
+- `deploy-fiab-commercial` and `deploy-fiab-gcch` also run the same script before the
+  apply, so a future deploy replaces such a VM automatically.
+- Only the VM and its OS disk are deleted; the NIC and Key Vault secrets stay and the
+  bicep re-create reattaches to them.
+
+**If the gateway had been registered, re-register it once after the re-create**
+(the step above: `Connect-DataGatewayServiceAccount`, then `Add-DataGatewayCluster
+-RecoveryKey` with the Key Vault secret `pbi-gateway-recovery-key`), and re-bind the
+data-source connections in the Power BI service.
+
+Per cloud: Commercial - replacement image verified to exist in centralus. Gov
+(GCC-High / IL5) - availability is verified by the workflow dry-run preflight, not
+assumed; supported-in-code, not yet exercised.
+
 ## Auto-upgrade: the managed VNet data gateway
 
 When a **Fabric / Power BI Premium capacity** is later bound

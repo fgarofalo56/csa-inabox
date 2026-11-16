@@ -1,0 +1,9 @@
+[
+  {
+    "publisher": "MicrosoftWindowsServer",
+    "offer": "WindowsServer",
+    "reason": ".NET 6 preinstalled; .NET 6 EOL (security patches stopped 2026-10-13, new deployments blocked 2027-01-11). Use offer windowsserver2022.",
+    "replacementOffer": "windowsserver2022",
+    "since": "2026-11-16"
+  }
+]

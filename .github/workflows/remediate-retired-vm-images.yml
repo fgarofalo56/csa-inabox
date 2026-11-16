@@ -1,0 +1,153 @@
+name: remediate-retired-vm-images
+
+# Delete + re-create-ready: removes VMs (and their OS disks) that run a RETIRED
+# marketplace image, e.g. the legacy MicrosoftWindowsServer:WindowsServer offer
+# (.NET 6 preinstalled, EOL) - #4672. Azure refuses an imageReference change on an
+# existing VM, so the bicep cannot migrate them in place. After `apply`, run the
+# boundary's deploy workflow (or wait for its schedule) to re-create the VMs on the
+# current image; the deploy workflows ALSO run this script as a pre-step.
+#
+# Denylist: scripts/ci/retired-vm-images.json. Script: scripts/csa-loom/replace-retired-image-vms.mjs
+# Always run `dry-run` first: it reports each VM, offer/sku, OS disk id and power
+# state, and PREFLIGHTS that the replacement image exists in the VM's region
+# (Gov availability is verified there, before anything is deleted).
+#
+# A Power BI data gateway VM that had been registered needs ONE re-registration
+# after the re-create (Connect-DataGatewayServiceAccount + Add-DataGatewayCluster
+# -RecoveryKey from the Key Vault secret).
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Cloud boundary to remediate.'
+        type: choice
+        required: true
+        options:
+          - Commercial
+          - GCC-High
+          - IL5
+      mode:
+        description: 'dry-run (default) reports and preflights; apply DELETES the VM and its OS disk.'
+        type: choice
+        required: true
+        default: dry-run
+        options:
+          - dry-run
+          - apply
+      region:
+        description: 'Commercial only: region of the estate (rg-csa-loom-admin-<region>). Gov boundaries use usgovvirginia.'
+        type: string
+        required: false
+        default: centralus
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remediate-retired-vm-images-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  commercial:
+    if: ${{ inputs.boundary == 'Commercial' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AZURE_LOCATION: ${{ inputs.region }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Replace retired-image VMs
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode "$MODE"
+
+  gcc-high:
+    if: ${{ inputs.boundary == 'GCC-High' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: gcc-high-deploy   # requires manual approval
+    env:
+      AZURE_CLOUD: AzureUSGovernment
+      AZURE_LOCATION: usgovvirginia
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Gov sub) — limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Replace retired-image VMs
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary GCC-High --location "$AZURE_LOCATION" --mode "$MODE"
+
+  il5:
+    if: ${{ inputs.boundary == 'IL5' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: il5-deploy   # requires manual approval
+    env:
+      AZURE_CLOUD: AzureUSGovernment
+      AZURE_LOCATION: usgovvirginia
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Gov sub) — limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Replace retired-image VMs
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary IL5 --location "$AZURE_LOCATION" --mode "$MODE"

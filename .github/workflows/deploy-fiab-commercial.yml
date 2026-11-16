@@ -2434,6 +2434,19 @@ jobs:
           node scripts/ci/reconcile-policy.mjs pin-refresh \
             --deploy-apps-enabled "$DEPLOY_APPS_ENABLED" --containers "$CONTAINERS"
 
+      - name: Replace VMs on a RETIRED marketplace image (self-heal before the apply - #4672)
+        id: retired_images
+        # Azure refuses an imageReference change on an existing VM
+        # (PropertyChangeNotAllowed), so a VM still on a retired image would fail the
+        # apply below. This deletes ONLY such VMs (+ their OS disk) in the admin RG so
+        # the apply re-creates them on the current image. No-op when none exist or the
+        # RG does not exist yet. Denylist: scripts/ci/retired-vm-images.json.
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode dry-run
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary Commercial --location "$AZURE_LOCATION" --mode apply
+
       - name: Provision (idempotent)
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'

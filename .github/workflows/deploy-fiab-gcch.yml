@@ -978,7 +978,7 @@ jobs:
             echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
             echo "artifact upload, BOTH image preflights — the adoption preflight"
             echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
-            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin,"
+            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the retired-image VM replacement,"
             echo "the apply, the ACR compliance-tag patch, the Front Door private-endpoint"
             echo "approval, the DLZ template publish, and the Gov smoke test."
             echo "SKIPPED ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase and the"
@@ -1487,6 +1487,19 @@ jobs:
           fi
           node scripts/ci/reconcile-policy.mjs pin-refresh \
             --deploy-apps-enabled true --containers "$CONTAINERS"
+
+      - name: Replace VMs on a RETIRED marketplace image (self-heal before the apply - #4672)
+        id: retired_images
+        # Azure refuses an imageReference change on an existing VM
+        # (PropertyChangeNotAllowed), so a VM still on a retired image would fail the
+        # apply below. This deletes ONLY such VMs (+ their OS disk) in the admin RG so
+        # the apply re-creates them on the current image. No-op when none exist or the
+        # RG does not exist yet. Denylist: scripts/ci/retired-vm-images.json.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary GCC-High --location "$AZURE_LOCATION" --mode dry-run
+          node scripts/csa-loom/replace-retired-image-vms.mjs --boundary GCC-High --location "$AZURE_LOCATION" --mode apply
 
       - name: Provision (with full Gov dispatch)
         id: provision

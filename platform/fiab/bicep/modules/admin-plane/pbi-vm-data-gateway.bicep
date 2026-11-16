@@ -148,35 +148,15 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       }
     }
     storageProfile: {
-      // OFFER REVERTED FROM `windowsserver2022` (#4658 → this fix).
-      //
-      // #4658 moved every Windows image in the repo off the legacy
-      // `WindowsServer` offer, which ships .NET 6 preinstalled and stops
-      // receiving .NET 6 security patches after 2026-10-13 (new deploys blocked
-      // from 2027-01-11). That reasoning is correct and still stands — but it
-      // cannot be applied HERE, and applying it broke every deploy:
-      //
-      //   Azure REFUSES an imageReference change on an existing VM.
-      //     PropertyChangeNotAllowed: Changing property 'imageReference' is not allowed.
-      //   Measured 2026-09-22: deployment `pbi-vm-data-gateway` Failed at
-      //   11:28:30Z, taking the whole `admin-plane` deployment down with it
-      //   (rg-csa-loom-admin-centralus, sub e093f4fd). `pbiDataGatewayEnabled`
-      //   defaults TRUE and no top-level template overrides it, so this blocked
-      //   EVERY boundary, not just Commercial.
-      //
-      // So for a VM the #4658 edit was inert for security — the running image
-      // never changes, the live VM keeps .NET 6 either way — while guaranteeing
-      // a hard deploy failure. The four VMSS modules in that change KEEP
-      // `windowsserver2022`: a scale set CAN take a model image update, so the
-      // fix genuinely lands there.
-      //
-      // Migrating THIS VM requires RE-CREATING it, which re-registers the Power
-      // BI on-premises gateway (recovery key + tenant registration). That is a
-      // deliberate, destructive operator action, not a template edit, and it
-      // must happen before 2027-01-11. Tracked in #4672.
+      // Current-generation offer: the legacy `WindowsServer` offer ships .NET 6 (EOL).
+      // Azure refuses an imageReference change on an existing VM
+      // (PropertyChangeNotAllowed), so a VM still on a retired image is deleted
+      // and re-created by scripts/csa-loom/replace-retired-image-vms.mjs
+      // (workflow remediate-retired-vm-images.yml; also runs before every
+      // admin-plane deploy). Denylist: scripts/ci/retired-vm-images.json. #4672
       imageReference: {
         publisher: 'MicrosoftWindowsServer'
-        offer: 'WindowsServer'
+        offer: 'windowsserver2022'
         sku: '2022-datacenter-azure-edition'
         version: 'latest'
       }

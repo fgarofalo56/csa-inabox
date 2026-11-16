@@ -1813,6 +1813,10 @@ const DISPOSITIONS = new Map([
     'Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)',
     { mode: 'guard', summary: 'the re-pin' },
   ],
+  [
+    'Replace VMs on a RETIRED marketplace image (self-heal before the apply - #4672)',
+    { mode: 'guard', summary: 'the retired-image VM replacement' },
+  ],
   ['Provision (with full Gov dispatch)', { mode: 'guard', summary: 'the apply' }],
   [
     'Apply ACR compliance tags (merge-patch, out-of-band — #3714)',
