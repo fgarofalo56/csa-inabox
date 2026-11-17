@@ -1,0 +1,64 @@
+# Per-tenant HAPI FHIR JPA engine policy (LHDS W2-2). Loaded as an ADDITIONAL Spring config file
+#   SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/opt/loom/fhir/config/application.yaml
+# on top of the starter's own application.yaml. Every key below is tenant-INDEPENDENT policy.
+# The tenant-VARYING values (datasource, pool, caps, PDP url, tenant id) are rendered per tenant by
+# apps/loom-health-cp/src/jobs/fhir-tenant-config.ts as environment variables, which win over this file.
+#
+# Key names are the ones the pinned image (hapiproject/hapi 8.12.0) reads: taken from the image's own
+# WEB-INF/classes/application.yaml and exercised by config/probe/engine-config-probe.sh.
+#
+# Not here, on purpose: the interceptor list (custom-interceptor-classes) is rendered per tenant, because the
+# PDP interceptor must be registered BEFORE the audit interceptor and a tenant without a PDP url must not
+# start (the plugin answers 503 to everything when LOOM_HEALTH_PDP_URL is unset).
+hapi:
+  fhir:
+    fhir_version: R4
+
+    # ADR-003: partition mode is set at creation and cannot be enabled later (reversal cost high).
+    # DATABASE partition mode (a partition id on every row). Cross-partition references are off:
+    # a reference from one facility's resource to another facility's is rejected, not silently followed.
+    partitioning:
+      allow_references_across_partitions: false
+      partitioning_include_in_search_hashes: false
+      # Under `partitioning:`, NOT directly under `hapi.fhir:` where the starter's commented template
+      # shows it: placed there it is silently ignored and the engine logs "Database Partition Mode
+      # Enabled: false" (measured on the pinned image).
+      database_partition_mode_enabled: true
+      # The partition (facility / site, ADR-003) is the FIRST path segment after the base:
+      # /fhir/<facility>/Patient. A request with no segment is a 400, never a fall-through to a default
+      # partition (measured: the starter defaults this to true; stated here so a change is a diff).
+      request_tenant_partitioning_mode: true
+      # Two concurrent conditional creates for one match URL must yield one resource, not two (ADR-003).
+      conditional_create_duplicate_identifiers_enabled: false
+
+    # ADR-003 referential integrity: enforced on write, and a referenced target cannot be deleted.
+    # Relaxed only for bulk $import (W6), which re-enables it and emits an integrity report.
+    enforce_referential_integrity_on_write: true
+    enforce_referential_integrity_on_delete: true
+    # A reference to a resource that does not exist must fail, never be auto-created as an empty placeholder.
+    auto_create_placeholder_reference_targets: false
+    # External (absolute-URL) references bypass RI entirely; off for tenants (W0 set true for Synthea only).
+    allow_external_references: false
+
+    # Destructive and bulk paths are off: history is retained forever (ADR-003 versioning), so expunge
+    # (which erases history) and multi-delete are not available over the API.
+    expunge_enabled: false
+    allow_multiple_delete: false
+    allow_cascading_deletes: false
+    delete_expunge_enabled: false
+
+    # Versioning: every update creates a version, ETag / If-Match honoured, history served by the engine.
+    etag_support_enabled: true
+
+    # Validation on write: every create/update body is validated against base R4 and the loaded profiles;
+    # an error-severity issue is rejected with 422.
+    validation:
+      requests_enabled: true
+      responses_enabled: false
+
+    # Search and page caps. The per-tenant caps in the rendered environment may only LOWER these.
+    max_page_size: 200
+    default_page_size: 20
+    narrative_enabled: false
+    # Hibernate Search (Lucene) is not used: ADR-008 curates the search-parameter set in the database.
+    advanced_lucene_indexing: false
