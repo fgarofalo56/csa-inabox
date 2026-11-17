@@ -165,7 +165,14 @@ final class EngineHarness implements AutoCloseable {
     // HAPI asserts the HookParams match the pointcut's declared parameter list exactly, and that list
     // differs across HAPI versions, so build it FROM the pointcut instead of transcribing it.
     var hp = new ca.uhn.fhir.interceptor.api.HookParams();
-    for (Class<?> t : pc.getParameterTypes()) {
+    // HAPI 8.x declares the parameter list as fully-qualified class NAMES (List<String>), not Class objects.
+    for (String typeName : pc.getParameterTypes()) {
+      final Class<?> t;
+      try {
+        t = Class.forName(typeName);
+      } catch (ClassNotFoundException e) {
+        throw new IllegalStateException("pointcut " + pc + " declares unloadable type " + typeName, e);
+      }
       Object v;
       if (org.hl7.fhir.instance.model.api.IBaseResource.class.isAssignableFrom(t)) {
         v = r; // UPDATED declares (old, new): both are the staged resource here
