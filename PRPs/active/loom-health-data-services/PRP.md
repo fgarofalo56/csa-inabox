@@ -13,7 +13,7 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-15): ACTIVE.** W00 merged. W01 merged. W01b in progress on Commercial: W1b-1 is deployed (control plane revision `--0000002` Running with all three auth values plus the Entra wiring from bootstrap run 43727458723), but its BFF `/api/health/stamps` receipt is still owed. W1b-4 merged and deployed (the estate rolled to `2ac32a01c`), G1 walk owed. W02a: W2-1, W2-3 and W2-5 merged, not deployed. W03a: W3-1 merged, not deployed. The bicep-touching W2-2 and W3-2 wait for the global bicep slot. W13 (class-M characterisation) is blocked on an operator spend approval that has not been given.
+**Status (2026-11-15): ACTIVE.** W00 merged. W01 merged. W01b in progress on Commercial: W1b-1 is deployed (control plane revision `--0000002` Running with all three auth values plus the Entra wiring from bootstrap run 43727458723), but its BFF `/api/health/stamps` receipt is still owed. W1b-4 merged and deployed (the estate rolled to `2ac32a01c`), G1 walk owed. W02a: W2-1, W2-3 (+ follow-ups #5337), W2-5 and W2-2a (#5338, the non-bicep half of W2-2) merged, not deployed. W03a: W3-1 (+ hardening #5335) and W3-3 (#5336) merged, not deployed. The bicep halves W2-2b and W3-2 wait for the global bicep slot (apim-WA and apim-WB1 are ahead; operator kept queue order 2026-11-16). Operator decision 2026-11-16: FHIR audit fails closed before real PHI (#5339). (Status line updated 2026-11-17.) W13 (class-M characterisation) is blocked on an operator spend approval that has not been given.
 
 | Field | Value |
 |---|---|
@@ -143,9 +143,9 @@ W06a + W06b (+W02b, W03b) > W09a > W09b (also needs W04, W05, W06c, W08b, W10)
 | W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | W0-7 #5118; DEV proof #5107; pass bars carried to W13 | 2026-11-14 |
 | W01-control-plane-identity-stamp | in-progress | main | sonnet | W1 items merged, not deployed (#5122..#5287); detail in W01 file | 2026-11-14 |
 | W01b-close-deploy-receipts | in-progress | feat/lhds-w1b-close-receipts | sonnet | 2026-11-16: loom-ui-verify fixed (#5318/#5319, green on main). G1 spec + destroy-on-delete DEPLOYED (#5321/#5323). CI-SP CP admin (#5320), automation grant seed (#5327) and stamp TLS (#5322/#5326) merged, not deployed. NEXT (operator first): Resume the Commercial estate → deploy-health full → bootstrap → G1 run → edge probe → Inferno. W1b-5 Gov blocked (#5123; the Gov estate has been paused since 2026-11-07). Detail in W01b file. | 2026-11-16 |
-| W02a-fhir-core-build | in-progress | | sonnet | W2-1 #5290, W2-3 #5310, W2-5 #5312 merged, not deployed; W2-2 waits on the bicep slot | 2026-11-15 |
+| W02a-fhir-core-build | in-progress | | sonnet | W2-1 #5290, W2-3 #5310 + #5337, W2-5 #5312, W2-2a #5338 merged, not deployed; W2-2b (engines.bicep HAPI workload) waits on the bicep slot; #5339 audit fail-closed owed before PHI | 2026-11-17 |
 | W02b-fhir-core-ops | todo | | sonnet | | 2026-11-14 |
-| W03a-dicom-core-a | in-progress | | sonnet | W3-1 #5313 merged, not deployed; #5315 must land before any DICOM stamp is live | 2026-11-15 |
+| W03a-dicom-core-a | in-progress | | sonnet | W3-1 #5313 + hardening #5335, W3-3 gateway #5336 merged, not deployed; W3-2 waits on the bicep slot; the gateway workload must set the pod label the #5335 NetworkPolicy admits (#5340) | 2026-11-17 |
 | W03b-dicom-core-b | todo | | sonnet | | 2026-11-14 |
 | W04-terminology | todo | | sonnet | | 2026-11-14 |
 | W05-conversion-hl7v2-ccda | todo | | sonnet | | 2026-11-14 |
