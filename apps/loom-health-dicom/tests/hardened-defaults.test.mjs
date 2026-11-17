@@ -41,25 +41,15 @@ test('the chart passes the lifted flag to the hardening container, from values, 
   assert.match(archive, /include "lhd\.hardenEnv"/, 'the initContainer must consume the helper that carries the flag');
 });
 
-test('the chart refuses to render with enforcement off unless explicitly overridden', () => {
-  // BREAKS when: the fail guard is deleted, or allowUnenforced defaults to true.
-  assert.match(archive, /and \(not \.Values\.hardening\.aeEnforce\) \(not \.Values\.hardening\.allowUnenforced\)/);
+test('values defaults: allowUnenforced and allowDimse are false, DIMSE is off in harden.sh and values', () => {
+  // BREAKS when: allowUnenforced / allowDimse / dimseEnabled default to true, or the harden.sh
+  // DIMSE_ENABLED default becomes true. (The guards themselves are rendered through helm below.)
   assert.match(values, /^ {2}allowUnenforced: false$/m);
-});
-
-test('DIMSE is off: harden.sh default, chart default, and no 11112 outside the dimseEnabled branch', () => {
-  // BREAKS when: DIMSE_ENABLED default becomes true, values dimseEnabled becomes true, or an
-  // unconditional 11112 port/Service entry is added to the template.
-  assert.match(harden, /^DIMSE_ENABLED="\$\{DIMSE_ENABLED:-false\}"$/m);
+  assert.match(values, /^ {2}allowDimse: false$/m);
   assert.match(values, /^ {2}dimseEnabled: false$/m);
-  const lines = archive.split('\n');
-  lines.forEach((l, i) => {
-    if (!l.includes('11112')) return;
-    const guard = lines.slice(Math.max(0, i - 2), i).join('\n');
-    assert.match(guard, /if \.Values\.hardening\.dimseEnabled/, `line ${i + 1}: 11112 outside the dimseEnabled guard`);
-  });
-  assert.ok(lines.some((l) => l.includes('11112')), 'positive control: the opt-in 11112 port must still exist');
+  assert.match(harden, /^DIMSE_ENABLED="\$\{DIMSE_ENABLED:-false\}"$/m);
   assert.doesNotMatch(read(join(APP, 'Dockerfile')), /EXPOSE\s+.*11112/);
+  assert.match(read(join(APP, 'Dockerfile')), /^FROM /m, 'positive control: the Dockerfile was actually read');
 });
 
 test('HL7 authentication defaults on, with a non-empty sender allow-list', () => {
@@ -96,10 +86,28 @@ function runHarden(env) {
   try {
     const out = join(dir, 'written.ldif');
     const stub = (name, body) => { writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`); chmodSync(join(dir, name), 0o755); };
-    // ldapmodify: capture the -f file. ldapsearch: wait-loop probe (last arg "dn") -> a dn line;
-    // read-back (last arg = attribute) -> the attribute lines that were written.
-    stub('ldapmodify', `while [ $# -gt 0 ]; do [ "$1" = -f ] && cp "$2" "${out.replace(/\\/g, '/')}"; shift; done`);
-    stub('ldapsearch', `for last; do :; done; if [ "$last" = dn ]; then echo "dn: x"; else grep "^$last:" "${out.replace(/\\/g, '/')}" || true; fi`);
+    // ldapmodify: capture the -f file. ldapsearch (all behaviour keyed off the LAST args):
+    //   filter (dicomAETitle=*) / (hl7ApplicationName=*) -> enumeration of $STUB_AES / one HL7 app
+    //   last arg "dn"                                    -> wait-loop probe, a dn line
+    //   last arg = attribute (read-back)                 -> that attribute's lines from the
+    //     written ldif, ONLY for the entry whose dn equals the -b base. Fault arms:
+    //     STUB_READ_FAIL=1 exits 1; STUB_EMPTY_ATTR=<attr> returns nothing for that attribute;
+    //     STUB_INJECT_DN + STUB_INJECT_LINE adds one line for that dn (a value that should be absent).
+    const o = out.replace(/\\/g, '/');
+    stub('ldapmodify', `while [ $# -gt 0 ]; do [ "$1" = -f ] && cp "$2" "${o}"; shift; done`);
+    stub('ldapsearch', [
+      'DEVDN="dicomDeviceName=dcm4chee-arc,cn=Devices,cn=DICOM Configuration,dc=dcm4che,dc=org"',
+      'for last; do :; done; base=""; prev=""; for a; do [ "$prev" = -b ] && base="$a"; prev="$a"; done',
+      'case " $* " in',
+      '  *"(dicomAETitle=*)"*) for t in $(echo "${STUB_AES:-DCM4CHEE}" | tr , " "); do echo "dn: dicomAETitle=$t,$DEVDN"; done; exit 0;;',
+      '  *"(hl7ApplicationName=*)"*) echo "dn: hl7ApplicationName=*,$DEVDN"; exit 0;;',
+      'esac',
+      '[ "$last" = dn ] && { echo "dn: x"; exit 0; }',
+      '[ "${STUB_READ_FAIL:-}" = 1 ] && { echo "ldap_result: Can\'t contact LDAP server" >&2; exit 1; }',
+      '[ "${STUB_EMPTY_ATTR:-}" = "$last" ] || awk -v b="$base" -v a="$last:" \'/^dn: /{cur=substr($0,5)} cur==b && index($0,a)==1\' "' + o + '"',
+      '[ "${STUB_INJECT_DN:-}" = "$base" ] && echo "$STUB_INJECT_LINE"',
+      'exit 0',
+    ].join('\n'));
     const r = spawnSync('sh', [join(APP, 'ldap/harden.sh')], {
       env: { ...process.env, PATH: dir + delimiter + process.env.PATH, LDAP_ROOTPASS: 'stub', ...env },
       encoding: 'utf8',
@@ -185,4 +193,141 @@ test('version comparator has positive and negative controls (else the test above
   assert.equal(atLeast('1.84', '1.85'), false);
   assert.equal(atLeast('4.1.137.Final', '4.1.137'), true);
   assert.equal(atLeast('4.2.0.Final', '4.1.137'), true);
+});
+
+// ---- W3-1 hardening (#5315): enumeration, fail-closed read-back, both listeners ----
+const DEVDN = 'dicomDeviceName=dcm4chee-arc,cn=Devices,cn=DICOM Configuration,dc=dcm4che,dc=org';
+const skipSh = !haveSh && 'no sh on PATH';
+
+test('harden.sh applies the calling-AE allow-list to EVERY enumerated archive AE', { skip: skipSh }, () => {
+  // BREAKS when: only AE_TITLE is written. Three AEs are enumerated, so the LOOMGW line must
+  // appear exactly 3 times, once under each dn (a single-AE implementation writes 1).
+  const r = runHarden({ STUB_AES: 'DCM4CHEE,DCM4CHEE_ADMIN,IOCM_REGULAR_USE' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal((r.ldif.match(/^dcmAcceptedCallingAETitle: LOOMGW$/gm) ?? []).length, 3);
+  for (const ae of ['DCM4CHEE', 'DCM4CHEE_ADMIN', 'IOCM_REGULAR_USE']) {
+    assert.ok(
+      r.ldif.includes(`dn: dicomAETitle=${ae},${DEVDN}\nchangetype: modify\nreplace: dcmAcceptedCallingAETitle\ndcmAcceptedCallingAETitle: LOOMGW\n`),
+      `${ae} has no allow-list block`,
+    );
+  }
+});
+
+test('harden.sh fails (exit 1) when the read-back returns NOTHING for the AE attribute', { skip: skipSh }, () => {
+  // BREAKS when: the read-back is not checked against what was written. The stub returns no
+  // dcmAcceptedCallingAETitle although ENFORCE=true wrote it: exit must be 1. Positive control:
+  // the same run without the fault exits 0 (the default-run test above).
+  const r = runHarden({ STUB_EMPTY_ATTR: 'dcmAcceptedCallingAETitle' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /AE allow-list empty after write/);
+});
+
+test('harden.sh fails (exit 1) when ldapsearch itself errors on the read-back, even where only absence is checked', { skip: skipSh }, () => {
+  // BREAKS when: get() swallows the ldapsearch status (`|| true`): a failed search then reads as
+  // 0 and every absence check passes. ENFORCE/HL7/DIMSE are all off here so ONLY absence checks
+  // run: the mutated script exits 0, the fixed one exits 1.
+  const r = runHarden({ AE_ENFORCE: 'false', HL7_AUTH: 'false', DIMSE_ENABLED: 'false', STUB_READ_FAIL: '1' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ldapsearch exited non-zero/);
+});
+
+test('harden.sh reads back cn=dicom-tls: a stray port there fails even with DIMSE off', { skip: skipSh }, () => {
+  // BREAKS when: only cn=dicom is read back (the stub injects dicomPort 2762 on cn=dicom-tls only).
+  const r = runHarden({ STUB_INJECT_DN: `cn=dicom-tls,${DEVDN}`, STUB_INJECT_LINE: 'dicomPort: 2762' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /cn=dicom-tls still has a port/);
+});
+
+test('harden.sh reads HL7 back when HL7_AUTH=false: a leftover allow-list fails', { skip: skipSh }, () => {
+  // BREAKS when: HL7 is read back only if HL7_AUTH=true (the stub injects a sender on the HL7 app).
+  const r = runHarden({ HL7_AUTH: 'false', STUB_INJECT_DN: `hl7ApplicationName=*,${DEVDN}`, STUB_INJECT_LINE: 'hl7AcceptedSendingApplication: X|Y' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /HL7 allow-list still present/);
+  const ok = runHarden({ HL7_AUTH: 'false' });
+  assert.equal(ok.status, 0, `positive control: HL7_AUTH=false with nothing injected passes (${ok.stderr})`);
+});
+
+test('harden.sh DIMSE_ENABLED=true fails when the ports read back empty', { skip: skipSh }, () => {
+  // BREAKS when: DIMSE on is not verified: the stub hides dicomPort on read-back, exit must be 1.
+  const r = runHarden({ DIMSE_ENABLED: 'true', STUB_EMPTY_ATTR: 'dicomPort' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /has no port with DIMSE_ENABLED=true/);
+});
+
+// ---- chart behaviour rendered through helm (never regex over template source) ----
+const helm = spawnSync('helm', ['version', '--short'], { encoding: 'utf8' });
+const haveHelm = !helm.error && helm.status === 0;
+const skipHelm = !haveHelm && 'SKIPPED LOUDLY: helm is not installed on this machine, so the chart-guard/NetworkPolicy tests did NOT run here';
+if (!haveHelm) console.warn(`WARNING: ${skipHelm}`);
+const render = (...sets) => {
+  const args = ['template', 'x', join(APP, 'chart')];
+  for (const s of sets) args.push('--set-string', s);
+  const r = spawnSync('helm', args, { encoding: 'utf8' });
+  return { status: r.status, stdout: (r.stdout ?? '').replace(/\r\n/g, '\n'), stderr: r.stderr ?? '' };
+};
+const doc = (out, re) => out.split(/^---$/m).find((d) => re.test(d)) ?? '';
+
+test('helm: default render succeeds with the hardened posture', { skip: skipHelm }, () => {
+  // BREAKS when: the default values stop rendering, or render 11112 (DIMSE off by default).
+  const r = render();
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /11112/);
+  assert.match(r.stdout, /name: AE_ENFORCE, value: "true"/);
+});
+
+test('helm: the string "false" for aeEnforce without allowUnenforced FAILS the render', { skip: skipHelm }, () => {
+  // BREAKS when: the guard is `not .Values.hardening.aeEnforce` (a quoted "false" is truthy, the
+  // render succeeds and harden.sh gets AE_ENFORCE=false). --set-string makes it a real string.
+  const r = render('hardening.aeEnforce=false');
+  assert.notEqual(r.status, 0, 'render must fail');
+  assert.match(r.stderr, /requires hardening\.allowUnenforced=true/);
+});
+
+test('helm: aeEnforce=false renders only with allowUnenforced=true', { skip: skipHelm }, () => {
+  // BREAKS when: allowUnenforced is ignored (always fails) or the string "false" counts as true.
+  const ok = render('hardening.aeEnforce=false', 'hardening.allowUnenforced=true');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /name: AE_ENFORCE, value: "false"/);
+  const bad = render('hardening.aeEnforce=false', 'hardening.allowUnenforced=false');
+  assert.notEqual(bad.status, 0, 'allowUnenforced as the STRING "false" must not unlock it');
+});
+
+test('helm: dimseEnabled=true needs allowDimse=true', { skip: skipHelm }, () => {
+  // BREAKS when: the DIMSE escape is removed (dimse alone renders) or never unlocks.
+  const bad = render('hardening.dimseEnabled=true');
+  assert.notEqual(bad.status, 0, 'dimseEnabled without allowDimse must fail');
+  assert.match(bad.stderr, /requires hardening\.allowDimse=true/);
+  const ok = render('hardening.dimseEnabled=true', 'hardening.allowDimse=true');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(doc(ok.stdout, /name: loom-health-dicom-ingress/), /port: 11112/);
+  assert.match(doc(ok.stdout, /kind: Service\n[\s\S]*selector: \{app: loom-health-dicom\}/), /port: 11112/);
+});
+
+test('helm: NetworkPolicy allows 8080 only from the gateway label; 2575 closed unless hl7Enabled', { skip: skipHelm }, () => {
+  // BREAKS when: a policy is missing, an allow rule uses an empty podSelector (whole namespace),
+  // the gateway label differs from the W3-3 contract, or 2575 is open by default.
+  const r = render();
+  assert.equal(r.status, 0, r.stderr);
+  const np = doc(r.stdout, /name: loom-health-dicom-ingress/);
+  assert.match(np, /kind: NetworkPolicy/);
+  assert.match(np, /podSelector: \{matchLabels: \{app: loom-health-dicom\}\}/, 'must select the archive pods');
+  assert.match(np, /matchLabels:\n\s+app\.kubernetes\.io\/name: loom-health-dicom-gateway/);
+  assert.match(np, /port: 8080/);
+  assert.doesNotMatch(np, /2575/, 'HL7 must be closed by default');
+  assert.doesNotMatch(np, /ipBlock|namespaceSelector/, 'no cluster-wide / CIDR allow');
+  const withHl7 = doc(render('networkPolicy.hl7Enabled=true').stdout, /name: loom-health-dicom-ingress/);
+  assert.match(withHl7, /port: 2575/);
+  const ldap = doc(r.stdout, /name: loom-health-dicom-ldap-ingress/);
+  assert.match(ldap, /port: 389/);
+  assert.match(ldap, /\{app: loom-health-dicom\}/);
+});
+
+test('helm: the harden initContainer has a securityContext and resources', { skip: skipHelm }, () => {
+  // BREAKS when: either block is removed from the initContainer.
+  const dep = doc(render().stdout, /kind: Deployment/);
+  const init = dep.slice(dep.indexOf('initContainers:'), dep.indexOf('- name: arc'));
+  assert.ok(init.includes('name: harden'), 'positive control: sliced the harden container');
+  assert.match(init, /allowPrivilegeEscalation: false/);
+  assert.match(init, /drop: \[ALL\]/);
+  assert.match(init, /limits: \{memory: 128Mi\}/);
 });
