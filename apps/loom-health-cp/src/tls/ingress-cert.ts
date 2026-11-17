@@ -15,7 +15,7 @@
 import { keyVaultScope, KEYVAULT_SUFFIX_BY_CLOUD } from '../auth/clouds.js';
 import type { Cloud } from '../config.js';
 import { ConfigError } from '../config.js';
-import { logSafe } from '../safe-error.js';
+import { authoredMessage, logSafe, publicErrorMessage } from '../safe-error.js';
 
 const API = '7.5';
 export const CERTIFICATES_OFFICER_ROLE = 'Key Vault Certificates Officer';
@@ -129,7 +129,8 @@ export async function ensureIngressCertificate(d: IngressCertDeps): Promise<Ensu
       });
     } catch (e) {
       // Not a verdict on the certificate: say what was not reached, and why only as far as known.
-      throw new IngressCertError(`could not reach vault ${cfg.vaultUrl} (private endpoint, DNS or token): ${logSafe(e instanceof Error ? e.message : e, 200)}`);
+      // The raw exception is logged in full against a ref (bff-errors R3); the message carries only the ref.
+      throw new IngressCertError(`could not reach vault ${cfg.vaultUrl} (private endpoint, DNS or token): ${publicErrorMessage(e, 'request failed before any response')}`);
     }
     let body: Record<string, unknown> = {};
     try {
@@ -193,7 +194,8 @@ export function scheduleIngressCert(
       const outcome = await ensureIngressCertificate(d);
       log('tls.ingress_cert', { outcome, cert: d.cfg.certName });
     } catch (e) {
-      log('tls.ingress_cert_error', { cert: d.cfg.certName, error: logSafe(e instanceof IngressCertError ? e.message : 'unexpected error') });
+      const error = e instanceof IngressCertError ? authoredMessage(e) : publicErrorMessage(e, 'unexpected error');
+      log('tls.ingress_cert_error', { cert: d.cfg.certName, error: logSafe(error) });
     }
   };
   void run();
