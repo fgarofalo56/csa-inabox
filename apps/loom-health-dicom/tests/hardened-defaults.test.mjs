@@ -331,3 +331,21 @@ test('helm: the harden initContainer has a securityContext and resources', { ski
   assert.match(init, /drop: \[ALL\]/);
   assert.match(init, /limits: \{memory: 128Mi\}/);
 });
+
+// Exact port set of a rendered NetworkPolicy: every `port: N`, sorted.
+const portSet = (np) => [...np.matchAll(/port: (\d+)/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
+
+test('helm: NetworkPolicy port sets are EXACT (set equality, not containment)', { skip: skipHelm }, () => {
+  // BREAKS when: any extra port joins a rule, e.g. 9999 added to the 8080 rule (the #5340 mutation:
+  // the old `match(/port: 8080/)` stayed green), or a port is dropped, or 2575/11112 open unasked.
+  const archive = (...sets) => doc(render(...sets).stdout, /name: loom-health-dicom-ingress/);
+  const ldap = (...sets) => doc(render(...sets).stdout, /name: loom-health-dicom-ldap-ingress/);
+  assert.deepEqual(portSet(archive()), [8080], 'default archive policy: 8080 only');
+  assert.deepEqual(portSet(archive('networkPolicy.hl7Enabled=true')), [2575, 8080], 'hl7Enabled adds exactly 2575');
+  assert.deepEqual(
+    portSet(archive('hardening.dimseEnabled=true', 'hardening.allowDimse=true')),
+    [8080, 11112],
+    'dimse adds exactly 11112',
+  );
+  assert.deepEqual(portSet(ldap()), [389], 'ldap policy: 389 only');
+});
