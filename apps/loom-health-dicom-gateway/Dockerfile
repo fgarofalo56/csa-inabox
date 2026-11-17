@@ -1,8 +1,8 @@
 # Image for the LHDS DICOMweb gateway (apps/loom-health-dicom-gateway, W3-3).
 #
-# BUILD CONTEXT IS THE REPO ROOT (matches loom-health-cp):
+# BUILD CONTEXT IS THIS DIRECTORY (matches loom-health-fhir / -scrubber / -dicom):
 #
-#   docker build -f apps/loom-health-dicom-gateway/Dockerfile -t loom-health-dicom-gateway .
+#   docker build -t loom-health-dicom-gateway apps/loom-health-dicom-gateway
 #
 # Port 8080. Liveness: GET /healthz. Configuration is environment-only; see the
 # README. The image holds no clinical data and no secret: the PDP and the per-tenant
@@ -12,10 +12,10 @@
 # ---- build stage -----------------------------------------------------------
 FROM node:22-slim AS build
 WORKDIR /build
-COPY apps/loom-health-dicom-gateway/package.json apps/loom-health-dicom-gateway/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY apps/loom-health-dicom-gateway/tsconfig.json ./
-COPY apps/loom-health-dicom-gateway/src ./src
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- runtime stage ---------------------------------------------------------
