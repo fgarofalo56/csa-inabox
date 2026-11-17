@@ -304,9 +304,30 @@ public class LoomPdpInterceptor {
     SmartScopes scopes = SmartScopes.parse(tv.scope());
     if (response instanceof IBaseBundle) {
       Bundle b = (Bundle) response;
-      b.getEntry().removeIf(e -> e.hasResource() && !visible(ctx, scopes, e.getResource(), tv));
-      if (b.hasTotal()) {
-        b.setTotal(b.getEntry().size()); // a total of the unfiltered set would leak how much was hidden
+      FilterOutcome.Builder fo = new FilterOutcome.Builder();
+      b.getEntry().removeIf(e -> {
+        if (!e.hasResource()) {
+          return false;
+        }
+        boolean keep = visible(ctx, scopes, e.getResource(), tv);
+        if (!(e.getResource() instanceof OperationOutcome)) {
+          Set<String> owners = ResourceFacts.owners(ctx, e.getResource());
+          if (keep) {
+            fo.kept(owners);
+          } else {
+            fo.removed(owners);
+          }
+        }
+        return !keep;
+      });
+      rd.getUserData().put(FilterOutcome.KEY, fo.build());
+      // Bundle.total is the engine's count of the UNFILTERED match set (and _summary=count carries no
+      // entries to subtract). Neither the entry count (a lie: it is one page) nor the engine's total
+      // (a leak: it counts what the caller may not see) is safe, and a policy-aware count would need the
+      // whole result set walked per request. So total is kept only when the token's scopes cannot hide
+      // anything, and omitted otherwise: absent is honest, a wrong or leaking number is not.
+      if (b.hasTotal() && !scopes.hidesNothing()) {
+        b.setTotalElement(null);
       }
       return true;
     }
@@ -314,11 +335,15 @@ public class LoomPdpInterceptor {
       return true;
     }
     if (!visible(ctx, scopes, response, tv)) {
+      rd.getUserData().put(FilterOutcome.KEY,
+          new FilterOutcome(List.of(), new ArrayList<>(ResourceFacts.owners(ctx, response)), 1));
       rd.getUserData().put(PdpOutcome.KEY, new PdpOutcome(out.tenant(), out.interaction(), out.resourceType(),
           out.resourceId(), out.op(), out.compartment(), "deny", "response-not-in-scope", out.policyVersion(),
           403, out.subject(), out.clientId()));
       throw new ForbiddenOperationException("Access denied");
     }
+    rd.getUserData().put(FilterOutcome.KEY,
+        new FilterOutcome(new ArrayList<>(ResourceFacts.owners(ctx, response)), List.of(), 0));
     return true;
   }
 

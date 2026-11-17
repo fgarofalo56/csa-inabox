@@ -107,18 +107,58 @@ test('CVE patch locks are sha256-pinned and wired into the runtime stage', () =>
   assert.match(runtime, /COPY --from=ospatch \/out\/status\.d\/ \/var\/lib\/dpkg\/status\.d\//);
 });
 
+// Strip Java block and line comments (a block-comment line need not start with "*"), then lift the real
+// registrations. shellCount emulates the build's `grep -cE '^[[:space:]]*svc\.registerInterceptor\('` on the raw text.
+function liftRegistrations(src) {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const registered = [...code.matchAll(/svc\.registerInterceptor\(new (\w+)\(/g)].map((m) => m[1]);
+  const shellCount = src.split('\n').filter((l) => /^[ \t]*svc\.registerInterceptor\(/.test(l)).length;
+  return { code, registered, shellCount };
+}
+
+test('liftRegistrations: a block-comment line starting with svc. is a real, detected discrepancy (#5316)', () => {
+  // BREAKS when: comments are not stripped. The fixture has ONE real registration and ONE block-comment line
+  // that starts with "svc." (no leading "*", the shape the old "*"-prefix filter missed). Real = 1, but the
+  // shell grep would count 2: the helper must report exactly that split. The control (no comment) must agree.
+  const clean = 'class P {\n  void r() {\n    svc.registerInterceptor(new A());\n  }\n}\n';
+  assert.deepEqual(
+    (({ registered, shellCount }) => ({ registered, shellCount }))(liftRegistrations(clean)),
+    { registered: ['A'], shellCount: 1 });
+  const trap = 'class P {\n  /*\n  svc.registerInterceptor(new Ghost());\n  */\n  void r() {\n    svc.registerInterceptor(new A());\n    // svc.registerInterceptor(new Line());\n  }\n}\n';
+  const t = liftRegistrations(trap);
+  assert.deepEqual(t.registered, ['A'], 'neither the block-comment nor the // registration is real');
+  assert.equal(t.shellCount, 2, 'the raw grep counts the block-comment line: this is the divergence the contract test must catch');
+});
+
 test('the image build and verify script expect exactly the interceptors the plugin registers', () => {
   // BREAKS when: LoomPlugin.java registers 0 interceptors (a registerInterceptor line removed or
   // commented out) so the list below shrinks; the register() calls and the
   // registeredInterceptors() literal list disagree (2 vs 1); PDP/audit order flips; or the
   // Dockerfile / verify-image.sh lose the ">0" guard or go back to a hard-coded "interceptors":0.
   const src = read(join(APP, 'plugin/src/main/java/ai/loom/health/fhir/LoomPlugin.java'));
-  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-  const registered = [...code.matchAll(/svc\.registerInterceptor\(new (\w+)\(/g)].map((m) => m[1]);
+  const { code, registered, shellCount } = liftRegistrations(src);
   assert.deepEqual(registered, ['LoomPdpInterceptor', 'LoomAuditInterceptor'], 'PDP must register before audit');
+  // The Dockerfile and verify-image.sh count with `grep -cE '^[[:space:]]*svc\.registerInterceptor\('` over
+  // the RAW file. That count must equal the number of real (non-comment) registrations, or the build
+  // would expect a probe count the plugin cannot report (#5316 item 4).
+  assert.equal(shellCount, registered.length,
+    `the shell grep counts ${shellCount} line(s) starting with svc.registerInterceptor( but ${registered.length} are real code: a comment line begins with it`);
   const literal = code.match(/new String\[\] \{([^}]*)\}/);
   assert.ok(literal, 'registeredInterceptors() literal list not found');
-  assert.equal([...literal[1].matchAll(/"ai\.loom[^"]+"/g)].length, registered.length);
+  const names = [...literal[1].matchAll(/"(ai\.loom[^"]+)"/g)].map((m) => m[1]);
+  assert.equal(names.length, registered.length);
+  // The class-name check (formerly only in the Java test, which the image build skips): each hand-listed
+  // name is a real class declared at that path, in that package, and is the class register() instantiates.
+  assert.deepEqual(names.map((n) => n.split('.').pop()), registered, 'literal list and register() must name the same classes in the same order');
+  for (const fq of names) {
+    const file = join(APP, 'plugin/src/main/java', ...fq.split('.')) + '.java';
+    assert.ok(existsSync(file), `${fq} is listed in registeredInterceptors() but ${file} does not exist (renamed or moved class)`);
+    const text = read(file);
+    const simple = fq.split('.').pop();
+    assert.ok(text.includes(`package ${fq.slice(0, fq.lastIndexOf('.'))};`), `${fq}: package declaration does not match the listed name`);
+    assert.match(text, new RegExp(`\\bpublic class ${simple}\\b`), `${fq}: no "public class ${simple}" declaration`);
+    assert.match(text, /^@Interceptor\b/m, `${fq}: not annotated @Interceptor (HAPI would register it but fire no hooks)`);
+  }
   for (const [name, text] of [['Dockerfile', dockerfile], ['verify-image.sh', read(join(APP, 'scripts/verify-image.sh'))]]) {
     assert.ok(text.includes("grep -cE '^[[:space:]]*svc\\.registerInterceptor\\('"),
       `${name} must lift the expected count from LoomPlugin.java, anchored so a commented-out registration is not counted`);

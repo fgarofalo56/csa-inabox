@@ -58,6 +58,21 @@ public final class SmartScopes {
   }
 
   /**
+   * True only when these scopes can never hide a resource from a read: some non-patient scope
+   * ({@code user/} or {@code system/}) with type {@code *}, letter {@code r} and no category
+   * constraint. Used to decide whether the engine's {@code Bundle.total} is still truthful.
+   */
+  public boolean hidesNothing() {
+    for (Scope s : scopes) {
+      if (s.letters().contains("r") && s.type().equals("*") && s.category().isEmpty()
+          && !s.context().equals("patient")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * May the caller see a resource of {@code type} (needs letter {@code r}), given the category
    * forms the resource carries and the patients that own it?
    *

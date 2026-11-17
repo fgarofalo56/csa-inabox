@@ -63,6 +63,19 @@ public final class AuditEvents {
     for (String p : r.patient()) {
       ae.addEntity().setWhat(new Reference("Patient/" + p));
     }
+    // What the response filter did, as patient ids only (never a body): returned vs hidden.
+    for (String p : r.patientsReturned()) {
+      AuditEvent.AuditEventEntityComponent e = ae.addEntity().setWhat(new Reference("Patient/" + p));
+      e.addDetail().setType("filter-result").setValue(new org.hl7.fhir.r4.model.StringType("returned"));
+    }
+    for (String p : r.patientsHidden()) {
+      AuditEvent.AuditEventEntityComponent e = ae.addEntity().setWhat(new Reference("Patient/" + p));
+      e.addDetail().setType("filter-result").setValue(new org.hl7.fhir.r4.model.StringType("hidden"));
+    }
+    if (r.hiddenResourceCount() > 0) {
+      ae.addEntity().addDetail().setType("hidden-resource-count")
+          .setValue(new org.hl7.fhir.r4.model.StringType(String.valueOf(r.hiddenResourceCount())));
+    }
     if (!r.policyVersion().isEmpty()) {
       ae.addEntity().addDetail().setType("policy_version").setValue(new org.hl7.fhir.r4.model.StringType(r.policyVersion()));
     }
