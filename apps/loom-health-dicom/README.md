@@ -23,7 +23,16 @@ Hardening lives in the LDAP configuration store, not the image, because that is 
 - **HL7 auth on** (`HL7_AUTH=true`): `hl7AcceptedSendingApplication` replaces the accept-any wildcard sender.
 - **DIMSE listener off** (`DIMSE_ENABLED=false`): the DICOM connections get no `dicomPort`, so nothing binds 11112.
   The chart exposes 11112 only when `hardening.dimseEnabled=true`.
-- The chart refuses `aeEnforce=false` unless `allowUnenforced=true`.
+- The allow-list is applied to EVERY archive AE under the device (`dicomAETitle=*`, e.g. `DCM4CHEE_ADMIN`, `IOCM_*`),
+  and every write is read back (a failed `ldapsearch` fails the init container; `cn=dicom`, `cn=dicom-tls` and HL7
+  are all read).
+- The chart refuses `aeEnforce` other than true unless `allowUnenforced=true` (compared as a string, so a quoted
+  "false" is refused too), and refuses `dimseEnabled=true` unless `allowDimse=true`.
+- **NetworkPolicy** (default-deny ingress): archive pods accept 8080 only from pods labelled
+  `networkPolicy.gatewayPodLabels` (default `app.kubernetes.io/name: loom-health-dicom-gateway`, same namespace: the
+  W3-3 gateway). 2575 (HL7) is denied to everyone unless `networkPolicy.hl7Enabled=true` (then gateway-only); 11112
+  is opened (gateway-only) only with DIMSE on. The LDAP store accepts 389 from the archive pod only. Egress is not
+  restricted. Requires a CNI that enforces NetworkPolicy.
 
 ## Patched jars
 
@@ -35,8 +44,8 @@ patch releases are binary compatible and the live run boots and serves with this
 
 ## Not covered here
 
-- DICOMweb itself is unauthenticated (the upstream `unsecure` WAR): it must only be reachable through the Loom
-  gateway (W3-3) and a NetworkPolicy. Neither exists yet.
+- DICOMweb itself is unauthenticated (the upstream `unsecure` WAR): it is reachable only through the Loom
+  gateway (W3-3) via the NetworkPolicy above. Not verified on a live cluster: enforcement depends on the CNI.
 - Hostname validation of calling AEs/HL7 senders is not set: pod IPs are dynamic.
 - Cosign signing and Trivy gating are CI steps; Blob storage and the token refresher are W3-2.
 - GCC-High / IL5: supported-in-code only, never exercised (`cloud-parity.md`).

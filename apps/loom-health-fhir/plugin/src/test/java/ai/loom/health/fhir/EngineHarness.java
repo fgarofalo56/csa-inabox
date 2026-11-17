@@ -83,6 +83,7 @@ final class EngineHarness implements AutoCloseable {
       protected void initialize() throws ServletException {
         setResourceProviders(List.of(new PatientProvider(), new ObservationProvider()));
         setPlainProviders(List.of(new TxProvider()));
+        setPagingProvider(new ca.uhn.fhir.rest.server.FifoMemoryPagingProvider(100));
         svc = new InterceptorService();
         setInterceptorService(svc);
         if (registerPlugin) {
@@ -117,12 +118,16 @@ final class EngineHarness implements AutoCloseable {
     if (contentType != null) {
       b.header("Content-Type", contentType);
     }
+    extraHeaders.forEach(b::header);
     sent.incrementAndGet();
     HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString());
     return new String[] {String.valueOf(r.statusCode()), r.body()};
   }
 
   final AtomicInteger sent = new AtomicInteger();
+
+  /** Extra request headers sent by {@link #call} (e.g. a client-supplied X-Forwarded-For). */
+  volatile java.util.Map<String, String> extraHeaders = java.util.Map.of();
 
   /**
    * HAPI fires SERVER_PROCESSING_COMPLETED after the body is flushed, so a request's audit row can land

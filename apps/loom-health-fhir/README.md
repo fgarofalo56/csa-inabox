@@ -77,7 +77,7 @@ Two HAPI interceptors in `plugin/`, registered in this order via `hapi.fhir.cust
 Env: `LOOM_HEALTH_PDP_URL` (required; unset means every request is 503), `LOOM_HEALTH_PDP_TIMEOUT_MS`
 (default 1500; bounds the whole response, body included), `LOOM_HEALTH_TENANT` (**required**: the engine
 serves one tenant; unset means every request is 503, the URL is never used to guess it;
-`LOOM_HEALTH_TEST_ALLOW_PATH_TENANT=true` is a test-only fallback), `LOOM_HEALTH_AUDIT_DIR`.
+`LOOM_HEALTH_TEST_ALLOW_PATH_TENANT=true` is a test-only fallback), `LOOM_HEALTH_AUDIT_DIR`, `LOOM_HEALTH_TRUSTED_PROXIES`, `LOOM_HEALTH_FORWARDED_HEADER`.
 
 UPDATE is decided twice: on the new body, and on the stored resource (`STORAGE_PRESTORAGE_RESOURCE_UPDATED`,
 also fired for conditional updates), so a token cannot take over another patient's or category's record by
@@ -85,11 +85,31 @@ writing a body that claims its own. `$batch` / `$transaction` get one decision (
 with no per-entry authorization, so no role may hold them (a test pins the role map). The plugin tests run
 in `.github/workflows/health-fhir-plugin-test.yml` (the image build skips them).
 
+Response filtering and `Bundle.total`: the engine's `total` counts the UNFILTERED match set (and
+`_summary=count` has no entries to subtract), so it would leak how much was hidden. It is kept only when the
+token's scopes cannot hide anything (a `user/` or `system/` `*` scope with `r` and no category constraint) and
+is omitted otherwise. A policy-aware count would mean walking the whole result set per request.
+
+Paging: a `_getpages` page has no resource type, so the PDP is asked `resource_type="*"` and only a
+wildcard-type scope covers it. Typed-scope paging stays DENIED on purpose: the stored search's type is not
+known to the interceptor, and trusting a client-supplied type hint would weaken the check. Every page that is
+served is filtered like any search. Remainder tracked in #5316.
+
+Audit hardening (HIPAA 164.312(b)): every sink write failure increments `AuditHealth.failures()` and prints a
+`{"lhds_audit_alert":1,...}` line on stdout (the alert rule is W8-4 / bicep work, not created here); a record
+no sink accepted also bumps `lost()`. Design: non-lossy by redundancy, not by blocking. Stdout plus, when
+`LOOM_HEALTH_AUDIT_DIR` is set, DSYNC'd hourly files; a row is lost only if every sink fails, and that is
+counted and alerted. Stdout alone is only as durable as the log pipeline, so set the audit dir in production.
+Each row also records the patient ids whose resources the filter returned and hid (`PatientsReturned`,
+`PatientsHidden`, `HiddenResourceCount`; ids capped at 100 per list, the count is not), never bodies.
+`RemoteAddr` is the client address: `LOOM_HEALTH_FORWARDED_HEADER` (default `X-Forwarded-For`) is read ONLY
+when the TCP peer is in `LOOM_HEALTH_TRUSTED_PROXIES` (IPs/CIDRs; unset trusts nobody), walking hops right to
+left to the first untrusted one; a non-IP hop voids the header.
+
 Not verified: any run against the real OPA/Rego or on a live stamp (tests use a stand-in PDP that speaks the
-frozen API); the `LhdsAudit_CL` table and its ingestion rule do not exist yet (W8-4 / bicep). Known limits:
-a search page fetched via `_getpages` has no resource type, so only wildcard-type scopes cover it; a
-`patient/` token reading a non-Patient resource by id is denied (owner unknown before the read); the audit
-sink does not block the interaction if it fails to write.
+frozen API; a real-OPA test in this lane is a tracked remainder of #5316); the `LhdsAudit_CL` table, its
+ingestion rule and the ingress proxy range do not exist yet (W8-4 / bicep). Known limit: a `patient/` token
+reading a non-Patient resource by id is denied (owner unknown before the read).
 
 Test: `mvn -f apps/loom-health-fhir/plugin/pom.xml -q test` (embedded Jetty + real `RestfulServer`).
 
