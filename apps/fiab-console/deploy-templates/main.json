@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "9725426003935669856"
+      "templateHash": "1359554687724266279"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8503073087228361056"
+              "templateHash": "7456830707535317699"
             }
           },
           "definitions": {
@@ -11463,7 +11463,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "2147507045161116246"
+                      "templateHash": "9880804118268747916"
                     }
                   },
                   "parameters": {
@@ -11835,7 +11835,8 @@
                         "raiPolicyName": "Microsoft.DefaultV2"
                       },
                       "dependsOn": [
-                        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]"
+                        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('accountName'), parameters('projectName'))]"
                       ]
                     },
                     {

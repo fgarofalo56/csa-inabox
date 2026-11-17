@@ -247,6 +247,14 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-previ
 resource chatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: account
   name: chatDeploymentName
+  // The project is a child PUT on the same account, so it must be in the serial chain
+  // too. Without this ARM PUTs `project` and `chat` in the same millisecond and the
+  // project fails with RequestConflict "Another operation is being performed on the
+  // parent resource" (measured: deploy-fiab-commercial runs 44024812845 and
+  // 44095736520, 2026-11-17, project write Started 13:59:31.532 / Failed .782 while
+  // deployments/chat Started 13:59:31.534). Order: project -> chat -> embed -> mini
+  // -> strong -> completion.
+  dependsOn: [ project ]
   sku: {
     name: chatModelSkuName
     capacity: chatModelCapacity
