@@ -39,11 +39,14 @@ param backendHostName string = 'lhds.internal'
 @description('Version-less Key Vault secret URI of the TLS certificate (https://<vault>/secrets/<name>). Empty = no TLS listener yet; port 80 only redirects.')
 param tlsCertificateSecretUri string = ''
 
-@description('When tlsCertificateSecretUri is empty, issue a Key Vault self-signed certificate for the public FQDN (tls-cert.bicep).')
+@description('When tlsCertificateSecretUri is empty, the control plane issues a Key Vault self-signed certificate for the public FQDN (#5345; apps/loom-health-cp). false = no TLS listener.')
 param selfSignedTlsEnabled bool = true
 
-@description('Subnet for the VNet-injected certificate script (network.bicep snet-script). Required when a self-signed certificate is issued.')
-param scriptSubnetId string = ''
+@description('Name of the certificate the control plane issues in the stamp vault.')
+param issuedCertificateName string = 'lhds-ingress-selfsigned'
+
+@description('Phase 2 of the two-phase TLS ordering: the VERSIONLESS secret URI of the control-plane-issued certificate. deploy-health sets it only after it has confirmed the secret exists (the gateway resolves it at creation, so a missing secret fails the gateway). Empty = phase 1, no TLS listener yet; port 80 only redirects.')
+param issuedTlsSecretUri string = ''
 
 @description('Resource id of the stamp Key Vault; the gateway identity is granted Key Vault Secrets User on it.')
 param keyVaultId string
@@ -114,8 +117,11 @@ param tags object = {}
 
 var gwName = 'agw-lhds-${stampName}'
 var suppliedTls = !empty(tlsCertificateSecretUri)
-var selfSigned = !suppliedTls && selfSignedTlsEnabled && !empty(scriptSubnetId)
-var hasTls = suppliedTls || selfSigned
+// selfSigned = the control plane issues the certificate (it is "wanted" from the first deploy);
+// issuedReady = it exists and its secret URI was supplied (phase 2), so the listener can be built.
+var selfSigned = !suppliedTls && selfSignedTlsEnabled
+var issuedReady = selfSigned && !empty(issuedTlsSecretUri)
+var hasTls = suppliedTls || issuedReady
 var zones = useAvailabilityZones ? ['1', '2', '3'] : null
 var apimFragmentRequested = !empty(apimServiceName)
 var secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -243,23 +249,13 @@ resource pip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
-// Default certificate: Key Vault self-signed for the public FQDN, issued before the gateway
-// is created (the gateway resolves the secret at creation). The override above always wins.
-module selfSignedCert 'tls-cert.bicep' = if (selfSigned) {
-  name: 'lhds-${stampName}-ingress-tls'
-  params: {
-    location: location
-    keyVaultName: kv.name
-    scriptSubnetId: scriptSubnetId
-    fqdn: pip.properties.dnsSettings.fqdn
-    tags: tags
-  }
-  dependsOn: [
-    gwSecretsRole
-  ]
-}
-
-var effectiveTlsSecretUri = suppliedTls ? tlsCertificateSecretUri : (selfSigned ? selfSignedCert!.outputs.secretUri : '')
+// Default certificate (#5345): issued in the stamp vault by the control plane (issuer Self, subject
+// and SAN = the public FQDN above), NOT by this template: ARM cannot create Key Vault certificates
+// and a deploymentScript cannot run where policy forces storage shared-key access off. The gateway
+// resolves its Key Vault secret at creation, so the listener is built only when deploy-health has
+// confirmed the secret exists and passes issuedTlsSecretUri (phase 2). A supplied CA certificate wins.
+var expectedIssuedSecretUri = '${kv.properties.vaultUri}secrets/${issuedCertificateName}'
+var effectiveTlsSecretUri = suppliedTls ? tlsCertificateSecretUri : (issuedReady ? issuedTlsSecretUri : '')
 
 var feName = 'fe-public'
 var gwId = resourceId('Microsoft.Network/applicationGateways', gwName)
@@ -449,12 +445,12 @@ output publicIp string = pip.properties.ipAddress
 output publicFqdn string = pip.properties.dnsSettings.fqdn
 output gatewayIdentityPrincipalId string = gwIdentity.properties.principalId
 output tlsConfigured bool = hasTls
-@description('selfSigned (Key Vault issued, default), supplied (CA certificate from tlsCertificateSecretUri) or none.')
-output tlsMode string = suppliedTls ? 'supplied' : (selfSigned ? 'selfSigned' : 'none')
-@description('Key Vault certificate name for the self-signed default; empty otherwise.')
-output tlsCertificateName string = selfSigned ? selfSignedCert!.outputs.certificateName : ''
-@description('Version-less secret URI the gateway reads.')
+@description('supplied (CA certificate from tlsCertificateSecretUri), selfSigned (control-plane-issued, listener built), selfSignedPending (control-plane-issued wanted, listener not yet built: phase 1) or none.')
+output tlsMode string = suppliedTls ? 'supplied' : (issuedReady ? 'selfSigned' : (selfSigned ? 'selfSignedPending' : 'none'))
+@description('Key Vault certificate name the control plane issues; empty when a certificate is supplied or self-signed TLS is off.')
+output tlsCertificateName string = selfSigned ? issuedCertificateName : ''
+@description('Version-less secret URI the gateway reads; empty in phase 1.')
 output tlsSecretUri string = effectiveTlsSecretUri
-@description('PUBLIC facts of the self-signed certificate (notAfter, thumbprintSha1, fingerprintSha256, versionId) for CI pinning; empty otherwise. No private material.')
-output tlsCertificate object = selfSigned ? selfSignedCert!.outputs.certificate : {}
+@description('Version-less secret URI the control-plane-issued certificate will have. deploy-health waits for it, then passes it back as issuedTlsSecretUri. Empty when a certificate is supplied or self-signed TLS is off.')
+output tlsExpectedIssuedSecretUri string = selfSigned ? expectedIssuedSecretUri : ''
 output apimFragmentName string = apimFragmentRequested ? apimFragment!.outputs.fragmentName : ''

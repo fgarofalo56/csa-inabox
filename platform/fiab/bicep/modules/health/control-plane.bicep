@@ -93,6 +93,15 @@ param cosmosZoneRedundant bool = false
 @description('Resource id of the stamp Key Vault (same resource group as this module). The control-plane identity is granted Key Vault Crypto Officer on it so tenant.destroy can disable and delete tenant keys (crypto-shred). Empty = no grant and tenant.destroy cannot shred. Scoped to the vault, the narrowest static scope: tenant keys are created at runtime, so a per-key scope cannot be written here.')
 param keyVaultId string = ''
 
+@description('Stamp ingress TLS (#5345): the control plane issues the ingress certificate in the stamp vault (issuer Self) at startup and on a timer. This is the ingress public FQDN = certificate subject/SAN. Empty = the control plane issues nothing and no Key Vault Certificates Officer grant is made (a supplied CA certificate, or selfSignedTls=false).')
+param tlsFqdn string = ''
+
+@description('Vault URI of the stamp Key Vault (the vault vaultUri output, so it follows the cloud suffix). Required with tlsFqdn.')
+param tlsVaultUrl string = ''
+
+@description('Name of the Key Vault certificate the control plane ensures. The ingress reads the VERSIONLESS secret of the same name.')
+param tlsCertName string = 'lhds-ingress-selfsigned'
+
 @description('Authorization server: public issuer URL (https, with its path, no trailing slash). The AS is not optional in the service image, so leaving this empty means the control plane will not start on an image that includes it; health.bicep reports the gap in healthControlPlaneState.authServerMissing.')
 param authIssuerUrl string = ''
 
@@ -237,6 +246,25 @@ resource cpKeyOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
+// ── Ingress TLS certificate (#5345) ───────────────────────────────────────────
+// The control plane ensures the ingress certificate in the stamp vault (apps/loom-health-cp
+// src/tls/ingress-cert.ts). Key Vault Certificates Officer = certificate create/read/renew on the
+// vault; it cannot assign roles. A deploymentScript cannot do this job on tenants whose policy
+// forces storage shared-key access off (ACI mounts its share only by key).
+var kvCertificatesOfficerRoleId = 'a4417e6f-fecd-4de8-b567-7b0420556985'
+var issueIngressCert = !empty(keyVaultId) && !empty(tlsFqdn) && !empty(tlsVaultUrl)
+
+resource cpCertOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (issueIngressCert && !skipRoleGrants) {
+  scope: stampVault
+  name: guid(keyVaultId, cpIdentity.id, kvCertificatesOfficerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvCertificatesOfficerRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: issue and renew the stamp ingress TLS certificate (issuer Self) in the stamp vault.'
+  }
+}
+
 // ── Authorization server signing key (W1-4) ───────────────────────────────────
 // ES384 tokens (apps/loom-health-cp src/auth/signer.ts) are signed by Key Vault: the private key
 // never leaves the vault. Created through the ARM control plane (works with public network access
@@ -354,8 +382,13 @@ var authEnvSource = [
   { name: 'LOOM_HEALTH_CP_GRAPH_CONSENT_URL', value: authGraphConsentUrl }
 ]
 var authEnv = filter(authEnvSource, e => !empty(e.value))
+var tlsEnv = issueIngressCert ? [
+  { name: 'LOOM_HEALTH_CP_TLS_VAULT_URL', value: tlsVaultUrl }
+  { name: 'LOOM_HEALTH_CP_TLS_FQDN', value: tlsFqdn }
+  { name: 'LOOM_HEALTH_CP_TLS_CERT_NAME', value: tlsCertName }
+] : []
 
-var cpEnv = concat(authEnv, [
+var cpEnv = concat(authEnv, tlsEnv, [
   { name: 'PORT', value: string(servicePort) }
   { name: 'LOOM_HEALTH_CP_CLOUD', value: cloudName }
   { name: 'LOOM_HEALTH_CP_TENANT_ID', value: entraTenantId }

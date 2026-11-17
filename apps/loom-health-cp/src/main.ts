@@ -7,6 +7,8 @@ import { CollectionBundleSource, FileBundleSource } from './pdp/bundles.js';
 import { authOptionsFromConfig } from './middleware/auth.js';
 import { createCosmosStores } from './store/cosmos.js';
 import { authoredMessage } from './safe-error.js';
+import { DefaultAzureCredential } from '@azure/identity';
+import { loadIngressCertConfig, scheduleIngressCert } from './tls/ingress-cert.js';
 import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
@@ -19,10 +21,12 @@ function main(): void {
   let cfg;
   let authCfg;
   let tenantCfg;
+  let tlsCfg;
   try {
     cfg = loadConfig();
     authCfg = loadAuthServerConfig(cfg.cloud);
     tenantCfg = loadTenantArmConfig(cfg.cloud);
+    tlsCfg = loadIngressCertConfig(cfg.cloud);
   } catch (e) {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
@@ -44,6 +48,12 @@ function main(): void {
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   server.listen(cfg.port, () => log('server.listening', { port: cfg.port, cloud: cfg.cloud }));
+
+  // #5345: ensure the stamp ingress certificate in Key Vault (startup + timer). Off when the TLS vars are unset.
+  if (tlsCfg) {
+    const credential = new DefaultAzureCredential({ authorityHost: `https://${cfg.authorityHost}` });
+    scheduleIngressCert({ cfg: tlsCfg, getToken: async (scope) => (await credential.getToken(scope)).token }, log);
+  }
 
   // Pick up queued jobs and fail leases left behind by a crashed replica.
   const sweep = setInterval(() => {

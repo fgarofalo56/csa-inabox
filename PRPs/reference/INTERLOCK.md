@@ -22,6 +22,7 @@ table below in the same PR. A PR that finds the slot held rebases its non-bicep 
 | feat/lhds-w1b-stamp-tls | W01b-close-deploy-receipts | 2026-11-15 | 2026-11-16 (#5322 merged `0edc18128`) |
 | fix/lhds-tls-script-storage-rbac | W01b-close-deploy-receipts | 2026-11-16 | 2026-11-16 (#5326 merged `0afcbaca8`) |
 | fix/4672-retire-dotnet6-vm-images | none (compliance hotfix #4672) | 2026-11-16 | |
+| fix/lhds-5345-kv-issued-tls | W01b-close-deploy-receipts | 2026-11-17 | (open) |
 
 Rationale: `main.bicep`, `admin-plane/main.bicep`, `apim.bicep`, `health.bicep` (~279 KB) and the seven `params/*.bicepparam` files are
 co-edited by five programs, and `main.json` has an ARM size ceiling (measure it with `git cat-file -s` at the ref; never quote a number).

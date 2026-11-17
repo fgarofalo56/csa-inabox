@@ -66,6 +66,10 @@ allowed caller app.
 | `LOOM_HEALTH_CP_FHIR_BASE_URL` | yes | Public FHIR edge base; a tenant's FHIR base (token `aud`) is `<base>/<tenant>/fhir` |
 | `LOOM_HEALTH_CP_AS_CLIENT_ID` | yes | App registration GUID of the AS in this cloud's Entra tenant (federated credential, no secret) |
 | `LOOM_HEALTH_CP_SIGNING_KEY_ID` | yes | Versioned Key Vault key id (`https://<vault>.<cloud suffix>/keys/<name>/<version>`) that signs LHDS tokens |
+| `LOOM_HEALTH_CP_TLS_VAULT_URL` | no | Stamp Key Vault URI (`https://<vault>.<cloud suffix>/`). With `LOOM_HEALTH_CP_TLS_FQDN`, turns on ingress certificate issuance (#5345): at startup and every 15 minutes the control plane ensures a Key Vault certificate (issuer Self, subject and SAN = the FQDN), re-issuing it when missing, disabled, expired, inside the renewal window or for another FQDN. Needs `Key Vault Certificates Officer` on the vault; a 403 names it. Both unset = off; one without the other fails startup |
+| `LOOM_HEALTH_CP_TLS_FQDN` | no | Ingress public FQDN (certificate CN and only DNS SAN) |
+| `LOOM_HEALTH_CP_TLS_CERT_NAME` | no | Certificate name, default `lhds-ingress-selfsigned` |
+| `LOOM_HEALTH_CP_TLS_RENEW_BEFORE_DAYS` | no | Integer 1-300, default `30` |
 | `LOOM_HEALTH_CP_GRAPH_CONSENT_URL` | no | Admin-consent URL shown by the readiness gate's Fix-it |
 | `PORT` | no | Listen port, default `8080` |
 | `AZURE_CLIENT_ID` | no | Client id of a user-assigned managed identity (read by `DefaultAzureCredential`) |
