@@ -3,6 +3,7 @@ package ai.loom.health.fhir;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.loom.health.fhir.audit.AuditHealth;
@@ -258,8 +259,11 @@ class HardeningTest {
     Path blocker = Files.writeString(tmp.resolve("not-a-dir"), "x");
     ByteArrayOutputStream alerts = new ByteArrayOutputStream();
     AuditHealth health = new AuditHealth(capture(alerts));
-    AuditSinks.all(List.of(AuditSinks.hourlyFiles(blocker.resolve("audit"))), health)
-        .emit(record(), "{\"resourceType\":\"AuditEvent\"}");
+    // Fail closed (#5339): a lost record is also RAISED so the interceptor can answer 503. BREAKS when the
+    // composite goes back to swallowing it (assertThrows fails: nothing thrown).
+    assertThrows(ai.loom.health.fhir.audit.AuditLostException.class, () ->
+        AuditSinks.all(List.of(AuditSinks.hourlyFiles(blocker.resolve("audit"))), health)
+            .emit(record(), "{\"resourceType\":\"AuditEvent\"}"));
     assertEquals(1, health.lost());
     assertEquals(1, health.failures());
     assertTrue(alerts.toString(StandardCharsets.UTF_8).contains("audit-record-lost"));
@@ -276,8 +280,9 @@ class HardeningTest {
       }
     };
     AuditHealth health = new AuditHealth(capture(new ByteArrayOutputStream()));
-    AuditSinks.all(List.of(AuditSinks.stream(new PrintStream(broken, true))), health)
-        .emit(record(), "{\"resourceType\":\"AuditEvent\"}");
+    assertThrows(ai.loom.health.fhir.audit.AuditLostException.class, () ->
+        AuditSinks.all(List.of(AuditSinks.stream(new PrintStream(broken, true))), health)
+            .emit(record(), "{\"resourceType\":\"AuditEvent\"}"));
     assertEquals(1, health.failures());
     assertEquals(1, health.lost());
 

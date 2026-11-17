@@ -227,6 +227,131 @@ class InterceptorTest {
     assertEquals("4", ae.get("outcome").asText(), "deny is outcome 4 (minor failure)");
   }
 
+  // ---- audit fails closed (#5339) -------------------------------------------------------------
+
+  /**
+   * Run {@code during} with the audit sink down, then restore it. Waits until the sink has been tried
+   * twice (the fail-closed write, then the SERVER_PROCESSING_COMPLETED retry, which fires after the
+   * client already has its response) so a late retry cannot land after the sink is healthy again.
+   */
+  static void withSinkDown(java.util.concurrent.Callable<Void> during) throws Exception {
+    int before = engine.sinkAttempts.get();
+    engine.sinkFails = true;
+    try {
+      during.call();
+      long end = System.currentTimeMillis() + 5000;
+      while (engine.sinkAttempts.get() < before + 2 && System.currentTimeMillis() < end) {
+        Thread.sleep(10);
+      }
+      assertTrue(engine.sinkAttempts.get() >= before + 2,
+          "the interceptor never even tried the sink twice (attempt + completion retry): the fixture does not reach it");
+    } finally {
+      engine.sinkFails = false;
+      engine.sent.set(0); // no row can exist for requests made while the sink was down
+      engine.audits.clear();
+      engine.auditJson.clear();
+    }
+  }
+
+  @Test
+  void aReadIsNot200WithABodyWhenTheAuditSinkThrows() throws Exception {
+    // BREAKS when: the audit row is written only after the response (fail-open): the sink throws, the
+    // client still gets 200 and the Patient body ("Doep1" is the canned family name). Positive half: the
+    // SAME request with a healthy sink returns 200 + that body, so absence cannot pass by deleting the read.
+    String tok = token("acme", "user/*.rs", "");
+    String[] ok = engine.call("GET", "/Patient/p1", tok, null, null);
+    assertEquals("200", ok[0], ok[1]);
+    assertTrue(ok[1].contains("Doep1"), ok[1]);
+    engine.drainAndClear();
+    withSinkDown(() -> {
+      String[] r = engine.call("GET", "/Patient/p1", tok, null, null);
+      assertEquals("503", r[0], r[1]);
+      assertFalse(r[1].contains("Doep1"), "the Patient body must not be in a fail-closed response: " + r[1]);
+      assertFalse(r[1].contains("\"resourceType\":\"Patient\""), r[1]);
+      assertTrue(r[1].contains("OperationOutcome") && r[1].contains("Audit trail unavailable"), r[1]);
+      assertFalse(r[1].contains("simulated audit sink outage"), "the sink's exception text must not reach the client");
+      return null;
+    });
+  }
+
+  @Test
+  void aSearchIsNot200WithEntriesWhenTheAuditSinkThrows() throws Exception {
+    // BREAKS when: search/history results are released while the sink is down. p1's own Observations o1 and o3
+    // are IN scope (the existing patient-scope test pins them for a healthy sink), so a leaked bundle
+    // would contain "o1".
+    String tok = token("acme", "patient/Observation.rs", "p1");
+    String[] ok = engine.call("GET", "/Observation?patient=p1", tok, null, null);
+    assertEquals("200", ok[0], ok[1]);
+    assertEquals(Set.of("o1", "o3"), ids(ok[1]), "positive half: a healthy sink returns the entries");
+    engine.drainAndClear();
+    withSinkDown(() -> {
+      String[] r = engine.call("GET", "/Observation?patient=p1", tok, null, null);
+      assertEquals("503", r[0], r[1]);
+      assertFalse(r[1].contains("\"o1\"") || r[1].contains("\"o3\"") || r[1].contains("\"Bundle\""), r[1]);
+      return null;
+    });
+  }
+
+  @Test
+  void anUpdateIsNotPersistedWhenTheAuditSinkThrows() throws Exception {
+    // BREAKS when: the audit row is written after the write is committed: PUT answers 503 or 200 but o4 is
+    // already vital-signs. o4 starts as laboratory; the body flips it. Positive half: with a healthy sink the
+    // SAME PUT persists (200, vital-signs), so "still laboratory" cannot come from an unreachable fixture.
+    String tok = token("acme", "user/Observation.cruds", "");
+    String body = obsJson("o4", "p2", "vital-signs");
+    try {
+      withSinkDown(() -> {
+        String[] r = engine.call("PUT", "/Observation/o4", tok, body, "application/fhir+json");
+        assertEquals("503", r[0], r[1]);
+        assertEquals("laboratory", engine.store.get("o4").getCategoryFirstRep().getCodingFirstRep().getCode(),
+            "the write must have been rolled back (never committed) when the audit row could not be written");
+        return null;
+      });
+      String[] ok = engine.call("PUT", "/Observation/o4", tok, body, "application/fhir+json");
+      assertEquals("200", ok[0], ok[1]);
+      assertEquals("vital-signs", engine.store.get("o4").getCategoryFirstRep().getCodingFirstRep().getCode());
+      engine.awaitAudits(1);
+      assertEquals(1, engine.audits.size(), "the healthy retry wrote exactly one row");
+    } finally {
+      engine.store.put("o4", EngineHarness.obs("o4", "p2", "laboratory"));
+    }
+  }
+
+  @Test
+  void aCreateIsNotPersistedWhenTheAuditSinkThrows() throws Exception {
+    // BREAKS when: create is audited post-commit: o9 exists in the store after a 503. Positive half: a healthy
+    // sink gives 201 and o9 is stored.
+    String tok = token("acme", "user/*.cruds", "");
+    String body = obsJson("x", "p1", "vital-signs");
+    try {
+      withSinkDown(() -> {
+        String[] r = engine.call("POST", "/Observation", tok, body, "application/fhir+json");
+        assertEquals("503", r[0], r[1]);
+        assertFalse(engine.store.containsKey("o9"), "a created resource must not exist without its audit row");
+        return null;
+      });
+      String[] ok = engine.call("POST", "/Observation", tok, body, "application/fhir+json");
+      assertEquals("201", ok[0], ok[1]);
+      assertTrue(engine.store.containsKey("o9"));
+    } finally {
+      engine.store.remove("o9");
+    }
+  }
+
+  @Test
+  void deniedRequestsAndMetadataKeepTheirAnswerWhenTheAuditSinkThrows() throws Exception {
+    // DISCLOSED GAP, pinned so it is deliberate: a 403 and GET /metadata carry no clinical data, so they are
+    // audited after the response and a dead sink cannot change them. BREAKS when fail-closed is widened to
+    // them (403 becomes 503, /metadata 503s and a liveness probe would kill a healthy pod).
+    withSinkDown(() -> {
+      String[] denied = engine.call("GET", "/Patient/p1", token("othertenant", "user/*.rs", ""), null, null);
+      assertEquals("403", denied[0], denied[1]);
+      String[] meta = engine.call("GET", "/metadata", null, null, null);
+      assertEquals("200", meta[0], meta[1]);
+      return null;
+    });
+  }
+
   // ---- response filtering ------------------------------------------------------------------
 
   @Test
