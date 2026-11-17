@@ -14,7 +14,46 @@ No runtime downloads. The runtime stage has no `curl`/package manager (the base 
 All fetching happens in the build's `tools` stage and aborts on any sha256 mismatch.
 
 Engine configuration (partition mode, datasource, validation flags) is W2-2 and is **not** in
-this image; wiring the image into Container Apps/bicep is W2-6.
+this image: see "Per-tenant engine config" below. Wiring the image into Container Apps/bicep is
+W2-2b/W2-6.
+
+## Per-tenant engine config (W2-2a)
+
+Two halves, both measured against the pinned image (8.12.0):
+
+- **Policy, tenant-independent**: `config/application.yaml`, loaded as an additional Spring config
+  file (`SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/opt/loom/fhir/config/application.yaml`).
+  Partition mode (database mode; the partition is the first path segment, `/fhir/<facility>/Patient`;
+  no segment is a 400), referential integrity on write and delete, validation on write, versioning
+  (ETag, history kept; expunge, multi-delete and cascading delete off), conditional-create uniqueness,
+  external references off, page-size ceiling 200.
+- **Per tenant**: rendered by `apps/loom-health-cp/src/jobs/fhir-tenant-config.ts` as environment
+  variables: the datasource (the tenant's own database and its own role, `sslmode=require`), pool size
+  from the request quota, page/binary caps (these may only lower the file's ceiling), the interceptor
+  list (PDP before audit) and the plugin env (`LOOM_HEALTH_TENANT`, `LOOM_HEALTH_PDP_URL`). The database
+  password is a Key Vault secret NAME (`t-<slug>-fhir-db`); the value is never rendered.
+
+Lifecycle jobs (`fhir-tenant.create|configure|teardown`, `fhir-tenant-jobs.ts`) apply it through a
+`FhirEngineHost` port and read every step back. **Not wired**: no host adapter exists yet (W2-2b), so
+`compose.ts` does not register the kinds.
+
+Gotchas found on the pinned image: `database_partition_mode_enabled` belongs under `partitioning:`,
+not directly under `hapi.fhir:` where the starter's template comments place it (there it is ignored
+and the engine logs "Database Partition Mode Enabled: false"). Partition mode cannot be enabled on an
+existing database. `request_tenant_partitioning_mode` is the starter default; it is stated in the file
+so a change is a diff.
+
+Local proof (needs Docker; the image and `postgres:16` locally, no Azure):
+
+    bash apps/loom-health-fhir/config/probe/engine-config-probe.sh
+
+It runs the config against the real engine and checks: partition mode on, no-partition request 400,
+validation on write 422 (with a valid-body control), referential integrity on create and on delete,
+50 parallel conditional creates give exactly 1 resource (with a 50-resource unconditional control),
+a history read's SELECT count does not scale with versions (with a counter-sees-scaling control),
+multi-delete and `$expunge` refused, and the env caps bind over the file. Not verified: the plugin
+interceptors on top of this config (the plugin jar is not loaded by the probe), a Postgres per-tenant role,
+and anything on a stamp.
 
 ## Interceptors (W2-3)
 
