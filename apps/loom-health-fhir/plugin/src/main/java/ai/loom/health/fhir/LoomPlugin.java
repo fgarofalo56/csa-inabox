@@ -35,7 +35,7 @@ public final class LoomPlugin {
   /** Register both interceptors on a server's interceptor service. */
   public static void register(IInterceptorService svc, PdpClient pdp, PluginConfig config, AuditSink sink) {
     svc.registerInterceptor(new LoomPdpInterceptor(pdp, config));
-    svc.registerInterceptor(new LoomAuditInterceptor(sink));
+    svc.registerInterceptor(new LoomAuditInterceptor(sink, config));
   }
 
   /**
