@@ -72,7 +72,7 @@ Two HAPI interceptors in `plugin/`, registered in this order via `hapi.fhir.cust
 2. `ai.loom.health.fhir.audit.LoomAuditInterceptor`: exactly one record per interaction (permit, deny,
    503, 401), as an R4 `AuditEvent` plus a flat `LhdsAudit_CL` row: one JSON line on stdout
    (`"lhds_audit":1`) and, if `LOOM_HEALTH_AUDIT_DIR` is set, hourly append-only JSONL files for W8-4 to
-   seal. No token, body or query values (parameter names only).
+   seal. No token, body or query values (parameter names only). Fails closed: see "Audit hardening".
 
 Env: `LOOM_HEALTH_PDP_URL` (required; unset means every request is 503), `LOOM_HEALTH_PDP_TIMEOUT_MS`
 (default 1500; bounds the whole response, body included), `LOOM_HEALTH_TENANT` (**required**: the engine
@@ -97,9 +97,28 @@ served is filtered like any search. Remainder tracked in #5316.
 
 Audit hardening (HIPAA 164.312(b)): every sink write failure increments `AuditHealth.failures()` and prints a
 `{"lhds_audit_alert":1,...}` line on stdout (the alert rule is W8-4 / bicep work, not created here); a record
-no sink accepted also bumps `lost()`. Design: non-lossy by redundancy, not by blocking. Stdout plus, when
-`LOOM_HEALTH_AUDIT_DIR` is set, DSYNC'd hourly files; a row is lost only if every sink fails, and that is
-counted and alerted. Stdout alone is only as durable as the log pipeline, so set the audit dir in production.
+no sink accepted also bumps `lost()`. Design: redundant sinks, then **fail closed** (#5339). Stdout plus, when
+`LOOM_HEALTH_AUDIT_DIR` is set, DSYNC'd hourly files; one healthy sink is enough. When EVERY sink fails the
+interaction answers **503** with a fixed `OperationOutcome` ("Audit trail unavailable", no detail, no
+resource) and nothing clinical is released. Stdout alone is only as durable as the log pipeline, so set the audit dir in production.
+
+Where the row is written, and so what fails closed:
+
+| Interaction | Audit write point | If no sink accepts it |
+|---|---|---|
+| create / update / patch / delete | `STORAGE_PRECOMMIT_RESOURCE_*`, inside the DB transaction, before commit | exception rolls the transaction back: 503, not persisted |
+| read, vread, search, history, operations | `SERVER_OUTGOING_RESPONSE`, after the PDP response filter, before serialization | 503, body never written |
+| 401 / 403 / 404 / 500 / 503 and `GET /metadata` | `SERVER_PROCESSING_COMPLETED` (after the response) | **cannot fail closed**: answer unchanged, counted + alerted |
+
+Disclosed limits: (1) denied/errored requests and `/metadata` carry no clinical data, so their answer is not
+withheld, but their audit row can still be lost (counted and alerted; `/metadata` stays open so a probe does not
+kill a pod over an audit outage). (2) Pre-commit means a commit that then fails leaves an audit row for a write
+that did not happen (over-reporting, never under-reporting). (3) A write that fires no `STORAGE_PRECOMMIT_*` hook
+(an operation that persists some other way) is audited at `SERVER_OUTGOING_RESPONSE`, after its commit: a failure
+there returns 503 but cannot un-commit. (4) The rollback is proven against the stand-in engine in the tests (it
+models JPA's hook order); a receipt against the real JPA server is a W2-2b item, as is the live stamp.
+A request that fail-closed is retried once at `SERVER_PROCESSING_COMPLETED` with its 503 status, so the trail
+records it if the sink has recovered.
 Each row also records the patient ids whose resources the filter returned and hid (`PatientsReturned`,
 `PatientsHidden`, `HiddenResourceCount`; ids capped at 100 per list, the count is not), never bodies.
 `RemoteAddr` is the client address: `LOOM_HEALTH_FORWARDED_HEADER` (default `X-Forwarded-For`) is read ONLY

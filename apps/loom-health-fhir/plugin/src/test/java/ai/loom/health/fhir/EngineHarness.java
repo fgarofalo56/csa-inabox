@@ -54,6 +54,9 @@ final class EngineHarness implements AutoCloseable {
   static final String VITALS = "http://terminology.hl7.org/CodeSystem/observation-category|vital-signs";
 
   final AtomicInteger handlerCalls = new AtomicInteger();
+  /** When true the audit sink throws (a total outage); {@link #sinkAttempts} counts every emit attempt. */
+  volatile boolean sinkFails;
+  final AtomicInteger sinkAttempts = new AtomicInteger();
   final List<String> auditJson = new CopyOnWriteArrayList<>();
   final List<ai.loom.health.fhir.audit.AuditRecord> audits = new CopyOnWriteArrayList<>();
   private final Server jetty;
@@ -74,6 +77,10 @@ final class EngineHarness implements AutoCloseable {
     store.put("o3", obs("o3", "p1", "laboratory"));
     store.put("o4", obs("o4", "p2", "laboratory"));
     AuditSink sink = (r, ae) -> {
+      sinkAttempts.incrementAndGet();
+      if (sinkFails) {
+        throw new IllegalStateException("simulated audit sink outage");
+      }
       // auditJson first: awaitAudits() polls audits.size(), so audits must be the LAST list written.
       auditJson.add(ai.loom.health.fhir.audit.AuditSinks.line(r, ae));
       audits.add(r);
@@ -151,6 +158,33 @@ final class EngineHarness implements AutoCloseable {
   @Override
   public void close() throws Exception {
     jetty.stop();
+  }
+
+  void firePrecommit(ca.uhn.fhir.interceptor.api.Pointcut pc, org.hl7.fhir.instance.model.api.IBaseResource r,
+      ca.uhn.fhir.rest.api.server.RequestDetails rd) {
+    // HAPI asserts the HookParams match the pointcut's declared parameter list exactly, and that list
+    // differs across HAPI versions, so build it FROM the pointcut instead of transcribing it.
+    var hp = new ca.uhn.fhir.interceptor.api.HookParams();
+    for (Class<?> t : pc.getParameterTypes()) {
+      Object v;
+      if (org.hl7.fhir.instance.model.api.IBaseResource.class.isAssignableFrom(t)) {
+        v = r; // UPDATED declares (old, new): both are the staged resource here
+      } else if (t == ca.uhn.fhir.rest.api.server.RequestDetails.class) {
+        v = rd;
+      } else if (t == ca.uhn.fhir.rest.server.servlet.ServletRequestDetails.class) {
+        v = rd instanceof ca.uhn.fhir.rest.server.servlet.ServletRequestDetails s ? s : null;
+      } else if (t == ca.uhn.fhir.rest.api.server.storage.TransactionDetails.class) {
+        v = new ca.uhn.fhir.rest.api.server.storage.TransactionDetails();
+      } else if (t.isEnum()) {
+        v = t.getEnumConstants()[0];
+      } else {
+        v = null;
+      }
+      @SuppressWarnings("unchecked")
+      Class<Object> ot = (Class<Object>) t;
+      hp.add(ot, v);
+    }
+    svc.callHooks(pc, hp);
   }
 
   // ---- canned data -------------------------------------------------------------------------
@@ -269,13 +303,19 @@ final class EngineHarness implements AutoCloseable {
               .add(ca.uhn.fhir.rest.server.servlet.ServletRequestDetails.class,
                   rd instanceof ca.uhn.fhir.rest.server.servlet.ServletRequestDetails s ? s : null));
       o.setId(id.getIdPart());
+      // Like JPA: PRECOMMIT fires inside the transaction after the write is staged and before it commits.
+      // If a hook throws, the stand-in "rolls back" by never reaching store.put.
+      firePrecommit(ca.uhn.fhir.interceptor.api.Pointcut.STORAGE_PRECOMMIT_RESOURCE_UPDATED, o, rd);
       store.put(id.getIdPart(), o);
       return new MethodOutcome(new IdType("Observation/" + id.getIdPart() + "/_history/2"), false);
     }
 
     @Create
-    public MethodOutcome create(@ResourceParam Observation o) {
+    public MethodOutcome create(@ResourceParam Observation o, ca.uhn.fhir.rest.api.server.RequestDetails rd) {
       handlerCalls.incrementAndGet();
+      firePrecommit(ca.uhn.fhir.interceptor.api.Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED, o, rd);
+      o.setId("o9");
+      store.put("o9", o);
       return new MethodOutcome(new IdType("Observation/o9/_history/1"), true);
     }
   }

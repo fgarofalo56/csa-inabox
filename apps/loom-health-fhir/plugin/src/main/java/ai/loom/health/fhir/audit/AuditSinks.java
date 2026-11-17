@@ -114,11 +114,12 @@ public final class AuditSinks {
   }
 
   /**
-   * Fan one record out to every sink. DESIGN (non-lossy by redundancy, not by blocking): a record
-   * is lost only if EVERY sink fails; the interaction is never failed after the fact (the response
-   * is already decided); and every failing sink is counted and alerted via {@code health}, so an
-   * operator learns of a broken sink while the others still hold the trail. A record that no sink
-   * accepted additionally bumps {@link AuditHealth#lost()}.
+   * Fan one record out to every sink. DESIGN (redundant sinks, then fail closed): a record
+   * is lost only if EVERY sink fails, and every failing sink is counted and alerted via
+   * {@code health}, so an operator learns of a broken sink while the others still hold the trail.
+   * A record that no sink accepted bumps {@link AuditHealth#lost()} and then THROWS
+   * {@link AuditLostException}: {@link LoomAuditInterceptor} turns that into a 503 for permitted
+   * interactions (#5339, fail closed). One healthy sink is enough; a single sink failing blocks nothing.
    */
   public static AuditSink all(List<AuditSink> sinks, AuditHealth health) {
     return (r, ae) -> {
@@ -134,6 +135,7 @@ public final class AuditSinks {
       }
       if (!sinks.isEmpty() && failed == sinks.size()) {
         health.recordLost(sinks.size());
+        throw new AuditLostException();
       }
     };
   }
