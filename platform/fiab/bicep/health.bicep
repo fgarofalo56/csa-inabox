@@ -81,6 +81,9 @@ param adminEntraGroupId string = ''
 @description('Whether PostgreSQL Flexible Server is available in the target subscription and region. The stamp consults it through healthConfig.postgres, which Gov param files set because their false is an Airflow posture hold, not a PostgreSQL fact.')
 param postgresQuotaAvailable bool = true
 
+@description('Phase 2 of the ingress TLS ordering (#5345): the VERSIONLESS Key Vault secret URI of the certificate the control plane issued. deploy-health.yml passes it only after confirming, through the ARM management plane, that the secret exists. Empty = phase 1: no TLS listener yet.')
+param issuedTlsSecretUri string = ''
+
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
@@ -123,6 +126,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
     extraDnsLinkVnetIds: healthConfig.?extraDnsLinkVnetIds ?? []
     tlsCertificateSecretUri: string(healthConfig.?tlsCertificateSecretUri ?? '')
     selfSignedTlsEnabled: bool(healthConfig.?selfSignedTls ?? true)
+    issuedTlsSecretUri: issuedTlsSecretUri
     wafClientRateLimitPerMinute: int(healthConfig.?wafClientRateLimitPerMinute ?? 6000)
     auditRetentionDays: int(healthConfig.?auditRetentionDays ?? 2190)
     logRetentionDays: int(healthConfig.?logRetentionDays ?? 90)
@@ -160,12 +164,18 @@ var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed
 // deploy-health.yml resolves it (input, repo variable, or an exactly-one Entra lookup) and passes
 // controlPlaneConfig.authAsClientId. If it is still empty it is reported in
 // healthControlPlaneState.authServerMissing, and the workflow fails the run on a non-empty list.
-// TLS: with healthConfig.tlsCertificateSecretUri empty (the default) the stamp issues a Key Vault
-// SELF-SIGNED certificate for the ingress FQDN (operator decision 2026-11-15; modules/health/tls-cert.bicep),
-// so the https listener exists on every boundary. Set tlsCertificateSecretUri to a CA certificate to
-// override; healthConfig.selfSignedTls=false restores the no-listener behaviour. The stamp manifest
-// (healthStamp output) carries ingressTlsMode, ingressTlsCertificateName and ingressTlsCertificate
-// (public fingerprints only) so CI can pin the certificate without reaching the private vault.
+// TLS: with healthConfig.tlsCertificateSecretUri empty (the default) the CONTROL PLANE issues a Key
+// Vault SELF-SIGNED certificate for the ingress FQDN (operator decision 2026-11-17, #5345; apps/
+// loom-health-cp src/tls/ingress-cert.ts; a deploymentScript cannot run where policy forces storage
+// shared-key access off), so the https listener exists on every boundary. Two phases: phase 1 (this
+// template, issuedTlsSecretUri empty) deploys the stamp WITHOUT a TLS listener and the control plane
+// with the Key Vault Certificates Officer grant; deploy-health.yml then waits for the secret to exist
+// (ARM management plane) and re-deploys with issuedTlsSecretUri set (phase 2), which builds the
+// listener on the VERSIONLESS secret URI so renewals roll without a redeploy. Set
+// tlsCertificateSecretUri to a CA certificate to override; healthConfig.selfSignedTls=false restores
+// the no-listener behaviour. The stamp manifest carries ingressTlsMode, ingressTlsCertificateName
+// and ingressTlsExpectedIssuedSecretUri.
+var cpIssuesIngressCert = empty(string(healthConfig.?tlsCertificateSecretUri ?? '')) && bool(healthConfig.?selfSignedTls ?? true)
 var cpIngressFqdn = healthDeploy ? string(healthStamp!.outputs.stamp.ingressPublicFqdn) : ''
 var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}/auth'))
 var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'))
@@ -195,6 +205,8 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     privateEndpointSubnetId: string(controlPlaneConfig.?privateEndpointSubnetId ?? '')
     cosmosPrivateDnsZoneId: string(controlPlaneConfig.?cosmosPrivateDnsZoneId ?? '')
     keyVaultId: healthStamp!.outputs.stamp.keyVaultId
+    tlsFqdn: cpIssuesIngressCert ? cpIngressFqdn : ''
+    tlsVaultUrl: healthStamp!.outputs.stamp.keyVaultUri
     authIssuerUrl: cpAuthIssuerUrl
     authFhirBaseUrl: cpAuthFhirBaseUrl
     authAsClientId: cpAuthAsClientId

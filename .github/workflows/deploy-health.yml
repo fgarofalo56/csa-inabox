@@ -477,6 +477,111 @@ jobs:
             exit 1
           fi
 
+      # INGRESS TLS, two phases (#5345). Phase 1 (the step above) deployed the stamp WITHOUT a TLS
+      # listener and the control plane, which issues the ingress certificate in the stamp vault (a
+      # deploymentScript cannot run where policy forces storage shared-key access off). The gateway
+      # resolves its Key Vault secret at creation, so the listener is built only once the secret exists.
+      # Existence is read from the ARM management plane (Microsoft.KeyVault/vaults/secrets GET works on
+      # a private vault; the runner cannot reach the data plane). Fails closed after a bounded wait.
+      - name: Wait for the control-plane-issued ingress certificate (phase 1 to 2)
+        id: tlswait
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        run: |
+          set -uo pipefail
+          set +e
+          MODE=$(jq -r '.healthStamp.value.ingressTlsMode // "unknown"' temp/outputs.json)
+          if [ "$MODE" != "selfSignedPending" ]; then
+            echo "::notice::Ingress TLS mode is $MODE: no control-plane-issued certificate is awaited (supplied certificate, self-signed TLS off, or the listener already exists)."
+            echo "wait=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(jq -r '.healthControlPlaneState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::warning::The stamp has NO TLS listener: the control plane issues the ingress certificate and it was not deployed ($(jq -r '.healthControlPlaneState.value.reason' temp/outputs.json)). Set control_plane_audiences or healthConfig.tlsCertificateSecretUri. Port 80 only redirects until then."
+            echo "wait=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KV_ID=$(jq -r '.healthStamp.value.keyVaultId' temp/outputs.json)
+          CERT=$(jq -r '.healthStamp.value.ingressTlsCertificateName' temp/outputs.json)
+          URI=$(jq -r '.healthStamp.value.ingressTlsExpectedIssuedSecretUri' temp/outputs.json)
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ] || [ -z "$CERT" ] || [ "$CERT" = "null" ] || [ -z "$URI" ] || [ "$URI" = "null" ]; then
+            echo "::error::The stamp manifest has no keyVaultId / ingressTlsCertificateName / ingressTlsExpectedIssuedSecretUri, so the certificate cannot be looked up. This is a template defect."
+            exit 1
+          fi
+          N=60
+          for i in $(seq 1 "$N"); do
+            MSYS_NO_PATHCONV=1 az resource show --ids "$KV_ID/secrets/$CERT" --api-version 2024-11-01 -o json > temp/tls-secret.json 2> temp/tls-secret.err
+            RC=$?
+            if [ "$RC" = "0" ]; then
+              if [ "$(jq -r '.properties.attributes.enabled' temp/tls-secret.json)" = "true" ]; then
+                echo "Certificate secret $CERT exists and is enabled (attempt $i)."
+                echo "wait=true" >> "$GITHUB_OUTPUT"
+                echo "uri=$URI" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "attempt $i: secret $CERT exists but is not enabled yet"
+            elif grep -qiE 'ResourceNotFound|NotFound|could not be found|was not found' temp/tls-secret.err; then
+              echo "attempt $i: secret $CERT not in the vault yet (the control plane issues it at startup)"
+            else
+              echo "::error::Could not read the vault secret through ARM, so whether the certificate exists is UNKNOWN (not a claim that it is missing). Exit $RC: $(head -c 500 temp/tls-secret.err). The deploy principal needs Microsoft.KeyVault/vaults/secrets/read on the stamp vault."
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::The ingress certificate secret $CERT is not in the stamp vault after about $((N * 20 / 60)) minutes, per the ARM management plane. Established: the control plane was deployed. NOT established: whether it ran. Check, in order: the control-plane logs for tls.ingress_cert_error (a 403 names the missing Key Vault Certificates Officer role; a network error names the private endpoint path); that the loom-health-cp image was built from a commit that contains apps/loom-health-cp/src/tls (full-app-deploy-commercial.yml / gov-provision-dataplane-images.yml) and the app rolled onto it."
+          exit 1
+
+      - name: Deploy health.bicep phase 2 (TLS listener on the issued certificate)
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.tlswait.outputs.wait == 'true' }}
+        env:
+          PF: ${{ steps.params.outputs.pf }}
+          HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+          TLS_URI: ${{ steps.tlswait.outputs.uri }}
+        run: |
+          set -uo pipefail
+          set +e
+          CP_ARG=()
+          if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
+          az deployment sub create --name "lhds-${GITHUB_RUN_ID}-tls" --location "$HUB_LOCATION" \
+            --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" issuedTlsSecretUri="$TLS_URI" "${CP_ARG[@]}" \
+            --query properties.outputs -o json > temp/outputs-phase2.json 2> temp/apply2.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::Phase 2 (the TLS listener on $TLS_URI) failed with exit $RC: $(head -c 900 temp/apply2.err). Phase 1 succeeded, so the stamp exists without a TLS listener; re-run with allow_existing_hub=true after fixing the cause."
+            exit 1
+          fi
+          if [ "$(jq -r '.healthStamp.value.ingressTlsMode' temp/outputs-phase2.json)" != "selfSigned" ] || [ "$(jq -r '.healthStamp.value.ingressTlsConfigured' temp/outputs-phase2.json)" != "true" ]; then
+            echo "::error::Phase 2 deployed but the gateway has no HTTPS listener (ingressTlsMode=$(jq -r '.healthStamp.value.ingressTlsMode' temp/outputs-phase2.json), ingressTlsConfigured=$(jq -r '.healthStamp.value.ingressTlsConfigured' temp/outputs-phase2.json))."
+            exit 1
+          fi
+          mv temp/outputs-phase2.json temp/outputs.json
+          echo "::notice::Ingress TLS listener built on $TLS_URI (versionless: renewals roll without a redeploy)."
+
+      # The gateway is public: prove it presents a certificate for ITS OWN FQDN, not just that a
+      # listener exists. Bounded retries (the gateway applies the new listener asynchronously).
+      - name: Verify the ingress presents the issued certificate
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.tlswait.outputs.wait == 'true' }}
+        run: |
+          set -uo pipefail
+          set +e
+          FQDN=$(jq -r '.healthStamp.value.ingressPublicFqdn' temp/outputs.json)
+          if [ -z "$FQDN" ] || [ "$FQDN" = "null" ]; then echo "::error::The stamp manifest has no ingressPublicFqdn."; exit 1; fi
+          for i in $(seq 1 20); do
+            echo | openssl s_client -connect "$FQDN:443" -servername "$FQDN" > temp/s_client.out 2> temp/s_client.err
+            if openssl x509 -in temp/s_client.out -noout -subject -ext subjectAltName > temp/cert.txt 2> temp/cert.err; then
+              if grep -qE "CN ?= ?$FQDN" temp/cert.txt && grep -q "DNS:$FQDN" temp/cert.txt; then
+                echo "Ingress presents a certificate with subject CN=$FQDN and SAN DNS:$FQDN (attempt $i)."
+                exit 0
+              fi
+              echo "::error::The ingress at $FQDN:443 presents a certificate that is NOT for that host: $(tr '\n' ' ' < temp/cert.txt | head -c 400)"
+              exit 1
+            fi
+            echo "attempt $i: no certificate yet from $FQDN:443 ($(head -c 200 temp/s_client.err | tr '\n' ' '))"
+            sleep 30
+          done
+          echo "::error::No TLS certificate was presented by $FQDN:443 after 10 minutes, so the HTTPS listener is not serving (or not reachable from this runner). Not established: why."
+          exit 1
+
       # Never report success over an unverified outcome (deploy-integrity R6): the
       # template exits 0 when the control plane is SKIPPED, so read its own state back.
       - name: Verify what was deployed

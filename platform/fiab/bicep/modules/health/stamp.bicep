@@ -76,8 +76,14 @@ param extraDnsLinkVnetIds array = []
 @description('Version-less Key Vault secret URI of a CA-issued ingress TLS certificate (override). Empty = the stamp issues a Key Vault self-signed certificate for the ingress FQDN (selfSignedTlsEnabled).')
 param tlsCertificateSecretUri string = ''
 
-@description('When tlsCertificateSecretUri is empty, issue a Key Vault self-signed certificate for the ingress FQDN so the HTTPS listener exists by default. false = no TLS listener (port 80 only redirects).')
+@description('When tlsCertificateSecretUri is empty, the control plane issues a Key Vault self-signed certificate for the ingress FQDN (#5345) so the HTTPS listener exists by default. false = no TLS listener (port 80 only redirects).')
 param selfSignedTlsEnabled bool = true
+
+@description('Name of the Key Vault certificate the control plane issues.')
+param issuedCertificateName string = 'lhds-ingress-selfsigned'
+
+@description('Phase 2: VERSIONLESS secret URI of the control-plane-issued certificate, passed by deploy-health once it has confirmed the secret exists. Empty = phase 1 (no TLS listener yet).')
+param issuedTlsSecretUri string = ''
 
 @description('Per-client-address requests per minute at the WAF (volumetric backstop; per-tenant quotas live in APIM). 0 disables the rule. Same default on every boundary; the rule type is UNVERIFIED in Azure Government, so a Gov What-If/deploy rejection is cleared by passing 0 via healthConfig.wafClientRateLimitPerMinute.')
 @minValue(0)
@@ -348,7 +354,8 @@ module ingress 'ingress.bicep' = {
     backendIp: network.outputs.ingressIlbIp
     tlsCertificateSecretUri: tlsCertificateSecretUri
     selfSignedTlsEnabled: selfSignedTlsEnabled
-    scriptSubnetId: network.outputs.scriptSubnetId
+    issuedTlsSecretUri: issuedTlsSecretUri
+    issuedCertificateName: issuedCertificateName
     wafClientRateLimitPerMinute: wafClientRateLimitPerMinute
     keyVaultId: keyvault.outputs.vaultId
     minCapacity: p.agwMin
@@ -391,6 +398,6 @@ output stamp object = {
   ingressTlsMode: ingress.outputs.tlsMode
   ingressTlsCertificateName: ingress.outputs.tlsCertificateName
   ingressTlsSecretUri: ingress.outputs.tlsSecretUri
-  ingressTlsCertificate: ingress.outputs.tlsCertificate
+  ingressTlsExpectedIssuedSecretUri: ingress.outputs.tlsExpectedIssuedSecretUri
   wafPolicyId: ingress.outputs.wafPolicyId
 }
