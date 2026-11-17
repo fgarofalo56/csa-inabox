@@ -7,7 +7,14 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-        exclude: '^portal/kubernetes/helm/.*/templates/.*\.yaml$'
+        exclude: '^(portal/kubernetes/helm/.*/templates/.*\.yaml|mkdocs\.yml)$'
+      # mkdocs.yml uses custom tags (`!ENV`, `!!python/name:`) that the safe
+      # loader cannot construct, so every mkdocs.yml commit failed. Syntax-only
+      # parse for that one file; every other YAML keeps the full check.
+      - id: check-yaml
+        name: check yaml (mkdocs.yml, syntax only)
+        args: [--unsafe]
+        files: '^mkdocs\.yml$'
       - id: check-json
         exclude: '(bicepconfig\.json|\.ipynb)$'
       - id: check-merge-conflict
@@ -29,9 +36,12 @@ repos:
 
   - repo: local
     hooks:
+      # `bicep lint` takes exactly ONE file ("Unrecognized command or argument"
+      # on a second path), so lint each staged file in turn; any failure fails
+      # the hook.
       - id: bicep-lint
         name: Bicep Lint
-        entry: bicep lint
+        entry: bash -c 'rc=0; for f in "$@"; do bicep lint "$f" || rc=1; done; exit $rc' --
         language: system
         files: '\.bicep$'
         pass_filenames: true
@@ -62,14 +72,20 @@ repos:
         files: '^(examples/[^/]+/contracts/.*\.ya?ml|domains/.*/data-products/.*/contract\.yaml)$'
         pass_filenames: false
 
-      # Build mkdocs in --strict mode so any nav / link / build warning
-      # fails the commit. Baseline is now 0 warnings; keep it that way.
+      # Build mkdocs in --strict mode so any nav / link / build warning fails.
+      # MANUAL stage only (operator decision 2026-11-17): main is NOT at a
+      # zero-warning baseline (~78 broken links/anchors, measured at a5ce8e9df,
+      # #5352), so this could never pass on a docs commit, and a full build
+      # takes ~16 min locally. Run it on demand:
+      #   pre-commit run mkdocs-strict --hook-stage manual --all-files
+      # Move it back to the commit stage once #5352 lands strict in docs.yml.
       - id: mkdocs-strict
         name: mkdocs build --strict
         entry: bash -c 'mkdocs build --strict --quiet'
         language: system
         files: '^(mkdocs\.yml|docs/.*|examples/.*/README\.md)$'
         pass_filenames: false
+        stages: [manual]
 
       # Compile every Bicep module so syntax breakage is caught at
       # commit time, not in CI 5 minutes later.

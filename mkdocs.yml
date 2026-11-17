@@ -99,12 +99,15 @@ plugins:
   # initial load. The separator regex matches mkdocs-material's
   # recommended split so camelCase / kebab-case / punctuation-separated
   # tokens all become searchable.
+  #
+  # MEASURED 2026-11-17 (#5353): mkdocs-material 9.7.7's search plugin
+  # rejects `indexing`, `prebuild_index` and `min_search_length` as
+  # "Unsupported option" and ignores them, so the mitigation above was
+  # inert: search_index.json is 31.1 MB / 42,504 entries again. The three
+  # dead options are removed; #5353 tracks a supported size reduction.
   - search:
       lang: en
-      indexing: sections
-      prebuild_index: true
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)'
-      min_search_length: 2
   - minify:
       minify_html: true
   # mkdocs-material's social card plugin auto-generates per-page OG /
