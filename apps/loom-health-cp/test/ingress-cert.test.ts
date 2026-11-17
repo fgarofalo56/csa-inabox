@@ -131,7 +131,8 @@ describe('loadIngressCertConfig', () => {
   });
   it('requires the cloud vault suffix: a commercial host in gcc-high is rejected, usgovcloudapi accepted', () => {
     // Breaks if the suffix check is dropped or hard-coded to vault.azure.net.
-    expect(() => loadIngressCertConfig('gcc-high', env)).toThrow(/vault\.usgovcloudapi\.net/);
+    // String form (substring of the error message), not a regex: CodeQL js/regex/missing-regexp-anchor.
+    expect(() => loadIngressCertConfig('gcc-high', env)).toThrow('vault.usgovcloudapi.net');
     const gov = loadIngressCertConfig('gcc-high', { ...env, LOOM_HEALTH_CP_TLS_VAULT_URL: 'https://kv-x.vault.usgovcloudapi.net/' });
     expect(gov?.vaultUrl).toBe('https://kv-x.vault.usgovcloudapi.net/');
   });

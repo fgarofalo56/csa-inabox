@@ -35,7 +35,9 @@ describe('ingress TLS issued by the control plane (#5345)', () => {
     // Breaks if a literal vault.azure.net / usgovcloudapi.net is introduced into the TLS wiring (cloud parity).
     for (const src of [cp, ingress]) {
       for (const line of src.split('\n').filter((l) => /tls|Tls|cert/i.test(l) && !l.trim().startsWith('//') && !l.includes('@description'))) {
-        expect(line).not.toMatch(/vault\.azure\.net|usgovcloudapi\.net/);
+        // Substring checks, not an unanchored host regex (CodeQL js/regex/missing-regexp-anchor).
+        const hardCoded = ['vault.azure.net', 'usgovcloudapi.net'].filter((h) => line.includes(h));
+        expect(hardCoded, `hard-coded cloud host in: ${line.trim()}`).toEqual([]);
       }
     }
   });
