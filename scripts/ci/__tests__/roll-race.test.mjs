@@ -4919,10 +4919,10 @@ const UNLEASED_ARM_IMAGE_WRITERS = Object.freeze({
       'IL5 boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape. Unported sovereign gap, same as GCC-High. cloud-parity.md, #3676.',
   },
   'deploy-health.yml': {
-    writes: 1,
-    recorded: '2026-10-25',
+    writes: 2,
+    recorded: '2026-11-17',
     reason:
-      'LHDS, dispatch-only, Commercial and GCC-High. `az deployment sub create -f platform/fiab/bicep/health.bicep` renders exactly ONE Container App, loom-health-cp (modules/health/control-plane.bicep), which admin-plane/main.bicep never renders and which no roll, redeploy-with-apps or dataplane-roll lane writes (it is in no ROLL_APPS list and no appImageTags key; scripts/ci/deploy-image-roles.mjs NOT_ROLL_BLOCKING). So the field this deploy writes is not a field any leased writer writes: no shared field to arbitrate, and taking the estate lease would only make a health deploy wait on an unrelated roll. The risk this DOES leave is a health deploy starting while the estate is mid-roll on the same hub environment; the estate-pause gate is the only serialiser. Same shape as deploy-loom-sharing.yml. Revisit if loom-health-cp ever joins a roll set. Refs #5116.',
+      'LHDS, dispatch-only, Commercial and GCC-High. TWO sites since #5345 (operator-approved re-take 2026-11-17): phase 1 and phase 2 of the KV-issued TLS deploy both run the SAME health.bicep in the SAME job, sequentially, phase 2 only adding issuedTlsSecretUri, so they re-write the same single field with the same image and never race each other. `az deployment sub create -f platform/fiab/bicep/health.bicep` renders exactly ONE Container App, loom-health-cp (modules/health/control-plane.bicep), which admin-plane/main.bicep never renders and which no roll, redeploy-with-apps or dataplane-roll lane writes (it is in no ROLL_APPS list and no appImageTags key; scripts/ci/deploy-image-roles.mjs NOT_ROLL_BLOCKING). So the field this deploy writes is not a field any leased writer writes: no shared field to arbitrate, and taking the estate lease would only make a health deploy wait on an unrelated roll. The risk this DOES leave is a health deploy starting while the estate is mid-roll on the same hub environment; the estate-pause gate is the only serialiser. Same shape as deploy-loom-sharing.yml. Revisit if loom-health-cp ever joins a roll set. Refs #5116.',
   },
   'deploy-loom-sharing.yml': {
     writes: 1,
