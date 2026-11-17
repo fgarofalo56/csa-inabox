@@ -1,5 +1,9 @@
-{{- if and (not .Values.hardening.aeEnforce) (not .Values.hardening.allowUnenforced) -}}
-{{- fail "hardening.aeEnforce=false requires hardening.allowUnenforced=true (dev stamps only): unknown AE titles would be accepted" -}}
+{{- /* toString: a quoted "false" is a truthy string to Go templates, but harden.sh receives it as false. */ -}}
+{{- if and (ne (toString .Values.hardening.aeEnforce) "true") (ne (toString .Values.hardening.allowUnenforced) "true") -}}
+{{- fail "hardening.aeEnforce is not true: that requires hardening.allowUnenforced=true (dev stamps only): unknown AE titles would be accepted" -}}
+{{- end -}}
+{{- if and (eq (toString .Values.hardening.dimseEnabled) "true") (ne (toString .Values.hardening.allowDimse) "true") -}}
+{{- fail "hardening.dimseEnabled=true requires hardening.allowDimse=true: it opens the DICOM association listener (11112)" -}}
 {{- end -}}
 apiVersion: v1
 kind: Service
@@ -68,6 +72,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: [sh, /opt/loom/harden.sh]
           env: {{- include "lhd.hardenEnv" . | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 128Mi}
       containers:
         - name: arc
           image: {{ .Values.image.archive }}
@@ -75,7 +87,7 @@ spec:
           ports:
             - {name: http, containerPort: 8080}
             - {name: hl7, containerPort: 2575}
-            {{- if .Values.hardening.dimseEnabled }}
+            {{- if eq (toString .Values.hardening.dimseEnabled) "true" }}
             - {name: dimse, containerPort: 11112}
             {{- end }}
           env:
@@ -114,6 +126,45 @@ spec:
   ports:
     - {name: http, port: 8080}
     - {name: hl7, port: 2575}
-    {{- if .Values.hardening.dimseEnabled }}
+    {{- if eq (toString .Values.hardening.dimseEnabled) "true" }}
     - {name: dimse, port: 11112}
     {{- end }}
+---
+# Default-deny ingress for the archive pods, then allow only the gateway. kubelet probes are
+# node-local and not subject to this on conformant CNIs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lhd.name" . }}-ingress
+  labels: {{- include "lhd.labels" . | nindent 4 }}
+spec:
+  podSelector: {matchLabels: {app: {{ include "lhd.name" . }}}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- toYaml .Values.networkPolicy.gatewayPodLabels | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+        {{- if eq (toString .Values.networkPolicy.hl7Enabled) "true" }}
+        - {protocol: TCP, port: 2575}
+        {{- end }}
+        {{- if eq (toString .Values.hardening.dimseEnabled) "true" }}
+        - {protocol: TCP, port: 11112}
+        {{- end }}
+---
+# The LDAP config store accepts connections from the archive pod only (this includes the harden
+# initContainer, same pod).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lhd.name" . }}-ldap-ingress
+  labels: {{- include "lhd.labels" . | nindent 4 }}
+spec:
+  podSelector: {matchLabels: {app: {{ include "lhd.name" . }}-ldap}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: {{ include "lhd.name" . }}}}
+      ports:
+        - {protocol: TCP, port: 389}

@@ -11,6 +11,9 @@ hardening:
   # is refused by the chart unless allowUnenforced is also set (dev stamps only).
   aeEnforce: true
   allowUnenforced: false
+  # Same explicit escape for DIMSE: dimseEnabled=true is refused unless allowDimse=true. The
+  # calling-AE allow-list covers every archive AE (ldap/harden.sh enumerates dicomAETitle=*).
+  allowDimse: false
   aeTitle: DCM4CHEE
   aeAllowedCalling: [LOOMGW]
   # HL7 authentication: only the listed "Application|Facility" senders are accepted.
@@ -19,6 +22,16 @@ hardening:
   # DIMSE (DICOM association) listener. OFF in v1: DICOMweb only. When true the Service also
   # exposes 11112 and the AE allow-list above is what protects it.
   dimseEnabled: false
+
+# Ingress isolation (default-deny). Only pods carrying these labels, in THIS namespace, may reach
+# the archive (the W3-3 gateway sets app.kubernetes.io/name: loom-health-dicom-gateway). Nothing
+# else in the cluster can reach DICOMweb, HL7 or DIMSE. Egress is not restricted by this chart.
+networkPolicy:
+  gatewayPodLabels:
+    app.kubernetes.io/name: loom-health-dicom-gateway
+  # HL7 (2575) is unused in v1 (the gateway speaks DICOMweb): default = no ingress to 2575 at
+  # all (deny-all). true opens 2575 to the gateway labels only.
+  hl7Enabled: false
 
 # Existing secrets (created by the tenant provisioner; this chart never holds a value).
 secrets:
