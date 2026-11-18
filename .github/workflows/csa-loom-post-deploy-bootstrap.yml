@@ -3104,38 +3104,6 @@ jobs:
             *) fail "defect-or-configuration" "exit $RC; read the script output above." ;;
           esac
 
-      - name: Seed automation identity feature grant (health.tenant-admin Contributor for loom-ui-verify)
-        # Operator decision 2026-11-16. loom-ui-verify's minted session has NO tid, so its grant
-        # scope is its own oid (lib/auth/session.ts tenantScopeId = tid || oid); a grant written
-        # from a real admin session lands in the tid partition and the G1 spec 403s (run
-        # 43800748474). This writes the ONE doc the grants route would write, in the oid
-        # partition, idempotently (prints seeded|unchanged). Runs in every boundary this
-        # bootstrap runs in (Commercial, GCC, GCC-High, IL5): the Cosmos host comes from the
-        # account's own documentEndpoint and the oid from the console's own binding.
-        # NOT continue-on-error: an unresolvable oid or Cosmos target fails the job, loudly.
-        # Needs Cosmos DB Built-in Data Contributor for the deploy identity (as seed-governance).
-        if: ${{ !cancelled() }}
-        env:
-          LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
-          CONSOLE_RG: ${{ env.ADMIN_RG }}
-          CONSOLE_SUBSCRIPTION: ${{ env.ADMIN_SUB }}
-        run: |
-          set -uo pipefail
-          fail() { echo "::error::Automation grant seed FAILED [$1]: $2"; exit 1; }
-          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
-            || fail "azure-read" "could not LIST Cosmos accounts in $ADMIN_RG, so whether one exists is UNKNOWN."
-          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
-          if [ -z "$COSMOS_ACCT" ] && [ -n "${DLZ_RG:-}" ]; then
-            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
-              || fail "azure-read" "could not LIST Cosmos accounts in $DLZ_RG, so whether one exists is UNKNOWN."
-            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
-          fi
-          [ -n "$COSMOS_ACCT" ] || fail "configuration" "no cosmos-loom* account found in $ADMIN_RG${DLZ_RG:+ or $DLZ_RG}; there is nowhere to write the grant. Deploy the admin plane, then re-run."
-          LOOM_COSMOS_ENDPOINT="$(az cosmosdb show -n "$COSMOS_ACCT" -g "$COSMOS_RG" --subscription "$COSMOS_SUB" --query documentEndpoint -o tsv)" \
-            || fail "azure-read" "could not read documentEndpoint of $COSMOS_ACCT."
-          export LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE=loom
-          node scripts/csa-loom/seed-automation-feature-grant.mjs
-
       - name: Restore Loom Key Vault private (verified)
         # Runs always() — including after a failed or cancelled earlier step,
         # which is exactly when the vault is most likely to have been left open.
@@ -3179,6 +3147,7 @@ jobs:
         if: always()
         run: |
           echo "==== Bootstrap complete ===="
+          echo "Automation-identity grant seed (health.tenant-admin): NOT in this job - it runs in the separate seed-automation-grant job on the in-VNet runner (Commercial); check that job's result."
           echo "Console UAMI resolved: $CONSOLE_UAMI_PRINCIPAL (grants below all target this principal)"
           echo "Purview Data Map: data-reader + data-curator + data-source-administrator + collection-administrator granted on root collection (PE toggle + restore handled by script)"
           echo "Weave ontology: PG + Apache AGE graph 'loom_ontology' created; Console UAMI registered as PG principal (object/link/action instance write-back)"
@@ -3276,3 +3245,153 @@ jobs:
           else
             echo "No gated step failed."
           fi
+
+  # ---------------------------------------------------------------------------
+  # AUTOMATION-IDENTITY GRANT SEED - runs INSIDE the hub VNet (#5360).
+  #
+  # Moved out of the `bootstrap` job. The Loom Cosmos account is
+  # publicNetworkAccess=Disabled (Commercial DMLZ, measured 2026-11-18: no ipRules,
+  # no VNet filter, private endpoint only), so the seed's data-plane call from a
+  # public ubuntu-latest runner is refused with HTTP 403 "blocked by your Cosmos DB
+  # account firewall settings" (run 44239837032). Opening a public window on the
+  # account that holds Loom state was rejected; the call is made from the in-VNet
+  # gh-aca-runner instead, which resolves the account's private endpoint through
+  # the hub-linked privatelink.documents.azure.com zone. Only the network path
+  # changed: same login credentials, same script, same env.
+  #
+  # CLOUD PARITY (cloud-parity.md) - a DISCLOSED GAP, not a silent skip: the
+  # `loom-aca` fleet exists only in the Commercial DMLZ subscription
+  # (gh-runner-job.bicep "SOVEREIGN BOUNDARY EXPOSURE": no Gov/GCC/GCC-High/IL5
+  # instance). Every other boundary therefore keeps the previous path (the repo's
+  # CI_RUNNER, default ubuntu-latest) and the step still RUNS and still FAILS the
+  # job on error; if the Cosmos account there is private the failure carries an
+  # explicit note naming the missing in-VNet runner. Commercial is the only
+  # boundary this change was written for, and only verified in code.
+  #
+  # KNOWN LIMIT: `timeout-minutes` bounds execution, not time spent QUEUED for a
+  # runner. The repo's queue watchdog (scripts/ci/brain-scan-queue-watchdog.sh)
+  # needs `actions: read`, which a called workflow cannot request unless every
+  # caller grants it (a startup_failure otherwise); the callers do not today, so a
+  # runner that never picks this job up is bounded only by GitHub's own queue
+  # ceiling. Tracked on #5360.
+  # ---------------------------------------------------------------------------
+  seed-automation-grant:
+    name: 'Seed automation identity feature grant (in-VNet)'
+    needs: bootstrap
+    # !cancelled(): the step it replaces ran even after an earlier step failed.
+    if: ${{ !cancelled() && needs.bootstrap.result != 'skipped' }}
+    runs-on: ${{ inputs.boundary == 'Commercial' && fromJSON('["self-hosted","loom-aca"]') || fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        if: inputs.boundary == 'Commercial'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Azure login (GCC - Azure public cloud, GCC identity)
+        if: inputs.boundary == 'GCC'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}"
+            }
+
+      - name: Azure login (Gov - GCC-High / IL5, AzureUSGovernment)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        uses: azure/login@v2
+        with:
+          environment: AzureUSGovernment
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+
+      - name: Set Azure cloud to Gov (GCC-High / IL5)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        run: az cloud set --name AzureUSGovernment
+
+      # The bootstrap job's discovery cannot be handed over: it ::add-mask::s the discovered
+      # subscription id, and GitHub redacts ANY masked value from a job output, so a
+      # `needs.bootstrap.outputs.dlz_sub` is always empty. Re-resolve it here with the same script.
+      - name: Pre-install the resource-graph CLI extension
+        run: |
+          set -e
+          az extension add --name resource-graph --upgrade --only-show-errors -o none
+
+      - name: Discover the Data Landing Zone (subscription + domain)
+        env:
+          INPUT_DLZ_SUBSCRIPTION: ${{ inputs.dlz_subscription }}
+          INPUT_DLZ_DOMAIN: ${{ inputs.dlz_domain }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/resolve-dlz-coordinates.mjs \
+            --region "$REGION" \
+            --admin-subscription "$ADMIN_SUB" \
+            ${INPUT_DLZ_SUBSCRIPTION:+--dlz-subscription "$INPUT_DLZ_SUBSCRIPTION"} \
+            ${INPUT_DLZ_DOMAIN:+--dlz-domain "$INPUT_DLZ_DOMAIN"} \
+            --github-env "$GITHUB_ENV"
+          DISCOVERED_SUB="$(grep '^DLZ_SUB=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          if [ -n "$DISCOVERED_SUB" ]; then echo "::add-mask::$DISCOVERED_SUB"; fi
+
+      - name: Seed automation identity feature grant (health.tenant-admin Contributor for loom-ui-verify)
+        # Operator decision 2026-11-16. loom-ui-verify's minted session has NO tid, so its grant
+        # scope is its own oid (lib/auth/session.ts tenantScopeId = tid || oid); a grant written
+        # from a real admin session lands in the tid partition and the G1 spec 403s (run
+        # 43800748474). This writes the ONE doc the grants route would write, in the oid
+        # partition, idempotently (prints seeded|unchanged). The Cosmos host comes from the
+        # account's own documentEndpoint and the oid from the console's own binding.
+        # NOT continue-on-error: an unresolvable oid or Cosmos target fails the job, loudly.
+        # Needs Cosmos DB Built-in Data Contributor for the deploy identity (as seed-governance).
+        env:
+          LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
+          CONSOLE_RG: ${{ env.ADMIN_RG }}
+          CONSOLE_SUBSCRIPTION: ${{ env.ADMIN_SUB }}
+          # DLZ_RG / DLZ_SUB come from the "Discover the Data Landing Zone" step above via
+          # $GITHUB_ENV. They are deliberately NOT set here (a step-level env would override it).
+        run: |
+          set -uo pipefail
+          fail() {
+            echo "::error::Automation grant seed FAILED [$1]: $2"
+            if [ "$BOUNDARY" != "Commercial" ]; then
+              echo "::error::Cloud-parity gap (#5360): boundary '$BOUNDARY' has NO in-VNet loom-aca runner, so this seed ran on a public runner. If the failure above is an HTTP 403 from the Cosmos account firewall, the account is private and cannot be reached from here; that is the missing in-VNet runner, not a bad grant."
+            fi
+            exit 1
+          }
+          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+            || fail "azure-read" "could not LIST Cosmos accounts in $ADMIN_RG, so whether one exists is UNKNOWN."
+          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
+          if [ -z "$COSMOS_ACCT" ] && [ -n "${DLZ_RG:-}" ]; then
+            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+              || fail "azure-read" "could not LIST Cosmos accounts in $DLZ_RG, so whether one exists is UNKNOWN."
+            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
+          fi
+          [ -n "$COSMOS_ACCT" ] || fail "configuration" "no cosmos-loom* account found in $ADMIN_RG${DLZ_RG:+ or $DLZ_RG}; there is nowhere to write the grant. Deploy the admin plane, then re-run."
+          LOOM_COSMOS_ENDPOINT="$(az cosmosdb show -n "$COSMOS_ACCT" -g "$COSMOS_RG" --subscription "$COSMOS_SUB" --query documentEndpoint -o tsv)" \
+            || fail "azure-read" "could not read documentEndpoint of $COSMOS_ACCT."
+          export LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE=loom
+          node scripts/csa-loom/seed-automation-feature-grant.mjs || fail "seed" "seed-automation-feature-grant.mjs exited non-zero; read its output above."
