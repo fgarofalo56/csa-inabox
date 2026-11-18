@@ -39,6 +39,8 @@
 //   environmentId (containerApps path), acrName + acrResourceGroup + acrLoginServer,
 //   imageTag (default v0.1), allowedCallerAppIds, privateEndpointSubnetId,
 //   cosmosPrivateDnsZoneId,
+//   hubVaultPeSubnetId, hubVaultZoneId, hubResourceGroup (optional overrides of the hub-side stamp-vault
+//     private endpoint inputs, #5345; derived from environmentId and the hub naming convention by default),
 //   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
@@ -186,6 +188,37 @@ var cpAuthMissing = concat(
   empty(cpAuthAsClientId) ? ['authAsClientId'] : []
 )
 
+// ── Hub-side private endpoint for the stamp vault (#5345) ─────────────────────
+// The containerApps control plane runs in the HUB environment, which cannot resolve the private-only
+// stamp vault (the stamp privatelink.vaultcore zone is linked to the stamp VNet only). A second PE on
+// the vault, in the hub PE subnet, with its zone group in the HUB vaultcore zone, fixes that. Hub facts
+// are derived from controlPlaneConfig.environmentId (hub subscription + resource group) and the Loom
+// hub conventions (vnet-csa-loom-hub-<hub region>/snet-private-endpoints; the zone is named from
+// environment() so GCC-High / IL5 resolve privatelink.vaultcore.usgovcloudapi.net). Each is overridable
+// through controlPlaneConfig.hubVaultPeSubnetId / hubVaultZoneId / hubResourceGroup. The aks control
+// plane runs inside the stamp VNet and needs none of this.
+var hubEnvIdParts = split(cpEnvironmentId, '/')
+var hubEnvIdValid = length(hubEnvIdParts) > 4
+var hubSubscriptionId = hubEnvIdValid ? hubEnvIdParts[2] : subscription().subscriptionId
+var hubResourceGroup = string(controlPlaneConfig.?hubResourceGroup ?? (hubEnvIdValid ? hubEnvIdParts[4] : ''))
+var hubVaultZoneName = 'privatelink.vaultcore${substring(environment().suffixes.keyvaultDns, length('.vault'))}'
+var hubVaultPeSubnetId = string(controlPlaneConfig.?hubVaultPeSubnetId ?? '/subscriptions/${hubSubscriptionId}/resourceGroups/${hubResourceGroup}/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-${location}/subnets/snet-private-endpoints')
+var hubVaultZoneId = string(controlPlaneConfig.?hubVaultZoneId ?? '/subscriptions/${hubSubscriptionId}/resourceGroups/${hubResourceGroup}/providers/Microsoft.Network/privateDnsZones/${hubVaultZoneName}')
+var hubVaultPeDeploy = cpDeploy && cpPlatform == 'containerApps' && !empty(hubResourceGroup)
+
+module healthHubVaultPe 'modules/health/hub-vault-pe.bicep' = if (hubVaultPeDeploy) {
+  name: 'lhds-hub-vault-pe-${healthStampName}'
+  scope: resourceGroup(hubSubscriptionId, hubResourceGroup)
+  params: {
+    location: location
+    vaultId: healthStamp!.outputs.stamp.keyVaultId
+    vaultName: last(split(healthStamp!.outputs.stamp.keyVaultId, '/'))
+    hubPeSubnetId: hubVaultPeSubnetId
+    hubVaultZoneId: hubVaultZoneId
+    tags: tags
+  }
+}
+
 module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   name: 'lhds-control-plane-${healthStampName}'
   scope: healthRg
@@ -216,6 +249,10 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
   }
+  // The control plane issues the ingress certificate into the stamp vault on start: the hub PE must exist first.
+  dependsOn: [
+    healthHubVaultPe
+  ]
 }
 
 // ── PDP (apps/loom-health-pdp): one OPA per stamp, bundle pulled from the control plane ──
