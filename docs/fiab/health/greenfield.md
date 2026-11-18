@@ -73,6 +73,22 @@ logs `tls.ingress_cert_error` with the missing role or network cause). The
 `loom-health-cp` image must be built from a commit that contains the TLS code
 before the first run.
 
+**Vault network path (#5345).** The containerApps control plane runs in the
+HUB Container Apps environment, not in the stamp, and the stamp vault is
+private-only (its `privatelink.vaultcore` zone is linked to the stamp VNet
+only). `health.bicep` therefore adds a second private endpoint on the stamp
+vault in the hub `snet-private-endpoints` subnet (`modules/health/hub-vault-pe.bicep`,
+deployed into the hub resource group), whose DNS zone group writes the A record
+into the HUB's existing `privatelink.vaultcore` zone, the one the hub VNet
+resolves through. The stamp zone is not linked to the hub VNet (a VNet cannot
+link two zones of the same name). Nothing to supply: the hub resource group
+comes from `controlPlaneConfig.environmentId`, the subnet and zone from the hub
+naming convention (overridable with `controlPlaneConfig.hubVaultPeSubnetId`,
+`hubVaultZoneId`, `hubResourceGroup`); every deploy re-creates the endpoint if
+it was deleted. The connection is auto-approved (same tenant, deployer has write
+on the vault). The aks control plane sits inside the stamp VNet and gets no hub
+endpoint. Not exercised: no deploy has run this path yet.
+
 Cloud parity: the vault URL comes from the vault's own `vaultUri` output
 (`vault.azure.net` or `vault.usgovcloudapi.net`) and the control plane checks
 the suffix per cloud, so GCC-High takes the same path. Supported in code on
