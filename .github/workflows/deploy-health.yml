@@ -299,7 +299,10 @@ jobs:
               if [ "$RC" != "0" ]; then
                 problem "could not read Entra to find the app loom-health-cp (az exit $RC: $(head -c 300 temp/cp-app.err)). Whether it exists is UNKNOWN. Set the repository variable LOOM_HEALTH_CP_APP_CLIENT_ID or the dispatch input control_plane_audiences, or grant the deploy identity Graph Application.Read.All."
               fi
-              N=$(jq 'length' temp/cp-app.json)
+              N=$(jq 'length' temp/cp-app.json 2> /dev/null)
+              if ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+                problem "az returned output for the loom-health-cp lookup that could not be parsed as a JSON list (got '$(head -c 120 temp/cp-app.json)'), so whether the app exists is UNKNOWN (not a claim that it is missing). Set the repository variable LOOM_HEALTH_CP_APP_CLIENT_ID or the dispatch input control_plane_audiences."
+              fi
               if [ "$N" != "1" ]; then
                 problem "found $N Entra apps named loom-health-cp; exactly 1 is required and this lane will not guess (and will not deploy without a control plane). Create the app registration, or set LOOM_HEALTH_CP_APP_CLIENT_ID / control_plane_audiences."
               fi
@@ -701,7 +704,11 @@ jobs:
             echo "::error::Could not LIST Container Apps to find loom-console (az exit $RC: $(head -c 300 temp/console.err)), so whether it exists is UNKNOWN. The control plane IS deployed; the console was NOT bound."
             exit 1
           fi
-          N=$(jq 'length' temp/console.json)
+          N=$(jq 'length' temp/console.json 2> /dev/null)
+          if ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+            echo "::error::The loom-console lookup returned output that could not be parsed as a JSON list (got '$(head -c 120 temp/console.json)'), so whether loom-console exists is UNKNOWN. The control plane IS deployed; the console was NOT bound."
+            exit 1
+          fi
           if [ "$N" != "1" ]; then
             echo "::error::Found $N Container Apps named loom-console in this subscription; exactly 1 is required and this lane will not guess which to bind. The control plane IS deployed; the console was NOT bound."
             exit 1

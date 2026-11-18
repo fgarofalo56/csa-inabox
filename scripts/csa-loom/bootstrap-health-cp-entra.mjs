@@ -7,7 +7,8 @@
  *      trusts the control-plane managed identity (control-plane.bicep output
  *      `authFederatedCredential`: issuer {login}/{tenant}/v2.0, subject = identity
  *      principal id, audience api://AzureADTokenExchange[USGov]). ARM cannot create it.
- *   1a. `requiredResourceAccess` on that same AS app declares Microsoft Graph Directory.Read.All
+ *   1a. `requiredResourceAccess` on that same AS app declares Microsoft Graph User.ReadBasic.All +
+ *      GroupMember.Read.All
  *      (application; what its checkMemberGroups call needs) and its SERVICE PRINCIPAL is created, so
  *      admin consent is possible at all (#5346). Declaring is not consenting: nothing here grants it.
  *   2. APP ROLES `HealthCP.Reader` + `HealthCP.Admin` on the control-plane app registration
@@ -51,11 +52,19 @@ export const ROLE_ADMIN = { value: 'HealthCP.Admin', id: '271ee6d8-ae5e-56cd-ab7
 export const FED_CRED_NAME = 'lhds-control-plane-identity';
 // The Microsoft Graph application permission the authorization server's group check needs.
 // The AS (apps/loom-health-cp/src/auth/federation.ts) POSTs /directoryObjects/{oid}/checkMemberGroups;
-// Learn (graph/api/directoryobject-checkmembergroups) lists Directory.Read.All as the least-privileged
-// APPLICATION permission for that endpoint. Id from graph/permissions-reference. Graph's resource appId
-// is the same in every cloud. Declaring it is NOT consent: a Global Administrator still grants it.
+// Learn (graph/api/directoryobject-checkmembergroups), table "Group memberships for other users"
+// (POST /users/{id}/checkMemberGroups): Application least privileged = User.ReadBasic.All AND
+// GroupMember.Read.All together; Directory.Read.All is the HIGHER-privileged alternative. Ids from
+// graph/permissions-reference (Application column). Graph's resource appId is the same in every cloud.
+// Declaring is NOT consent: a Global Administrator still grants it.
 export const GRAPH_RESOURCE_APP_ID = '00000003-0000-0000-c000-000000000000';
-export const GRAPH_PERMISSION = { name: 'Directory.Read.All', id: '7ab1d382-f21e-4acd-a863-ba3e13f7da61', type: 'Role' };
+export const GRAPH_PERMISSIONS = [
+  { name: 'User.ReadBasic.All', id: '97235f07-e226-4f63-ace3-39588e11d3a1', type: 'Role' },
+  { name: 'GroupMember.Read.All', id: '98830695-27a2-44f7-8c18-0c3ebc9698f6', type: 'Role' },
+];
+// Declared by an earlier version of this script. Never added now; if present it is LEFT in place (removing a
+// declaration is not this script's call) and reported, so the operator can remove it.
+export const GRAPH_BROAD_PERMISSION_ID = '7ab1d382-f21e-4acd-a863-ba3e13f7da61';
 export const ALLOWLIST_ENV = 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS';
 
 export const MAX_ATTEMPTS = 4;
@@ -84,13 +93,15 @@ export function expectedFederatedCredential(cloud, tenantId, subject) {
   };
 }
 
-/** requiredResourceAccess with GRAPH_PERMISSION declared, every other entry kept. Pure; returns null when already declared. */
+/** requiredResourceAccess with every GRAPH_PERMISSIONS role declared, every other entry kept. Pure; returns null when all are already declared. */
 export function withGraphPermission(current) {
   const list = Array.isArray(current) ? current.map((r) => ({ ...r, resourceAccess: [...(r.resourceAccess ?? [])] })) : [];
   let graph = list.find((r) => String(r.resourceAppId).toLowerCase() === GRAPH_RESOURCE_APP_ID);
-  if (graph?.resourceAccess.some((a) => a.id === GRAPH_PERMISSION.id && a.type === GRAPH_PERMISSION.type)) return null;
+  const has = (g) => graph?.resourceAccess.some((a) => a.id === g.id && a.type === g.type);
+  const missing = GRAPH_PERMISSIONS.filter((g) => !has(g));
+  if (missing.length === 0) return null;
   if (!graph) { graph = { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [] }; list.push(graph); }
-  graph.resourceAccess.push({ id: GRAPH_PERMISSION.id, type: GRAPH_PERMISSION.type });
+  for (const g of missing) graph.resourceAccess.push({ id: g.id, type: g.type });
   return list;
 }
 
@@ -203,9 +214,10 @@ export async function ensure(opts, io) {
   // 1a. declare the Graph permission its group check needs, and make sure its service principal
   // exists. Without both, admin consent is impossible (#5346). NOT consent itself.
   const rra = withGraphPermission(asApp.requiredResourceAccess);
+  if ((asApp.requiredResourceAccess ?? []).some((r) => (r.resourceAccess ?? []).some((a) => a.id === GRAPH_BROAD_PERMISSION_ID))) io.log(`bootstrap-health-cp-entra: NOTE: the authorization-server app still declares Directory.Read.All from an earlier run. It is left in place (this script never removes a declaration) and is broader than the group check needs; remove it, and revoke any consent granted for it, once ${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} are consented.`);
   if (rra) {
-    if (plan.dryRun) plan.would.push(`declare Microsoft Graph ${GRAPH_PERMISSION.name} (application) in requiredResourceAccess on the authorization-server app ${opts.asClientId}`);
-    else { await call(io, host, 'PATCH', `/applications/${asApp.id}`, { requiredResourceAccess: rra }, { what: `declare ${GRAPH_PERMISSION.name} on the authorization-server application ${asApp.id}` }); plan.writes++; }
+    if (plan.dryRun) plan.would.push(`declare Microsoft Graph ${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} (application) in requiredResourceAccess on the authorization-server app ${opts.asClientId}`);
+    else { await call(io, host, 'PATCH', `/applications/${asApp.id}`, { requiredResourceAccess: rra }, { what: `declare ${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} on the authorization-server application ${asApp.id}` }); plan.writes++; }
   }
   await ensureServicePrincipal(io, host, opts.asClientId, 'the authorization-server app', plan);
   const credPath = `/applications/${asApp.id}/federatedIdentityCredentials`;
@@ -295,7 +307,7 @@ export async function ensure(opts, io) {
     for (let attempt = 1; attempt <= READBACK_ATTEMPTS; attempt++) {
       problems = [];
       const cc = await listAll(io, host, credPath);
-      if (withGraphPermission((await readApp(io, host, opts.asClientId, 'id,requiredResourceAccess', 'authorization-server')).requiredResourceAccess)) problems.push(`${GRAPH_PERMISSION.name} declared in requiredResourceAccess on ${opts.asClientId}`);
+      if (withGraphPermission((await readApp(io, host, opts.asClientId, 'id,requiredResourceAccess', 'authorization-server')).requiredResourceAccess)) problems.push(`${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} declared in requiredResourceAccess on ${opts.asClientId}`);
       const asSp = await call(io, host, 'GET', `/servicePrincipals(appId='${opts.asClientId}')?$select=id,appId`, undefined, { nullOn404: true, what: 'read back the authorization-server service principal' });
       if (!asSp?.json?.id) problems.push(`service principal for the authorization-server app ${opts.asClientId}`);
       if (!cc.some(sameCred)) problems.push(`federated credential on ${opts.asClientId} with issuer ${fed.issuer} / subject ${fed.subject} / audience ${fed.audiences[0]}`);

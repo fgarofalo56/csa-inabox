@@ -18,7 +18,7 @@
    lane to re-bind (#5346). Leave `allow_existing_hub` and
    `override_estate_pause` false unless intended.
 3. The post-deploy bootstrap (`bootstrap-health-cp-entra.mjs`) declares Graph
-   `Directory.Read.All` (application) on `loom-health-cp-as` and creates its
+   `User.ReadBasic.All` + `GroupMember.Read.All` (application) on `loom-health-cp-as` and creates its
    service principal, so a Global Administrator can grant consent. It does not
    grant it.
 4. A stood-down or what-if run is titled DRY RUN and is not a deployed SHA.

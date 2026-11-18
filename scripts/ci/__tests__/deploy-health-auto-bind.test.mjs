@@ -172,3 +172,20 @@ test('bind: two loom-console apps is ambiguous and fails; the update is not atte
   assert.match(r.out, /Found 2 Container Apps named loom-console/);
   assert.doesNotMatch(r.calls, /containerapp update/);
 });
+
+test('R7: az exits 0 with GARBAGE output: the resolve step says UNKNOWN and never claims a count', () => {
+  // Breaks if: jq fails on non-JSON and the message still asserts "found <n> Entra apps" (a count never established).
+  const r = sandbox(`echo 'WARNING: not json at all'`, resolveStep, base);
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /could not be parsed.*UNKNOWN/);
+  assert.doesNotMatch(r.out, /found \d* ?Entra apps/);
+});
+
+test('R7: the bind step, az list exits 0 with GARBAGE: says UNKNOWN, no count claim, no update', () => {
+  const garbage = `case "$*" in *"containerapp list"*) echo 'oops <html>';; *) exit 0;; esac`;
+  const r = sandbox(garbage, bindStep, bindEnv, { 'temp/outputs.json': deployed });
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /could not be parsed.*UNKNOWN/);
+  assert.doesNotMatch(r.out, /Found \d* ?Container Apps/);
+  assert.doesNotMatch(r.calls, /containerapp update/);
+});

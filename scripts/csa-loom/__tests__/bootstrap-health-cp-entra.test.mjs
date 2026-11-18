@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ensure, run, expectedFederatedCredential, mergeAllowlist, parseArgs,
-  ROLE_READER, ROLE_ADMIN, FED_CRED_NAME, ALLOWLIST_ENV, GRAPH_PERMISSION, GRAPH_RESOURCE_APP_ID, withGraphPermission,
+  ROLE_READER, ROLE_ADMIN, FED_CRED_NAME, ALLOWLIST_ENV, GRAPH_PERMISSIONS, GRAPH_RESOURCE_APP_ID, withGraphPermission,
   EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PERMISSION, EXIT_UNSUPPORTED,
 } from '../bootstrap-health-cp-entra.mjs';
 import { GraphError } from '../ensure-estate-power-role.mjs';
@@ -14,6 +14,11 @@ const G = (n) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).rep
 const TENANT = G(1), AS_APP = G(2), AS_OBJ = G(3), CP_APP = G(4), CP_OBJ = G(5), CP_SP = G(6);
 const CP_IDENTITY = G(7), APIM_SP = G(8), APIM_APPID = G(9), CONSOLE_CLIENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', CONSOLE_PRINCIPAL = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const CI_APP = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', CI_SP = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+// INDEPENDENT literals (Learn graph/permissions-reference, Application ids); not derived from the module under test.
+const LEARN_USER_READBASIC_ALL = '97235f07-e226-4f63-ace3-39588e11d3a1';
+const LEARN_GROUPMEMBER_READ_ALL = '98830695-27a2-44f7-8c18-0c3ebc9698f6';
+const LEARN_DIRECTORY_READ_ALL = '7ab1d382-f21e-4acd-a863-ba3e13f7da61';
 
 const OPTS = {
   asClientId: AS_APP, cpAppClientId: CP_APP, tenantId: TENANT, cpIdentityPrincipalId: CP_IDENTITY,
@@ -278,34 +283,40 @@ test('a CI SP unknown to Graph fails with a definite not-found, no CI assignment
   assert.deepEqual(w.st.assignments, []);
 });
 
-test('the AS app declares Graph Directory.Read.All (application) and gets a service principal; nothing is consented', async () => {
+test('the AS app declares Graph User.ReadBasic.All + GroupMember.Read.All (application, NOT Directory.Read.All) and gets a service principal; nothing is consented', async () => {
   // Breaks if: the PATCH omits the permission or declares it as Scope (delegated) instead of Role, uses another id,
   // drops an unrelated declared resource, or the AS service principal is never created (consent stays impossible, #5346).
   const keep = { resourceAppId: G(5), resourceAccess: [{ id: G(6), type: 'Scope' }] };
   const w = world({ rra: [keep] });
   await ensure(OPTS, w.io);
-  assert.deepEqual(w.st.rra, [keep, { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: '7ab1d382-f21e-4acd-a863-ba3e13f7da61', type: 'Role' }] }]);
-  assert.equal(GRAPH_PERMISSION.type, 'Role');
+  assert.deepEqual(w.st.rra, [keep, { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: LEARN_USER_READBASIC_ALL, type: 'Role' }, { id: LEARN_GROUPMEMBER_READ_ALL, type: 'Role' }] }]);
+  const declared = w.st.rra.flatMap((r) => r.resourceAccess).map((a) => a.id);
+  assert.ok(!declared.includes(LEARN_DIRECTORY_READ_ALL), 'the broader Directory.Read.All must not be declared');
   assert.equal(w.st.asSpExists, true);
   assert.ok(!w.log.some((l) => /oauth2PermissionGrants/.test(l)), 'declaring is not consenting: no grant call');
 });
 
 test('withGraphPermission is idempotent and merges into an existing Graph entry', () => {
   // Breaks if: a second run appends a duplicate, or an existing Graph delegated entry is overwritten.
-  const mine = { id: GRAPH_PERMISSION.id, type: 'Role' };
-  assert.equal(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID.toUpperCase(), resourceAccess: [mine] }]), null);
+  const both = [{ id: LEARN_USER_READBASIC_ALL, type: 'Role' }, { id: LEARN_GROUPMEMBER_READ_ALL, type: 'Role' }];
+  assert.equal(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID.toUpperCase(), resourceAccess: both }]), null);
   const merged = withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: G(6), type: 'Scope' }] }]);
-  assert.deepEqual(merged[0].resourceAccess, [{ id: G(6), type: 'Scope' }, mine]);
+  assert.deepEqual(merged[0].resourceAccess, [{ id: G(6), type: 'Scope' }, ...both]);
   assert.equal(merged.length, 1);
-  assert.notEqual(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: GRAPH_PERMISSION.id, type: 'Scope' }] }]), null, 'a delegated Scope with the same id is NOT the application role');
+  assert.notEqual(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: LEARN_USER_READBASIC_ALL, type: 'Scope' }, both[1]] }]), null, 'a delegated Scope with the same id is NOT the application role');
+  assert.notEqual(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [both[0]] }]), null, 'only one of the two roles declared: the other must be added');
+  const legacy = withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: LEARN_DIRECTORY_READ_ALL, type: 'Role' }] }]);
+  assert.ok(legacy[0].resourceAccess.some((a) => a.id === LEARN_DIRECTORY_READ_ALL), 'an existing Directory.Read.All declaration is left in place, not silently removed');
+  assert.ok(both.every((b) => legacy[0].resourceAccess.some((a) => a.id === b.id)));
 });
 
 test('the declared Graph permission matches what the AS code calls (lifted from source)', () => {
-  // Breaks if: the AS moves off /directoryObjects/{oid}/checkMemberGroups, whose least-privileged application
-  // permission (Learn) is Directory.Read.All, without this script following.
+  // Breaks if: the AS moves off /directoryObjects/{oid}/checkMemberGroups (the Learn row whose least-privileged
+  // application permissions are User.ReadBasic.All + GroupMember.Read.All) without this script following.
   const src = readFileSync(fileURLToPath(new URL('../../../apps/loom-health-cp/src/auth/federation.ts', import.meta.url)), 'utf8');
   assert.ok(src.includes('/directoryObjects/${oid}/checkMemberGroups'));
-  assert.equal(GRAPH_PERMISSION.name, 'Directory.Read.All');
+  // DOCUMENTATION, not coverage: the module constants must equal the independent Learn literals above.
+  assert.deepEqual(GRAPH_PERMISSIONS.map((g) => g.id), [LEARN_USER_READBASIC_ALL, LEARN_GROUPMEMBER_READ_ALL]);
 });
 
 test('read-back fails when the requiredResourceAccess write never lands', async () => {
@@ -313,5 +324,14 @@ test('read-back fails when the requiredResourceAccess write never lands', async 
   const w = world({ dropRraPatch: true });
   const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--apim-principal-id', APIM_SP, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
   assert.equal(code, EXIT_FAILED);
-  assert.match(w.log.join('\n'), /read-back FAILED.*Directory\.Read\.All declared/);
+  assert.match(w.log.join('\n'), /read-back FAILED.*User\.ReadBasic\.All \+ GroupMember\.Read\.All declared/);
+});
+
+test('an existing Directory.Read.All declaration from an earlier run is KEPT, reported, and the two narrow roles are added', async () => {
+  // Breaks if: the legacy broad declaration is silently dropped (access removed unannounced) or not reported.
+  const w = world({ rra: [{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: LEARN_DIRECTORY_READ_ALL, type: 'Role' }] }], asSpExists: true });
+  await ensure(OPTS, w.io);
+  const ids = w.st.rra[0].resourceAccess.map((a) => a.id);
+  assert.deepEqual(ids, [LEARN_DIRECTORY_READ_ALL, LEARN_USER_READBASIC_ALL, LEARN_GROUPMEMBER_READ_ALL]);
+  assert.match(w.log.join('\n'), /still declares Directory\.Read\.All/);
 });
