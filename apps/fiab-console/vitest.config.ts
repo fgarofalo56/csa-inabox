@@ -22,12 +22,6 @@ try {
   react = null;
 }
 
-// Console-root suites (registry coverage, APIM policy/XML scope, Copilot Studio
-// <-> Dataverse scope) were previously dark because the globs only matched lib/**
-// and app/**; `__tests__` keeps them in.
-const SUITE_DIRS = ['lib/**/__tests__', 'app/**/__tests__', '__tests__'];
-const EXCLUDE = ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'];
-
 export default defineConfig({
   plugins: react ? [react()] : [],
   resolve: {
@@ -174,27 +168,25 @@ export default defineConfig({
     // (those fail all three attempts). Local runs keep retry 0 so flakes
     // stay visible to developers.
     retry: process.env.CI ? 2 : 0,
-    // `include` / `exclude` live per project: the .test.ts vs .test.tsx split IS
-    // the environment mapping (API/logic on node, render tests on jsdom).
+    // Root include/exclude = the FULL suite, as literals: scripts/ci/derive-infra-
+    // reading-suites.mjs regex-parses the first include array in this file and
+    // asserts it equals its INCLUDE regexes. Console-root `__tests__` suites were
+    // previously dark because the globs only matched lib/** and app/**.
+    //
+    // Projects use `extends: true`, which MERGES arrays with the root rather than
+    // overriding them (measured: re-declaring `include` per project made the node
+    // project pick up *.test.tsx and run it with no DOM). So the split is done with
+    // `exclude`, which also concatenates: the .test.ts vs .test.tsx split IS the
+    // environment mapping (API/logic on node, render tests on jsdom).
+    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
+    include: [
+      'lib/**/__tests__/**/*.test.{ts,tsx}',
+      'app/**/__tests__/**/*.test.{ts,tsx}',
+      '__tests__/**/*.test.{ts,tsx}',
+    ],
     projects: [
-      {
-        extends: true,
-        test: {
-          name: 'node',
-          environment: 'node',
-          include: SUITE_DIRS.map((d) => `${d}/**/*.test.ts`),
-          exclude: EXCLUDE,
-        },
-      },
-      {
-        extends: true,
-        test: {
-          name: 'jsdom',
-          environment: 'jsdom',
-          include: SUITE_DIRS.map((d) => `${d}/**/*.test.tsx`),
-          exclude: EXCLUDE,
-        },
-      },
+      { extends: true, test: { name: 'node', environment: 'node', exclude: ['**/*.test.tsx'] } },
+      { extends: true, test: { name: 'jsdom', environment: 'jsdom', exclude: ['**/*.test.ts'] } },
     ],
     // ── Coverage (rel-T28) ────────────────────────────────────────────────
     // istanbul provider (Babel instrumentation). `all: true` counts EVERY
@@ -255,10 +247,14 @@ export default defineConfig({
     //    honest one and is harder to game.
     coverage: {
       provider: 'istanbul',
-      all: true,
+      // vitest 4 removed `coverage.all`: untested files under `include` are now
+      // ALWAYS counted (the old `all: true` behaviour). It also stopped filtering
+      // by extension, so `include` must name source extensions or lib/**/*.py
+      // (lib/notebook/ai-display.py) is fed to the JS transformer and crashes the
+      // run (PR #5365 CI, shard 1: "Unexpected token (1:0)").
       reporter: ['text-summary', 'json-summary', 'text'],
       reportsDirectory: './coverage',
-      include: ['lib/**', 'app/**'],
+      include: ['lib/**/*.{js,cjs,mjs,ts,mts,cts,jsx,tsx}', 'app/**/*.{js,cjs,mjs,ts,mts,cts,jsx,tsx}'],
       exclude: [
         '**/__tests__/**',
         '**/*.test.{ts,tsx}',
