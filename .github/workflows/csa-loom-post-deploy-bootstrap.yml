@@ -3366,7 +3366,8 @@ jobs:
         # partition, idempotently (prints seeded|unchanged). The Cosmos host comes from the
         # account's own documentEndpoint and the oid from the console's own binding.
         # NOT continue-on-error: an unresolvable oid or Cosmos target fails the job, loudly.
-        # Needs Cosmos DB Built-in Data Contributor for the deploy identity (as seed-governance).
+        # Needs the deploy identity's container-scoped Data Contributor on feature-permissions,
+        # granted by loom-console-cosmos.bicep (featureGrantSeedDataAssignment, #5360).
         env:
           LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
           CONSOLE_RG: ${{ env.ADMIN_RG }}
