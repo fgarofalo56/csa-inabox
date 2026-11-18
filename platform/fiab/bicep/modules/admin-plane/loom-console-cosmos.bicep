@@ -571,3 +571,94 @@ resource brainScanDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRole
     }
   }
 ]
+
+// ===========================================================================
+// DEPLOY-SP FEATURE-GRANT SEED DATA-PLANE GRANT, ALL BOUNDARIES (Refs #5360)
+// ===========================================================================
+//
+// ── THE MEASURED PROBLEM ───────────────────────────────────────────────────
+// `csa-loom-post-deploy-bootstrap.yml` job `seed-automation-grant` runs
+// `scripts/csa-loom/seed-automation-feature-grant.mjs`, which upserts ONE
+// document (`health.tenant-admin::user::<oid>`) into the `feature-permissions`
+// container using the deploy service principal from `azure/login`. This
+// account has `disableLocalAuth: true`, so AAD-RBAC is the only data-plane
+// path, and the deploy SP held no `sqlRoleAssignments` in Commercial (the Gov
+// brain-scan block above is Gov-only). Bootstrap run 44256284701: the seed
+// reached Cosmos from the in-VNet runner and got HTTP 403 on
+// `containers/items/read`.
+//
+// ── DESIGN: THE SAME SHAPE AS THE BRAIN-SCAN BLOCK, ONE CONTAINER ──────────
+// Operator decision 2026-11-18. Principal = `deployerServicePrincipalId`
+// (threaded from `deployer().objectId` by admin-plane/main.bicep, empty for an
+// interactive deploy), so no object id enters this repo. Built-in Data
+// Contributor, scoped to `feature-permissions` ALONE, name read off the
+// container resource. Account and database scope are rejected for the reasons
+// recorded above: `loom` is the only database, so both would reach every
+// console container.
+//
+// A DEDICATED metadata role and assignment (own names), not a reuse of
+// `brainScanMetadataRole`: that one is gated on Gov, and re-gating it would
+// rename/churn live Gov resources. The two roles are identical in content
+// (`readMetadata` only: structure, no document) and independent in lifecycle.
+//
+// CLOUD PARITY: unlike the brain-scan grant this is NOT Gov-only. The bootstrap
+// seeds in every boundary and the deploy SP needs the grant in each; the gate
+// is only "non-interactive deployer" and "grants not suppressed". Commercial is
+// verified in compiled ARM; Gov/GCC/IL5 are supported-in-code, never exercised.
+//
+// The container is DECLARED here (it was previously only lazily created by the
+// console's createIfNotExists, and a role assignment cannot scope to a container
+// that does not exist). Partition key and default indexing match the console's
+// `mk('feature-permissions', '/tenantId')`, so the lazy path stays a no-op.
+// ===========================================================================
+
+var grantDeployFeatureGrantSeed = !empty(deployerServicePrincipalId) && !skipRoleGrants
+
+resource featurePermissions 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
+  parent: loomDb
+  name: 'feature-permissions'
+  properties: {
+    resource: {
+      id: 'feature-permissions'
+      partitionKey: { paths: ['/tenantId'], kind: 'Hash' }
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}
+
+resource featureGrantSeedMetadataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions@2024-12-01-preview' = if (grantDeployFeatureGrantSeed) {
+  parent: account
+  name: guid(account.id, 'loom-feature-grant-seed-metadata-reader')
+  properties: {
+    roleName: 'Loom Feature Grant Seed Metadata Reader'
+    type: 'CustomRole'
+    assignableScopes: [ account.id ]
+    permissions: [
+      {
+        dataActions: [
+          'Microsoft.DocumentDB/databaseAccounts/readMetadata'
+        ]
+      }
+    ]
+  }
+}
+
+resource featureGrantSeedMetadataAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (grantDeployFeatureGrantSeed) {
+  parent: account
+  name: guid(account.id, deployerServicePrincipalId, 'loom-feature-grant-seed-metadata-reader')
+  properties: {
+    roleDefinitionId: featureGrantSeedMetadataRole!.id
+    principalId: deployerServicePrincipalId
+    scope: account.id
+  }
+}
+
+resource featureGrantSeedDataAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (grantDeployFeatureGrantSeed) {
+  parent: account
+  name: guid(account.id, deployerServicePrincipalId, featurePermissions.name, '00000000-0000-0000-0000-000000000002')
+  properties: {
+    roleDefinitionId: '${account.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+    principalId: deployerServicePrincipalId
+    scope: '${account.id}/dbs/${loomDatabase}/colls/${featurePermissions.name}'
+  }
+}
