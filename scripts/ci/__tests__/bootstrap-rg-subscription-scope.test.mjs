@@ -266,10 +266,22 @@ test('failure gate: the real gate losing always() (deleted, or turned into succe
 });
 
 test('failure gate: a step appended after the real gate, or the warehouse step losing its id, is caught', () => {
-  const after = `${REAL.replace(/\s+$/, '')}\n\n      - name: A later step\n        run: echo later\n`;
-  // Breaks if the gate is allowed to stop being the last step (the later step's failure would be ungated).
-  assert.match(checkFailureGate(after).join('\n'), /not the LAST step/);
+  // Plant the later step at the END OF THE GATED JOB, not the end of the file: the
+  // workflow has jobs after `bootstrap` (seed-automation-grant, #5360), so a step
+  // appended to the file lands in another job and the mutation is blind.
   const [gated] = FAILURE_GATE.gatedIds;
+  const lines = REAL.split('\n');
+  const idAt = lines.findIndex((l) => new RegExp(`^ {8}id: ${gated}\\r?$`).test(l));
+  assert.ok(idAt > 0, 'the gated step id line was not found — re-aim this mutation');
+  let jobEnd = lines.findIndex((l, i) => i > idAt && /^ {2}[A-Za-z][\w-]*:\s*$/.test(l));
+  if (jobEnd < 0) jobEnd = lines.length;
+  while (jobEnd > idAt && lines[jobEnd - 1].trim() === '') jobEnd -= 1;
+  const afterLines = [...lines];
+  afterLines.splice(jobEnd, 0, '', '      - name: A later step', '        run: echo later');
+  const after = afterLines.join('\n');
+  // Breaks if the gate is allowed to stop being the last step of its job (the later
+  // step's failure would be ungated): the planted step sits after the gate, in the same job.
+  assert.match(checkFailureGate(after).join('\n'), /not the LAST step/);
   const noId = REAL.replace(new RegExp(`\\n {8}id: ${gated}\\r?\\n`), '\n');
   assert.notEqual(noId, REAL, 'the gated step id line was not found — re-aim this mutation');
   // Breaks if the gate may read the outcome of a step id that no longer exists
