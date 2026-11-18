@@ -104,9 +104,33 @@ test('MUTATION: the seed step back on the public-runner job is detected (the def
   assert.doesNotMatch(runsOn(seedJob(hosted).body), /loom-aca/, 'hosted mutation did not remove loom-aca');
 });
 
-test('bootstrap exports the discovered DLZ group for the seed job', () => {
-  const b = jobs(real).bootstrap;
-  // Breaks if the output wiring is removed: the seed job would lose the DLZ fallback.
-  assert.match(b, /^ {4}outputs:\n {6}dlz_rg: \$\{\{ steps\.dlz\.outputs\.dlz_rg \}\}/m);
-  assert.match(b, /echo "dlz_rg=\$\{DLZ_RG:-\}" >> "\$GITHUB_OUTPUT"/);
+test('the seed job re-discovers the DLZ in-job and never consumes the masked bootstrap output', () => {
+  const { body } = seedJob(real);
+  const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  // Breaks on the value `needs.bootstrap.outputs.dlz_sub` (or dlz_rg): bootstrap ::add-mask::s the
+  // discovered subscription and GitHub redacts masked values from job outputs, so it is ALWAYS empty
+  // and the seed would silently fall back to ADMIN_SUB.
+  assert.doesNotMatch(code, /needs\.bootstrap\.outputs\.dlz_/);
+  // Positive pair: discovery really runs in this job, before the seed step, and writes GITHUB_ENV.
+  const disc = code.indexOf('resolve-dlz-coordinates.mjs');
+  const seed = code.indexOf(`node scripts/csa-loom/${SEED_SCRIPT}`);
+  assert.ok(disc >= 0 && disc < seed, `discovery at ${disc}, seed at ${seed}`);
+  assert.match(code, /--github-env "\$GITHUB_ENV"/);
+  // The bootstrap job must not keep a dead output of the same name.
+  assert.doesNotMatch(jobs(real).bootstrap, /^ {4}outputs:/m);
+});
+
+test('MUTATION: consuming the masked output again is detected', () => {
+  const lf = real.replace(/\r\n/g, '\n');
+  const mutated = lf.replace(
+    '          # DLZ_RG / DLZ_SUB come from',
+    '          DLZ_SUB: ${{ needs.bootstrap.outputs.dlz_sub || env.ADMIN_SUB }}\n          # DLZ_RG / DLZ_SUB come from');
+  assert.notEqual(mutated, lf, 'mutation did not apply - blind');
+  const code = seedJob(mutated).body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.match(code, /needs\.bootstrap\.outputs\.dlz_sub/, 'the guard regex would not see the planted consumption');
+});
+
+test('the bootstrap Summary says the seed runs in the separate job', () => {
+  // Breaks if the line is removed: a green Summary would read as if the seed had run in this job.
+  assert.match(real, /NOT in this job - it runs in the separate seed-automation-grant job/);
 });

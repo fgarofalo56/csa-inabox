@@ -187,9 +187,6 @@ env:
 jobs:
   bootstrap:
     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
-    outputs:
-      dlz_rg: ${{ steps.dlz.outputs.dlz_rg }}
-      dlz_sub: ${{ steps.dlz.outputs.dlz_sub }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -3107,20 +3104,6 @@ jobs:
             *) fail "defect-or-configuration" "exit $RC; read the script output above." ;;
           esac
 
-      - name: Export discovered DLZ coordinates for the in-VNet automation-grant seed job
-        # The automation-identity grant seed moved to the `seed-automation-grant` job (#5360): it
-        # must run on the in-VNet runner because the Loom Cosmos account is
-        # publicNetworkAccess=Disabled and this public runner is refused with HTTP 403. That job
-        # cannot read $GITHUB_ENV from this one, so the DISCOVERED DLZ group is handed over as a
-        # job output. A DLZ_SUB equal to a registered value is scrubbed by GitHub (#3090); the
-        # seed job then falls back to the admin subscription, the only case where they match.
-        if: ${{ !cancelled() }}
-        id: dlz
-        run: |
-          set -uo pipefail
-          echo "dlz_rg=${DLZ_RG:-}" >> "$GITHUB_OUTPUT"
-          echo "dlz_sub=${DLZ_SUB:-}" >> "$GITHUB_OUTPUT"
-
       - name: Restore Loom Key Vault private (verified)
         # Runs always() — including after a failed or cancelled earlier step,
         # which is exactly when the vault is most likely to have been left open.
@@ -3164,6 +3147,7 @@ jobs:
         if: always()
         run: |
           echo "==== Bootstrap complete ===="
+          echo "Automation-identity grant seed (health.tenant-admin): NOT in this job - it runs in the separate seed-automation-grant job on the in-VNet runner (Commercial); check that job's result."
           echo "Console UAMI resolved: $CONSOLE_UAMI_PRINCIPAL (grants below all target this principal)"
           echo "Purview Data Map: data-reader + data-curator + data-source-administrator + collection-administrator granted on root collection (PE toggle + restore handled by script)"
           echo "Weave ontology: PG + Apache AGE graph 'loom_ontology' created; Console UAMI registered as PG principal (object/link/action instance write-back)"
@@ -3351,6 +3335,29 @@ jobs:
         if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
         run: az cloud set --name AzureUSGovernment
 
+      # The bootstrap job's discovery cannot be handed over: it ::add-mask::s the discovered
+      # subscription id, and GitHub redacts ANY masked value from a job output, so a
+      # `needs.bootstrap.outputs.dlz_sub` is always empty. Re-resolve it here with the same script.
+      - name: Pre-install the resource-graph CLI extension
+        run: |
+          set -e
+          az extension add --name resource-graph --upgrade --only-show-errors -o none
+
+      - name: Discover the Data Landing Zone (subscription + domain)
+        env:
+          INPUT_DLZ_SUBSCRIPTION: ${{ inputs.dlz_subscription }}
+          INPUT_DLZ_DOMAIN: ${{ inputs.dlz_domain }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/resolve-dlz-coordinates.mjs \
+            --region "$REGION" \
+            --admin-subscription "$ADMIN_SUB" \
+            ${INPUT_DLZ_SUBSCRIPTION:+--dlz-subscription "$INPUT_DLZ_SUBSCRIPTION"} \
+            ${INPUT_DLZ_DOMAIN:+--dlz-domain "$INPUT_DLZ_DOMAIN"} \
+            --github-env "$GITHUB_ENV"
+          DISCOVERED_SUB="$(grep '^DLZ_SUB=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          if [ -n "$DISCOVERED_SUB" ]; then echo "::add-mask::$DISCOVERED_SUB"; fi
+
       - name: Seed automation identity feature grant (health.tenant-admin Contributor for loom-ui-verify)
         # Operator decision 2026-11-16. loom-ui-verify's minted session has NO tid, so its grant
         # scope is its own oid (lib/auth/session.ts tenantScopeId = tid || oid); a grant written
@@ -3364,10 +3371,8 @@ jobs:
           LOOM_AUTOMATION_OID_OVERRIDE: ${{ vars.LOOM_AUTOMATION_OID || '' }}
           CONSOLE_RG: ${{ env.ADMIN_RG }}
           CONSOLE_SUBSCRIPTION: ${{ env.ADMIN_SUB }}
-          # DISCOVERED by the bootstrap job; empty => no DLZ discovered. An empty DLZ_SUB
-          # (scrubbed output, #3090) means it equalled the admin subscription.
-          DLZ_RG: ${{ needs.bootstrap.outputs.dlz_rg }}
-          DLZ_SUB: ${{ needs.bootstrap.outputs.dlz_sub || env.ADMIN_SUB }}
+          # DLZ_RG / DLZ_SUB come from the "Discover the Data Landing Zone" step above via
+          # $GITHUB_ENV. They are deliberately NOT set here (a step-level env would override it).
         run: |
           set -uo pipefail
           fail() {
