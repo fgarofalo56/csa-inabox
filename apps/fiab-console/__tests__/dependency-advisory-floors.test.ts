@@ -50,7 +50,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createRequire } from 'node:module';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -97,11 +97,16 @@ function lockedVersions(lock: string, name: string): string[] {
 const lock = readFileSync(LOCKFILE, 'utf8');
 
 /** Floors are per-major: a parent's declared range cannot cross a major. */
-const FLOORS: Array<{ pkg: string; major: number; floor: string; why: string }> = [
+const FLOORS: Array<{ pkg: string; major: number; floor: string; why: string; mayBeAbsent?: boolean }> = [
   { pkg: 'js-yaml', major: 4, floor: '4.3.2', why: 'GHSA-2883-xcg3-v3hh fixed in 4.3.2' },
   { pkg: 'form-data', major: 4, floor: '4.0.6', why: 'advisory fixed in 4.0.6' },
   { pkg: 'brace-expansion', major: 1, floor: '1.1.21', why: 'GHSA-q2hr-2g5m-vwhr fixed in 1.1.21' },
-  { pkg: 'brace-expansion', major: 2, floor: '2.1.7', why: 'GHSA-q2hr-2g5m-vwhr fixed in 2.1.7' },
+  // mayBeAbsent: the only brace-expansion 2.x consumer was minimatch@9, reached
+  // through vitest 3's coverage chain; vitest 4 + coverage 4.1.11 dropped it, so
+  // 2.x is legitimately gone from the lockfile (measured). The override stays
+  // declared in both homes so a reintroduced 2.x is floored, and if one appears
+  // it must still be >= 2.1.7.
+  { pkg: 'brace-expansion', major: 2, floor: '2.1.7', why: 'GHSA-q2hr-2g5m-vwhr fixed in 2.1.7', mayBeAbsent: true },
   { pkg: 'brace-expansion', major: 5, floor: '5.0.12', why: 'GHSA-q2hr-2g5m-vwhr fixed in 5.0.12' },
 ];
 
@@ -117,13 +122,15 @@ const BANNED: ReadonlyArray<readonly [string, string]> = [
 ];
 
 describe('Batch-1 advisory floors — pnpm-lock.yaml (what a clean install produces)', () => {
-  for (const { pkg, major, floor, why } of FLOORS) {
+  for (const { pkg, major, floor, why, mayBeAbsent } of FLOORS) {
     it(`${pkg} ${major}.x resolves >= ${floor} (${why})`, () => {
       const inMajor = lockedVersions(lock, pkg).filter((v) => parse(v)[0] === major);
       // The lockfile must actually contain this major — otherwise the
       // assertion below would pass over an empty list and prove nothing.
-      expect(inMajor.length, `${pkg} ${major}.x is absent from the lockfile; this guard would be vacuous`)
-        .toBeGreaterThan(0);
+      if (!mayBeAbsent) {
+        expect(inMajor.length, `${pkg} ${major}.x is absent from the lockfile; this guard would be vacuous`)
+          .toBeGreaterThan(0);
+      }
       for (const v of inMajor) {
         expect(gte(v, floor), `${pkg}@${v} is below the ${floor} floor`).toBe(true);
       }
@@ -207,7 +214,10 @@ describe.skipIf(!existsSync(PNPM_STORE))('Batch-1 floors — what each consumer 
   it('CONTROL: the console dependency tree is present and resolvable', () => {
     const req = createRequire(join(CONSOLE_ROOT, 'package.json'));
     expect(() => req.resolve('typescript/package.json')).not.toThrow();
-    expect(() => req.resolve('minimatch/package.json')).not.toThrow();
+    // minimatch is TRANSITIVE: whether require.resolve from the console root finds
+    // it depends on pnpm hoisting (pnpm 11 does not hoist it to the root). Assert it
+    // is installed in the pnpm store instead, so the control still fails on an empty tree.
+    expect(readdirSync(PNPM_STORE).filter((d) => d.startsWith('minimatch@')).length).toBeGreaterThan(0);
     expect(lockedVersions(lock, 'minimatch').length).toBeGreaterThan(0);
   });
 });

@@ -1,118 +1,45 @@
 /**
- * Structural advisory guard, NOT an exploit reproduction or security scan.
- * 1.1.1 / 2.1.1 or a missing mirror must fail the version test. Worker tests
- * measure compatibility of the deliberate Vitest 3 -> tinypool 2 override:
- * wrong export/channel/transferList, reversed operands, or retained isolated
- * state must fail. The APIs match Vitest 3.2.7's published createForksPool /
- * createThreadsPool (including named run, teardown, and recycleWorkers).
+ * Advisory floor for tinypool (CVE-2026-104848 / CVE-2026-104849, first patched
+ * 2.1.2), re-aimed when vitest moved 3 -> 4 (#5357).
+ *
+ * History: vitest 3.2.7 pulled tinypool ^1.1.1, so a `vitest>tinypool: 2.1.2`
+ * override forced the patched major and this file exercised its worker modes.
+ * vitest 4 no longer depends on tinypool at all (measured: no `tinypool@` entry
+ * in pnpm-lock.yaml), so the override was inert and was removed from BOTH
+ * package.json and pnpm-workspace.yaml, and the worker-mode probes with it.
+ *
+ * What this still guards: if ANY package ever brings tinypool back into the
+ * tree, it must be >= 2.1.2. Absent is a pass; vulnerable is a failure.
+ * The positive control proves the lockfile parser reads this lockfile (a
+ * parser pointed at nothing would also report "no tinypool").
  */
 import { describe, expect, it } from 'vitest';
-import { createRequire } from 'node:module';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { MessageChannel } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const consoleRequire = createRequire(join(root, 'package.json'));
-const vitestRequire = createRequire(consoleRequire.resolve('vitest/package.json'));
-const tinypoolEntry = vitestRequire.resolve('tinypool');
 const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
 
-const workerSource = `
-import { isMainThread } from 'node:worker_threads';
-let calls = 0;
-export async function run({ a, b, port }) {
-  const count = ++calls;
-  const reply = await new Promise((resolve) => {
-    if (port) {
-      port.once('message', resolve);
-      port.postMessage('ready');
-    } else {
-      const listener = (message) => {
-        if (message?.__tinypool_worker_message__) return;
-        process.off('message', listener);
-        resolve(message);
-      };
-      process.on('message', listener);
-      process.send('ready');
-    }
-  });
-  port?.close();
-  return { result: a - b, reply, count,
-    runtime: isMainThread ? 'child_process' : 'worker_threads' };
-}
-export function teardown() {}
-`;
+const cmp = (a: string, b: string) => {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  return 0;
+};
 
-describe('tinypool minimum patched version and Vitest calling modes', () => {
-  it('locks and actually resolves 2.1.2 from Vitest, with both pnpm mirrors', () => {
-    const versions = [...lock.matchAll(/^ {2}tinypool@(\d+\.\d+\.\d+):/gm)].map((m) => m[1]);
-    // Exact positive set: deletion and adding a second vulnerable entry fail.
-    expect(versions).toEqual(['2.1.2', '2.1.2']);
-    expect(lock).toMatch(/^ {6}tinypool: 2\.1\.2$/m);
-    expect(lock).toMatch(/^ {2}vitest>tinypool: 2\.1\.2$/m);
+describe('tinypool advisory floor (>= 2.1.2 if present at all)', () => {
+  it('CONTROL: the lockfile parser sees vitest 4.1.11 (so "no tinypool" is a real absence)', () => {
+    const versions = [...lock.matchAll(/^ {2}vitest@(\d+\.\d+\.\d+)[(:]/gm)].map((m) => m[1]);
+    expect(versions.length).toBeGreaterThan(0);
+    expect(versions).toContain('4.1.11');
+  });
+
+  it('no locked tinypool is below 2.1.2; the stale vitest>tinypool override is gone', () => {
+    const versions = [...lock.matchAll(/^ {2}tinypool@(\d+\.\d+\.\d+)[(:]/gm)].map((m) => m[1]);
+    const vulnerable = versions.filter((v) => cmp(v, '2.1.2') < 0);
+    expect(vulnerable, `tinypool below 2.1.2 is locked: ${vulnerable.join(', ')}`).toEqual([]);
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-    expect(manifest.pnpm.overrides['vitest>tinypool']).toBe('2.1.2');
-    expect(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8'))
-      .toMatch(/^ {2}'vitest>tinypool': '2\.1\.2'$/m);
-    const installed = JSON.parse(readFileSync(join(dirname(tinypoolEntry), '..', 'package.json'), 'utf8'));
-    expect(installed.version).toBe('2.1.2');
+    expect(manifest.pnpm.overrides['vitest>tinypool']).toBeUndefined();
   });
-
-  for (const runtime of ['child_process', 'worker_threads'] as const) {
-    for (const isolateWorkers of [true, false]) {
-      it(`${runtime} supports named run, bidirectional RPC, isolation=${isolateWorkers}, recycle and destroy`, async () => {
-        const { default: Tinypool } = await import(/* @vite-ignore */ pathToFileURL(tinypoolEntry).href);
-        const tempRoot = join(root, '..', '..', 'temp');
-        mkdirSync(tempRoot, { recursive: true });
-        const temp = mkdtempSync(join(tempRoot, 'tinypool-worker-'));
-        const filename = join(temp, 'worker.mjs');
-        writeFileSync(filename, workerSource);
-        const pool = new Tinypool({
-          runtime, filename, teardown: 'teardown', isolateWorkers,
-          minThreads: 1, maxThreads: 1, concurrentTasksPerWorker: 1,
-          useAtomics: false, execArgv: [], terminateTimeout: 5_000,
-        });
-        const invoke = async (count: number) => {
-          const { port1, port2 } = new MessageChannel();
-          let send: ((message: unknown) => void) | undefined;
-          let ready: unknown;
-          try {
-            const result = runtime === 'child_process'
-              ? await pool.run({ a: 17, b: 5 }, {
-                name: 'run',
-                channel: {
-                  onMessage(listener: (message: unknown) => void) { send = listener; },
-                  postMessage(message: unknown) { ready = message; send?.('ack'); },
-                },
-              })
-              : await (() => {
-                port2.once('message', (message) => { ready = message; port2.postMessage('ack'); });
-                return pool.run({ a: 17, b: 5, port: port1 }, {
-                  name: 'run', transferList: [port1],
-                  channel: { onClose() { port1.close(); port2.close(); } },
-                });
-              })();
-            expect(ready).toBe('ready');
-            expect(result).toEqual({ result: 12, reply: 'ack', count, runtime });
-          } finally {
-            port1.close();
-            port2.close();
-          }
-        };
-        try {
-          await invoke(1);
-          await invoke(isolateWorkers ? 1 : 2);
-          await pool.recycleWorkers();
-          await invoke(1);
-        } finally {
-          await pool.destroy();
-          rmSync(temp, { recursive: true, force: true });
-        }
-        // Leaving even one worker behind makes this fail.
-        expect(pool.threads).toHaveLength(0);
-      });
-    }
-  }
 });
