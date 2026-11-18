@@ -7,6 +7,9 @@
  *      trusts the control-plane managed identity (control-plane.bicep output
  *      `authFederatedCredential`: issuer {login}/{tenant}/v2.0, subject = identity
  *      principal id, audience api://AzureADTokenExchange[USGov]). ARM cannot create it.
+ *   1a. `requiredResourceAccess` on that same AS app declares Microsoft Graph Directory.Read.All
+ *      (application; what its checkMemberGroups call needs) and its SERVICE PRINCIPAL is created, so
+ *      admin consent is possible at all (#5346). Declaring is not consenting: nothing here grants it.
  *   2. APP ROLES `HealthCP.Reader` + `HealthCP.Admin` on the control-plane app registration
  *      (--cp-app-client-id, the token audience), fixed ids, never duplicated; then
  *      `HealthCP.Reader` assigned to the APIM gateway identity (routing-map read) and
@@ -46,6 +49,13 @@ export const EXIT_UNSUPPORTED = 5;
 export const ROLE_READER = { value: 'HealthCP.Reader', id: '71f8acc4-d1c5-52b8-88a5-af68cf307ac1', displayName: 'Health control plane reader', description: 'Read stamps, tenants, the routing map, SLO, jobs and the PDP bundle.' };
 export const ROLE_ADMIN = { value: 'HealthCP.Admin', id: '271ee6d8-ae5e-56cd-ab75-2cf66efe03a3', displayName: 'Health control plane administrator', description: 'Everything HealthCP.Reader can do, plus create and change stamps, tenants, routing and jobs.' };
 export const FED_CRED_NAME = 'lhds-control-plane-identity';
+// The Microsoft Graph application permission the authorization server's group check needs.
+// The AS (apps/loom-health-cp/src/auth/federation.ts) POSTs /directoryObjects/{oid}/checkMemberGroups;
+// Learn (graph/api/directoryobject-checkmembergroups) lists Directory.Read.All as the least-privileged
+// APPLICATION permission for that endpoint. Id from graph/permissions-reference. Graph's resource appId
+// is the same in every cloud. Declaring it is NOT consent: a Global Administrator still grants it.
+export const GRAPH_RESOURCE_APP_ID = '00000003-0000-0000-c000-000000000000';
+export const GRAPH_PERMISSION = { name: 'Directory.Read.All', id: '7ab1d382-f21e-4acd-a863-ba3e13f7da61', type: 'Role' };
 export const ALLOWLIST_ENV = 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS';
 
 export const MAX_ATTEMPTS = 4;
@@ -72,6 +82,16 @@ export function expectedFederatedCredential(cloud, tenantId, subject) {
     audiences: [gov ? 'api://AzureADTokenExchangeUSGov' : 'api://AzureADTokenExchange'],
     description: 'LHDS control-plane managed identity (managed by bootstrap-health-cp-entra.mjs, #5163)',
   };
+}
+
+/** requiredResourceAccess with GRAPH_PERMISSION declared, every other entry kept. Pure; returns null when already declared. */
+export function withGraphPermission(current) {
+  const list = Array.isArray(current) ? current.map((r) => ({ ...r, resourceAccess: [...(r.resourceAccess ?? [])] })) : [];
+  let graph = list.find((r) => String(r.resourceAppId).toLowerCase() === GRAPH_RESOURCE_APP_ID);
+  if (graph?.resourceAccess.some((a) => a.id === GRAPH_PERMISSION.id && a.type === GRAPH_PERMISSION.type)) return null;
+  if (!graph) { graph = { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [] }; list.push(graph); }
+  graph.resourceAccess.push({ id: GRAPH_PERMISSION.id, type: GRAPH_PERMISSION.type });
+  return list;
 }
 
 /** Union of two comma lists, order preserved, case-insensitive dedupe, blanks dropped. */
@@ -179,7 +199,15 @@ export async function ensure(opts, io) {
   const fed = expectedFederatedCredential(io.cloud(), opts.tenantId, opts.cpIdentityPrincipalId);
 
   // ---- 1. federated credential on the authorization-server app ----
-  const asApp = await readApp(io, host, opts.asClientId, 'id,appId,displayName', 'authorization-server');
+  const asApp = await readApp(io, host, opts.asClientId, 'id,appId,displayName,requiredResourceAccess', 'authorization-server');
+  // 1a. declare the Graph permission its group check needs, and make sure its service principal
+  // exists. Without both, admin consent is impossible (#5346). NOT consent itself.
+  const rra = withGraphPermission(asApp.requiredResourceAccess);
+  if (rra) {
+    if (plan.dryRun) plan.would.push(`declare Microsoft Graph ${GRAPH_PERMISSION.name} (application) in requiredResourceAccess on the authorization-server app ${opts.asClientId}`);
+    else { await call(io, host, 'PATCH', `/applications/${asApp.id}`, { requiredResourceAccess: rra }, { what: `declare ${GRAPH_PERMISSION.name} on the authorization-server application ${asApp.id}` }); plan.writes++; }
+  }
+  await ensureServicePrincipal(io, host, opts.asClientId, 'the authorization-server app', plan);
   const credPath = `/applications/${asApp.id}/federatedIdentityCredentials`;
   const sameCred = (c) => c.issuer === fed.issuer && c.subject === fed.subject && (c.audiences ?? []).length === 1 && c.audiences[0] === fed.audiences[0];
   const creds = await listAll(io, host, credPath, { what: `list federated credentials on the authorization-server app ${asApp.id}` });
@@ -267,6 +295,9 @@ export async function ensure(opts, io) {
     for (let attempt = 1; attempt <= READBACK_ATTEMPTS; attempt++) {
       problems = [];
       const cc = await listAll(io, host, credPath);
+      if (withGraphPermission((await readApp(io, host, opts.asClientId, 'id,requiredResourceAccess', 'authorization-server')).requiredResourceAccess)) problems.push(`${GRAPH_PERMISSION.name} declared in requiredResourceAccess on ${opts.asClientId}`);
+      const asSp = await call(io, host, 'GET', `/servicePrincipals(appId='${opts.asClientId}')?$select=id,appId`, undefined, { nullOn404: true, what: 'read back the authorization-server service principal' });
+      if (!asSp?.json?.id) problems.push(`service principal for the authorization-server app ${opts.asClientId}`);
       if (!cc.some(sameCred)) problems.push(`federated credential on ${opts.asClientId} with issuer ${fed.issuer} / subject ${fed.subject} / audience ${fed.audiences[0]}`);
       const rr = (await readApp(io, host, opts.cpAppClientId, 'id,appRoles', 'control-plane')).appRoles ?? [];
       for (const r of [ROLE_READER, ROLE_ADMIN]) if (!roleOk(rr.find((x) => x.value === r.value))) problems.push(`appRole ${r.value} enabled and Application-typed`);

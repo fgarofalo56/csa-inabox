@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ensure, run, expectedFederatedCredential, mergeAllowlist, parseArgs,
-  ROLE_READER, ROLE_ADMIN, FED_CRED_NAME, ALLOWLIST_ENV,
+  ROLE_READER, ROLE_ADMIN, FED_CRED_NAME, ALLOWLIST_ENV, GRAPH_PERMISSION, GRAPH_RESOURCE_APP_ID, withGraphPermission,
   EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PERMISSION, EXIT_UNSUPPORTED,
 } from '../bootstrap-health-cp-entra.mjs';
 import { GraphError } from '../ensure-estate-power-role.mjs';
@@ -22,8 +22,8 @@ const OPTS = {
 };
 
 /** In-memory Graph + Container App. `calls` records every request; writes() filters non-GET. */
-function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = [], allow = '', cpSpExists = true, denyWrite = false, dropCredPost = false } = {}) {
-  const st = { creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
+function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = [], allow = '', cpSpExists = true, denyWrite = false, dropCredPost = false, rra = [], asSpExists = false, dropRraPatch = false } = {}) {
+  const st = { rra, asSpExists, creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
   const log = [];
   const io = {
     cloud: () => cloud,
@@ -36,7 +36,12 @@ function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = 
       log.push(`${method} ${path.split('?')[0]}`);
       if (method !== 'GET' && denyWrite) throw new GraphError(403, `${method} -> 403: Insufficient privileges`);
       const p = path.split('?')[0];
-      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP } };
+      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP, requiredResourceAccess: st.rra } };
+      if (method === 'PATCH' && p === `/applications/${AS_OBJ}`) { if (!dropRraPatch) st.rra = body.requiredResourceAccess; return { json: {} }; }
+      if (method === 'GET' && p === `/servicePrincipals(appId='${AS_APP}')`) {
+        if (!st.asSpExists) throw new GraphError(404, 'not found');
+        return { json: { id: G(9), appId: AS_APP } };
+      }
       if (method === 'GET' && p === `/applications(appId='${CP_APP}')`) return { json: { id: CP_OBJ, appId: CP_APP, appRoles: st.appRoles } };
       if (method === 'GET' && p === `/applications/${AS_OBJ}/federatedIdentityCredentials`) return { json: { value: st.creds } };
       if (method === 'POST' && p === `/applications/${AS_OBJ}/federatedIdentityCredentials`) {
@@ -53,7 +58,7 @@ function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = 
         if (!cpSpExists) throw new GraphError(404, 'not found');
         return { json: { id: CP_SP, appId: CP_APP } };
       }
-      if (method === 'POST' && p === '/servicePrincipals') { cpSpExists = true; return { json: {} }; }
+      if (method === 'POST' && p === '/servicePrincipals') { if (body.appId === AS_APP) st.asSpExists = true; else cpSpExists = true; return { json: {} }; }
       if (method === 'GET' && p === `/servicePrincipals(appId='${CI_APP}')`) return { json: { id: CI_SP, appId: CI_APP } };
       if (method === 'GET' && p.startsWith("/servicePrincipals(appId='")) throw new GraphError(404, 'not found'); // any other appId: unknown to Graph
       if (method === 'GET' && p === `/servicePrincipals/${APIM_SP}`) return { json: { id: APIM_SP, appId: APIM_APPID } };
@@ -75,6 +80,8 @@ test('first run converges everything; the second run issues ZERO writes', async 
   const w = world({ cpSpExists: false });
   const first = await ensure(OPTS, w.io);
   assert.deepEqual(w.writes(), [
+    `PATCH /applications/${AS_OBJ}`,
+    'POST /servicePrincipals',
     `POST /applications/${AS_OBJ}/federatedIdentityCredentials`,
     `PATCH /applications/${CP_OBJ}`,
     'POST /servicePrincipals',
@@ -82,7 +89,7 @@ test('first run converges everything; the second run issues ZERO writes', async 
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
   ]);
-  assert.equal(first.writes, 7, '6 Graph writes + 1 env update');
+  assert.equal(first.writes, 9, '8 Graph writes (AS requiredResourceAccess, AS SP, cred, CP roles, CP SP, 3 assignments) + 1 env update');
   assert.deepEqual(w.st.assignments, [
     { principalId: APIM_SP, appRoleId: ROLE_READER.id },
     { principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id },
@@ -269,4 +276,42 @@ test('a CI SP unknown to Graph fails with a definite not-found, no CI assignment
   const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', G(5), '--cp-identity-principal-id', CP_IDENTITY, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
   assert.equal(code, EXIT_FAILED);
   assert.deepEqual(w.st.assignments, []);
+});
+
+test('the AS app declares Graph Directory.Read.All (application) and gets a service principal; nothing is consented', async () => {
+  // Breaks if: the PATCH omits the permission or declares it as Scope (delegated) instead of Role, uses another id,
+  // drops an unrelated declared resource, or the AS service principal is never created (consent stays impossible, #5346).
+  const keep = { resourceAppId: G(5), resourceAccess: [{ id: G(6), type: 'Scope' }] };
+  const w = world({ rra: [keep] });
+  await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.rra, [keep, { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: '7ab1d382-f21e-4acd-a863-ba3e13f7da61', type: 'Role' }] }]);
+  assert.equal(GRAPH_PERMISSION.type, 'Role');
+  assert.equal(w.st.asSpExists, true);
+  assert.ok(!w.log.some((l) => /oauth2PermissionGrants/.test(l)), 'declaring is not consenting: no grant call');
+});
+
+test('withGraphPermission is idempotent and merges into an existing Graph entry', () => {
+  // Breaks if: a second run appends a duplicate, or an existing Graph delegated entry is overwritten.
+  const mine = { id: GRAPH_PERMISSION.id, type: 'Role' };
+  assert.equal(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID.toUpperCase(), resourceAccess: [mine] }]), null);
+  const merged = withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: G(6), type: 'Scope' }] }]);
+  assert.deepEqual(merged[0].resourceAccess, [{ id: G(6), type: 'Scope' }, mine]);
+  assert.equal(merged.length, 1);
+  assert.notEqual(withGraphPermission([{ resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [{ id: GRAPH_PERMISSION.id, type: 'Scope' }] }]), null, 'a delegated Scope with the same id is NOT the application role');
+});
+
+test('the declared Graph permission matches what the AS code calls (lifted from source)', () => {
+  // Breaks if: the AS moves off /directoryObjects/{oid}/checkMemberGroups, whose least-privileged application
+  // permission (Learn) is Directory.Read.All, without this script following.
+  const src = readFileSync(fileURLToPath(new URL('../../../apps/loom-health-cp/src/auth/federation.ts', import.meta.url)), 'utf8');
+  assert.ok(src.includes('/directoryObjects/${oid}/checkMemberGroups'));
+  assert.equal(GRAPH_PERMISSION.name, 'Directory.Read.All');
+});
+
+test('read-back fails when the requiredResourceAccess write never lands', async () => {
+  // Breaks if: the PATCH status is trusted without re-reading the app (it would exit 0 with consent still impossible).
+  const w = world({ dropRraPatch: true });
+  const code = await run(['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY, '--apim-principal-id', APIM_SP, '--cp-app-name', 'a', '--cp-resource-group', 'b', '--subscription', 'c'], w.io);
+  assert.equal(code, EXIT_FAILED);
+  assert.match(w.log.join('\n'), /read-back FAILED.*Directory\.Read\.All declared/);
 });
