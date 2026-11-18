@@ -58,7 +58,9 @@ test('the hub vaultcore zone name comes from environment(), never a hard-coded c
   const z = arm.variables.hubVaultZoneName;
   // Breaks if hard-coded to privatelink.vaultcore.azure.net: GCC-High / IL5 / DoD resolve .usgovcloudapi.net.
   assert.match(z, /environment\(\)\.suffixes\.keyvaultDns/);
-  assert.doesNotMatch(z, /vaultcore\.(azure\.net|usgovcloudapi\.net)/);
+  for (const suffix of ['vaultcore.azure.net', 'vaultcore.usgovcloudapi.net']) {
+    assert.ok(!z.includes(suffix), `hub zone name hard-codes ${suffix}: ${z}`);
+  }
   assert.match(z, /^\[format\('privatelink\.vaultcore/);
 });
 
