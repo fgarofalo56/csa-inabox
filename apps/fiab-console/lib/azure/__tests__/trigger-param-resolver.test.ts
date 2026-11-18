@@ -9,9 +9,10 @@ const { getToken } = vi.hoisted(() => ({
 }));
 
 vi.mock('@azure/identity', () => ({
-  DefaultAzureCredential: vi.fn(() => ({ getToken })),
-  ManagedIdentityCredential: vi.fn(() => ({ getToken })),
-  ChainedTokenCredential: vi.fn(() => ({ getToken })),
+  // vitest 4: a mock invoked with `new` must be a `function`/class, not an arrow.
+  DefaultAzureCredential: vi.fn(function () { return { getToken }; }),
+  ManagedIdentityCredential: vi.fn(function () { return { getToken }; }),
+  ChainedTokenCredential: vi.fn(function () { return { getToken }; }),
 }));
 
 import { resolveParamBindings, paramSourceAvailability, type ParamBinding } from '../trigger-param-resolver';

@@ -22,6 +22,12 @@ try {
   react = null;
 }
 
+// Console-root suites (registry coverage, APIM policy/XML scope, Copilot Studio
+// <-> Dataverse scope) were previously dark because the globs only matched lib/**
+// and app/**; `__tests__` keeps them in.
+const SUITE_DIRS = ['lib/**/__tests__', 'app/**/__tests__', '__tests__'];
+const EXCLUDE = ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'];
+
 export default defineConfig({
   plugins: react ? [react()] : [],
   resolve: {
@@ -73,15 +79,15 @@ export default defineConfig({
     // ResizeObserver/matchMedia stubs) is now wired so render() actually mounts —
     // the harness was previously env:'node' with no setupFiles, which made every
     // render test fail to mount (see .claude memory fiab-console-vitest-harness-broken).
+    //
+    // vitest 4 REMOVED `environmentMatchGlobs` (and `workspace`): left in place it is
+    // silently ignored and every file runs on node, so every DOM test dies in ~2ms
+    // with `ReferenceError: document is not defined` (main red after #5357). The
+    // same file->environment mapping is now two `projects` (see below).
     environment: 'node',
-    environmentMatchGlobs: [
-      ['**/*.test.tsx', 'jsdom'],
-    ],
     setupFiles: ['./vitest.setup.ts'],
     globals: false,
     pool: 'forks',
-    poolOptions: {
-      forks: {
         // ── `[vitest-worker]: Timeout calling "onTaskUpdate"` — SOLVED (#2944)
         //
         // READ THIS BEFORE FORMING A THEORY. The explanation that lived here
@@ -144,9 +150,9 @@ export default defineConfig({
         // box could never reproduce, because there the same literal was a large
         // reduction. Same config, opposite effect, decided by core count.
         // min(cap, cores - 1) never RAISES parallelism on a small machine.
-        maxForks: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
-      },
-    },
+    // vitest 4 removed `poolOptions`: `forks.maxForks` is now top-level `maxWorkers`
+    // (left under poolOptions it is IGNORED with a DEPRECATED warning, uncapping forks).
+    maxWorkers: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
     // The first `await import('../route')` in a heavy BFF spec triggers an
     // on-demand TS transform of the route AND its whole dependency graph. Under
     // full-suite parallel forks that cold transform can exceed the default 5s
@@ -168,15 +174,28 @@ export default defineConfig({
     // (those fail all three attempts). Local runs keep retry 0 so flakes
     // stay visible to developers.
     retry: process.env.CI ? 2 : 0,
-    include: [
-      'lib/**/__tests__/**/*.test.{ts,tsx}',
-      'app/**/__tests__/**/*.test.{ts,tsx}',
-      // Console-root suites (registry coverage, APIM policy/XML scope,
-      // Copilot Studio ↔ Dataverse scope) — these were previously dark because
-      // the globs only matched lib/** and app/**.
-      '__tests__/**/*.test.{ts,tsx}',
+    // `include` / `exclude` live per project: the .test.ts vs .test.tsx split IS
+    // the environment mapping (API/logic on node, render tests on jsdom).
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: SUITE_DIRS.map((d) => `${d}/**/*.test.ts`),
+          exclude: EXCLUDE,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'jsdom',
+          environment: 'jsdom',
+          include: SUITE_DIRS.map((d) => `${d}/**/*.test.tsx`),
+          exclude: EXCLUDE,
+        },
+      },
     ],
-    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
     // ── Coverage (rel-T28) ────────────────────────────────────────────────
     // istanbul provider (Babel instrumentation). `all: true` counts EVERY
     // source file under include — not just the ones a test imported — so the
