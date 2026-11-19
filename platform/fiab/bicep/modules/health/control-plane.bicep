@@ -258,19 +258,46 @@ resource cpKeyOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
-// ── Stamp resource group: read back the stamp deployment (#5377) ──────────────
-// Self-registration marks the stamp healthy only after it reads the stamp deployment record
-// (lhds-stamp-<id>) in this resource group. Reader is the narrowest built-in role that can do it,
-// scoped to the stamp resource group (this module's scope). tenant.create needs more than this.
-var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+// ── Stamp resource group: run tenant.create / tenant.destroy (#5377, #5380) ──
+// tenant.create PUTs modules/health/tenant.bicep (resourceGroup scope) into the stamp resource group:
+// databases, containers, keys, an Event Hub, a tenant identity AND role assignments. Reader (#5379)
+// could read the stamp deployment record but never do that. Operator decision 2026-11-19: Contributor
+// on the stamp resource group ONLY, plus a CONDITIONED Role Based Access Control Administrator.
+//  - Contributor includes every read Reader had, so it REPLACES the old Reader assignment (#5379's
+//    cpStampReader, guid seed acdd72a7-3385-48ef-bd42-f606fba81ae7). Bicep cannot delete an
+//    assignment it no longer declares: that Reader assignment stays in Azure as a harmless orphan
+//    (a strict subset of Contributor) until removed; see PR for #5380.
+//  - Contributor cannot write role assignments (Microsoft.Authorization/*/Write is a NotAction).
+//  - RBAC Administrator is limited by an ABAC condition (version 2.0) to creating AND deleting
+//    assignments of exactly the 4 roles tenant.bicep assigns, to ServicePrincipal principals only.
+//    Pattern: https://learn.microsoft.com/azure/role-based-access-control/delegate-role-assignments-examples
+//    ("Constrain roles and principal types"): write is checked on @Request, delete on @Resource.
+// The 4 ids MUST equal tenant.bicep's role-id vars; scripts/ci/__tests__/health-cp-stamp-rg-grants.test.mjs
+// lifts both at runtime and fails on drift.
+var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+var rbacAdministratorRoleId = 'f58310d9-a9f6-439a-9e8d-f62e7b41a168'
+var delegableRoleIds = '{ba92f5b4-2d11-453d-a403-e96b0029c9fe, e147488a-f6f5-4113-8e2d-b22465e65bf6, 2b629674-e913-4c01-ae53-ef4638d8f975, a638d3c7-ab3a-418d-83e6-5f17a39d4fde}'
+var rbacAdminCondition = '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals ${delegableRoleIds} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalType] ForAnyOfAnyValues:StringEqualsIgnoreCase {\'ServicePrincipal\'})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals ${delegableRoleIds} AND @Resource[Microsoft.Authorization/roleAssignments:PrincipalType] ForAnyOfAnyValues:StringEqualsIgnoreCase {\'ServicePrincipal\'}))'
 
-resource cpStampReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(stampId) && !skipRoleGrants) {
-  name: guid(resourceGroup().id, cpIdentity.id, readerRoleId)
+resource cpStampContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(stampId) && !skipRoleGrants) {
+  name: guid(resourceGroup().id, cpIdentity.id, contributorRoleId)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', contributorRoleId)
     principalId: cpIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    description: 'LHDS control plane: read the stamp deployment record to confirm the stamp before marking it healthy.'
+    description: 'LHDS control plane: deploy and delete tenant resources in the stamp resource group (tenant.create / tenant.destroy) and read the stamp deployment record.'
+  }
+}
+
+resource cpStampRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(stampId) && !skipRoleGrants) {
+  name: guid(resourceGroup().id, cpIdentity.id, rbacAdministratorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', rbacAdministratorRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    condition: rbacAdminCondition
+    conditionVersion: '2.0'
+    description: 'LHDS control plane: assign and remove ONLY the 4 tenant.bicep data-plane roles, to service principals only, in the stamp resource group.'
   }
 }
 
