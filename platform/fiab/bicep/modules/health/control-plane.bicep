@@ -77,7 +77,7 @@ param aksOidcIssuerUrl string = ''
 @description('aks path: Kubernetes namespace for the control plane.')
 param aksNamespace string = 'loom-health'
 
-@description('Private endpoint subnet for the Cosmos account. Empty = no private endpoint and the account keeps public network access (AAD-only, local auth disabled). A deployment that needs the private posture must supply this and cosmosPrivateDnsZoneId.')
+@description('Private endpoint subnet for the Cosmos account. Empty = this module creates no private endpoint; it does NOT establish that the account is public, because a tenant policy (e.g. CosmosDB_PublicNetwork_Modify, effect modify) can force publicNetworkAccess to Disabled after deploy, leaving the account unreachable. health.bicep defaults this to the hub PE subnet on the containerApps path. Local auth is disabled either way.')
 param privateEndpointSubnetId string = ''
 
 @description('Private DNS zone id (privatelink.documents.azure.<com|us>) for the Cosmos private endpoint. Empty skips the DNS zone group.')
@@ -662,8 +662,8 @@ output cosmosAccountName string = account.name
 @description('Cosmos endpoint the service is configured with.')
 output cosmosEndpoint string = cosmosEndpointUrl
 
-@description('Cosmos network posture, so a public account is visible in the deployment output rather than silent.')
-output cosmosNetworkPosture string = empty(privateEndpointSubnetId) ? 'public-network-access-enabled-aad-only' : 'private-endpoint'
+@description('Cosmos network posture as REQUESTED by this template (not read back from the account). A tenant policy can force publicNetworkAccess to Disabled, so the no-private-endpoint value does not claim the account is reachable.')
+output cosmosNetworkPosture string = empty(privateEndpointSubnetId) ? 'public-network-access-requested-no-private-endpoint-policy-may-force-disabled' : 'private-endpoint'
 
 @description('Federated identity credential the authorization server Entra app (authAsClientId) must carry so the control-plane identity can mint its client assertion. An Entra object, not an ARM resource: the post-deploy bootstrap creates it from these values. Never reported as configured by this module.')
 output authFederatedCredential object = {
