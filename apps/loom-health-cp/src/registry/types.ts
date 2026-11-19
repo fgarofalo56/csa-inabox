@@ -7,6 +7,14 @@ import type { Doc } from '../store/types.js';
 export const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
 const slug = z.string().regex(SLUG, 'must be 2-40 chars of a-z, 0-9 and hyphen, not starting or ending with hyphen');
 
+/**
+ * Tenant ids are tighter than the generic 40: tenant.bicep caps `tenantSlug` at @maxLength(20) because
+ * the Azure names derived from it are tighter. Enforced on CREATE only, so older longer records stay readable.
+ * A drift test lifts the bicep value and asserts equality.
+ */
+export const TENANT_ID_MAX = 20;
+const tenantId = slug.refine((v) => v.length <= TENANT_ID_MAX, `tenant id must be at most ${TENANT_ID_MAX} chars (tenant.bicep tenantSlug maxLength)`);
+
 export const STAMP_STATUSES = ['creating', 'healthy', 'draining', 'paused', 'evacuated'] as const;
 export type StampStatus = (typeof STAMP_STATUSES)[number];
 
@@ -55,7 +63,7 @@ const QuotasSchema = z.strictObject({
 });
 
 export const TenantCreateSchema = z.strictObject({
-  id: slug,
+  id: tenantId,
   displayName: text,
   stampId: slug,
   quotas: QuotasSchema,

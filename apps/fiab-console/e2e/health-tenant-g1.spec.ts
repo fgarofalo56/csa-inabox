@@ -78,7 +78,7 @@ async function getJson(page: Page, path: string): Promise<{ status: number; body
 }
 
 test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
-  const displayName = `g1-synth-${stamp()}`;
+  const displayName = `g1-${stamp()}`;
   const createdWorkspaces: string[] = [];
   let wsId = '';
   let itemId = '';
@@ -211,7 +211,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     expect(last.tenant.displayName, 'CP tenant displayName must equal the item display name').toBe(displayName);
     // Breaks if the slug is not the deterministic lowercase of the name; this name needs no sanitizing, so the flag must be false.
     expect(b.tenantId, 'binding.tenantId = deterministic slug of the display name').toBe(displayName.toLowerCase());
-    expect(b.tenantIdSanitized, 'no sanitizing is needed for a [a-z0-9-] name of <=30 chars').toBe(false);
+    expect(b.tenantIdSanitized, 'no sanitizing is needed for a [a-z0-9-] name of <=20 chars (g1- + 12 digits = 15)').toBe(false);
     expect(last.tenant.id, 'CP tenant id must be the bound slug').toBe(b.tenantId);
 
     const receipts: Receipt[] = last?.job?.receipts ?? [];
