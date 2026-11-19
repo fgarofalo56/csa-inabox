@@ -89,6 +89,25 @@ it was deleted. The connection is auto-approved (same tenant, deployer has write
 on the vault). The aks control plane sits inside the stamp VNet and gets no hub
 endpoint. Not exercised: no deploy has run this path yet.
 
+**Registry Cosmos network path (#5370).** The tenant policy
+`CosmosDB_PublicNetwork_Modify` (effect `modify`) forces
+`publicNetworkAccess: Disabled` on the control plane's registry Cosmos account
+whatever the template asks for, so an account with no private endpoint is
+reachable from nowhere (the control plane answered 500 `internal` and its job
+sweep failed every 30 s). On the containerApps path `health.bicep` therefore
+defaults `controlPlaneConfig.privateEndpointSubnetId` to the hub
+`snet-private-endpoints` subnet and `cosmosPrivateDnsZoneId` to the hub
+`privatelink.documents.azure.com` zone (`.us` on GCC-High and IL5), reusing the
+`cosmosPe` and zone group already in `control-plane.bicep`. Explicit values
+(including an explicit empty string) override. A private endpoint must share
+its VNet's region and subscription (Microsoft Learn, "What is a private
+endpoint"), so the default applies only when the hub subscription is the health
+deployment subscription; in a cross-subscription hub it stays empty and you must
+supply both values. The `cosmosNetworkPosture` output reports what the template
+requested, not what the account reads back. The aks control plane is not
+defaulted (follow-up). Not exercised: no deploy has run this path yet; GCC-High
+is supported in code only.
+
 Cloud parity: the vault URL comes from the vault's own `vaultUri` output
 (`vault.azure.net` or `vault.usgovcloudapi.net`) and the control plane checks
 the suffix per cloud, so GCC-High takes the same path. Supported in code on

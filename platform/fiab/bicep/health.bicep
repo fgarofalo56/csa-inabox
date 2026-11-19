@@ -206,6 +206,22 @@ var hubVaultPeSubnetId = string(controlPlaneConfig.?hubVaultPeSubnetId ?? '/subs
 var hubVaultZoneId = string(controlPlaneConfig.?hubVaultZoneId ?? '/subscriptions/${hubSubscriptionId}/resourceGroups/${hubResourceGroup}/providers/Microsoft.Network/privateDnsZones/${hubVaultZoneName}')
 var hubVaultPeDeploy = cpDeploy && cpPlatform == 'containerApps' && !empty(hubResourceGroup)
 
+// ── Hub-side private endpoint for the control-plane registry Cosmos (#5370) ───
+// The tenant policy MCAPSGovDeployPolicies/CosmosDB_PublicNetwork_Modify (effect modify) forces
+// publicNetworkAccess=Disabled on every Cosmos account regardless of the template, so a CP account with
+// no private endpoint is reachable from nowhere. control-plane.bicep already carries a PE + DNS zone
+// group; this defaults its inputs to the hub PE subnet and the hub privatelink.documents zone (zone
+// suffix per boundary, as network.bicep names it: .us on GCC-High/IL5). Explicit
+// controlPlaneConfig.privateEndpointSubnetId / cosmosPrivateDnsZoneId (including an explicit empty
+// string) win. A private endpoint must be in the same region AND subscription as its VNet (Learn:
+// private-link/private-endpoint-overview), so the default applies only when the hub subscription is
+// the health deployment subscription; otherwise it stays empty (no PE, unchanged behaviour) and the
+// operator supplies both values. The aks path (CP inside the stamp VNet) is not defaulted.
+var hubCosmosZoneName = 'privatelink.documents.azure.${healthIsGov ? 'us' : 'com'}'
+var hubCosmosPeDefault = cpPlatform == 'containerApps' && hubEnvIdValid && !empty(hubResourceGroup) && hubSubscriptionId == subscription().subscriptionId
+var cpCosmosPeSubnetId = string(controlPlaneConfig.?privateEndpointSubnetId ?? (hubCosmosPeDefault ? hubVaultPeSubnetId : ''))
+var cpCosmosZoneId = string(controlPlaneConfig.?cosmosPrivateDnsZoneId ?? (hubCosmosPeDefault ? '/subscriptions/${hubSubscriptionId}/resourceGroups/${hubResourceGroup}/providers/Microsoft.Network/privateDnsZones/${hubCosmosZoneName}' : ''))
+
 module healthHubVaultPe 'modules/health/hub-vault-pe.bicep' = if (hubVaultPeDeploy) {
   name: 'lhds-hub-vault-pe-${healthStampName}'
   scope: resourceGroup(hubSubscriptionId, hubResourceGroup)
@@ -235,8 +251,8 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     environmentId: cpEnvironmentId
     aksClusterName: cpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksClusterName : ''
     aksOidcIssuerUrl: cpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksOidcIssuerUrl : ''
-    privateEndpointSubnetId: string(controlPlaneConfig.?privateEndpointSubnetId ?? '')
-    cosmosPrivateDnsZoneId: string(controlPlaneConfig.?cosmosPrivateDnsZoneId ?? '')
+    privateEndpointSubnetId: cpCosmosPeSubnetId
+    cosmosPrivateDnsZoneId: cpCosmosZoneId
     keyVaultId: healthStamp!.outputs.stamp.keyVaultId
     tlsFqdn: cpIssuesIngressCert ? cpIngressFqdn : ''
     tlsVaultUrl: healthStamp!.outputs.stamp.keyVaultUri
