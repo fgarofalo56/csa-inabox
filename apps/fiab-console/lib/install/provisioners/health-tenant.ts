@@ -41,6 +41,7 @@ import {
   type CpStamp,
   type CpTenant,
 } from '@/app/api/health/tenants/_lib/cp-client';
+import { createHash } from 'node:crypto';
 import type { Provisioner, ProvisionResult } from './types';
 
 /** Gate ids this provisioner can return; each is a real registry gate (lib/gates/registry/health.ts). */
@@ -55,8 +56,15 @@ export const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 /** Quotas a new tenant starts with; editable later on the Quotas tab. */
 export const DEFAULT_QUOTAS = { maxRequestsPerMinute: 6000, maxStorageGiB: 1024 } as const;
 
-/** Resource names embed the slug (Key Vault keys, PostgreSQL database), so keep it well under the 40-char registry cap. */
-const SLUG_MAX = 30;
+/**
+ * Tenant slug cap. Resource names embed the slug (Key Vault keys, PostgreSQL database), and
+ * tenant.bicep caps `tenantSlug` at 20 (@maxLength) - that is the binding limit, so the console
+ * derives <=20 chars. A drift test lifts the bicep value and asserts equality.
+ */
+export const HEALTH_TENANT_SLUG_MAX = 20;
+const SLUG_MAX = HEALTH_TENANT_SLUG_MAX;
+/** Hash chars appended to a truncated slug so long names sharing a prefix stay distinct. */
+const HASH_LEN = 6;
 
 export interface HealthResource { kind: string; id: string; name: string }
 
@@ -84,10 +92,18 @@ export type EnsureOutcome =
   | { phase: 'bound'; binding: HealthBinding; tenant: CpTenant; steps: string[]; created: boolean }
   | { phase: 'failed'; binding: HealthBinding; job?: CpJob; code: string; message: string; steps: string[] };
 
-/** Registry slug for a display name: lowercase a-z0-9 and hyphen, 2 to 30 chars, no leading or trailing hyphen. */
+/**
+ * Registry slug for a display name: lowercase a-z0-9 and hyphen, 2 to 20 chars, no leading or trailing hyphen.
+ * A name whose slug would exceed 20 is cut to 13 chars + '-' + a 6-hex sha256 of the full lowercased name
+ * (deterministic; the mapping is recorded via `sanitized`).
+ */
 export function healthTenantSlugFor(displayName: string): { slug: string; sanitized: boolean } {
   const lowered = displayName.trim().toLowerCase();
-  let slug = lowered.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, SLUG_MAX).replace(/-+$/g, '');
+  let slug = lowered.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (slug.length > SLUG_MAX) {
+    const hash = createHash('sha256').update(lowered).digest('hex').slice(0, HASH_LEN);
+    slug = `${slug.slice(0, SLUG_MAX - HASH_LEN - 1).replace(/-+$/g, '')}-${hash}`;
+  }
   if (slug.length < 2) slug = slug ? `${slug}-tenant` : 'health-tenant';
   return { slug, sanitized: slug !== lowered };
 }

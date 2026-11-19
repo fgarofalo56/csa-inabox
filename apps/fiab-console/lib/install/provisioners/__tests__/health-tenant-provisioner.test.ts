@@ -21,6 +21,7 @@ import {
   ensureHealthTenant,
   healthTenantCollisionSlug,
   healthTenantSlugFor,
+  HEALTH_TENANT_SLUG_MAX,
   pickStamp,
   resourcesFromReceipts,
   toProvisionResult,
@@ -35,6 +36,11 @@ import { CpError, CpNotConfiguredError, type CpJob, type CpStamp, type CpTenant 
 const CP_TYPES = readFileSync(resolve(__dirname, '../../../../../loom-health-cp/src/registry/types.ts'), 'utf8');
 const SLUG_SRC = /export const SLUG = (\/.+\/);/.exec(CP_TYPES)?.[1];
 const CP_SLUG = SLUG_SRC ? new RegExp(SLUG_SRC.slice(1, -1)) : undefined;
+
+// tenant.bicep's tenantSlug @maxLength, lifted at runtime. TENANT_BICEP_PATH lets a mutation run aim at a sandbox copy.
+const BICEP = readFileSync(process.env.TENANT_BICEP_PATH ?? resolve(__dirname, '../../../../../../platform/fiab/bicep/modules/health/tenant.bicep'), 'utf8');
+const BICEP_MAX = Number(/@maxLength\((\d+)\)\s*\r?\n\s*param tenantSlug string/.exec(BICEP)?.[1]);
+const CP_TENANT_ID_MAX = Number(/export const TENANT_ID_MAX = (\d+);/.exec(CP_TYPES)?.[1]);
 
 const NOW = new Date('2026-10-26T12:00:00.000Z');
 const STAMP: CpStamp = { id: 'east-s1', displayName: 'East', cloud: 'commercial', region: 'eastus2', class: 'S', status: 'healthy' };
@@ -107,7 +113,7 @@ describe('healthTenantSlugFor', () => {
   });
 
   it.each([
-    ['Mercy General Hospital!', 'mercy-general-hospital', true],
+    ['Mercy General Hosp!', 'mercy-general-hosp', true],
     ['mercy', 'mercy', false],
     ['  --Mercy   &  Co--  ', 'mercy-co', true],
     ['A', 'a-tenant', true],
@@ -119,21 +125,51 @@ describe('healthTenantSlugFor', () => {
     expect(CP_SLUG!.test(r.slug), `control plane would reject ${r.slug}`).toBe(true);
   });
 
-  it('never ends in a hyphen after truncation (a 29-char name followed by a space cuts at the hyphen)', () => {
-    // 29 a's + ' ' + 'bbb' -> after hyphenation the 30-char cut ends exactly on '-'. Without the
-    // post-slice trim the slug is 'a...a-' and the control plane rejects it.
-    const r = healthTenantSlugFor(`${'a'.repeat(29)} bbb`);
-    expect(r.slug).toBe('a'.repeat(29));
+  it('derives <=20 chars and the console cap equals the CP cap and the bicep @maxLength (lifted, not transcribed)', () => {
+    // Breaks if any of the three limits drifts (e.g. bicep edited to 24, or SLUG_MAX back to 30).
+    expect(Number.isInteger(BICEP_MAX), 'tenantSlug @maxLength not found in tenant.bicep').toBe(true);
+    expect(Number.isInteger(CP_TENANT_ID_MAX), 'TENANT_ID_MAX not found in CP types.ts').toBe(true);
+    expect(HEALTH_TENANT_SLUG_MAX).toBe(BICEP_MAX);
+    expect(CP_TENANT_ID_MAX).toBe(BICEP_MAX);
+  });
+
+  it('a 20-char name is kept verbatim and a 21-char name (the G1 failure, g1-synth-202611192201) is cut with a hash', () => {
+    const exact = healthTenantSlugFor('a'.repeat(20));
+    expect(exact).toEqual({ slug: 'a'.repeat(20), sanitized: false });
+    const r = healthTenantSlugFor('g1-synth-202611192201');
+    expect(r.slug).toHaveLength(20);
+    expect(r.slug.startsWith('g1-synth-2026-')).toBe(true);
+    expect(r.slug).toMatch(/^g1-synth-2026-[0-9a-f]{6}$/);
+    expect(r.sanitized, 'slug differs from the lowercased name, so it must be flagged').toBe(true);
     expect(CP_SLUG!.test(r.slug)).toBe(true);
   });
 
-  it('collision slug is stable per item, differs from the base, and is registry-valid', () => {
+  it('is deterministic, and distinct long names sharing a 20-char prefix get distinct slugs', () => {
+    const base = 'the-same-long-prefix-here';
+    const a = healthTenantSlugFor(`${base}-one`).slug;
+    const b = healthTenantSlugFor(`${base}-two`).slug;
+    expect(healthTenantSlugFor(`${base}-one`).slug).toBe(a);
+    expect(a).not.toBe(b);
+    expect(a.length).toBeLessThanOrEqual(HEALTH_TENANT_SLUG_MAX);
+    expect(b.length).toBeLessThanOrEqual(HEALTH_TENANT_SLUG_MAX);
+  });
+
+  it('never ends in a hyphen before the hash when the cut lands on a hyphen', () => {
+    // 12 a's + ' ' + 'b'*20: the 13-char cut ends exactly on '-', which must be trimmed before '-<hash>'.
+    const r = healthTenantSlugFor(`${'a'.repeat(12)} ${'b'.repeat(20)}`);
+    expect(r.slug).toMatch(/^a{12}-[0-9a-f]{6}$/);
+    expect(CP_SLUG!.test(r.slug)).toBe(true);
+  });
+
+  it('collision slug is stable per item, differs from the base, and is registry-valid and <=20', () => {
     const a = healthTenantCollisionSlug('mercy-general', '1234abcd-0000');
     expect(a).toBe('mercy-general-1234ab');
     expect(healthTenantCollisionSlug('mercy-general', '1234abcd-0000')).toBe(a);
     expect(healthTenantCollisionSlug('mercy-general', '9999ffff-0000')).not.toBe(a);
-    expect(CP_SLUG!.test(healthTenantCollisionSlug('x'.repeat(30), 'abcdef123'))).toBe(true);
-    expect(healthTenantCollisionSlug('x'.repeat(30), 'abcdef123').length).toBeLessThanOrEqual(30);
+    const long = healthTenantCollisionSlug('x'.repeat(20), 'abcdef123');
+    expect(CP_SLUG!.test(long)).toBe(true);
+    expect(long).toHaveLength(20);
+    expect(long).toBe(`${'x'.repeat(13)}-abcdef`);
   });
 });
 
