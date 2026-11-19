@@ -610,6 +610,7 @@ jobs:
       # #5346 - carry the console's health binding through the re-render (il5.bicepparam reads
       # LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID). Supported-in-code; this lane has no recorded run.
       - name: Resolve the console health binding (#5346)
+        id: health_binding
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
           HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
@@ -1067,6 +1068,17 @@ jobs:
       # `issues: write` at the top of this file is inert without this binding.
       # Both properties are ratcheted mechanically over every caller in
       # .github/scripts/__tests__/gov-deploy-lanes.test.mjs.
+      # #5346 - the resolver never stops the apply (a health-only value must not take the whole admin-plane
+      # deploy down), so an UNKNOWN console health binding is reported HERE, after everything else ran:
+      # the deploy completes and the run is honestly red (deploy-integrity R6/R7). `preserved` is only a warning.
+      - name: Fail the run if the console health binding is UNKNOWN (#5346)
+        if: ${{ always() && steps.health_binding.outputs.health_binding == 'unknown' }}
+        env:
+          REASON: ${{ steps.health_binding.outputs.health_binding_reason }}
+        run: |
+          echo "::error::The console health binding is UNKNOWN: ${REASON}. The deploy ran, but LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID on loom-console may now be empty. Re-run deploy-health.yml to re-bind them, or fix the cause above."
+          exit 1
+
       - name: Notify on failure (#3844)
         if: failure()
         env:

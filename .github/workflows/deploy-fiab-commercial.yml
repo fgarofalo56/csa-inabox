@@ -1640,6 +1640,7 @@ jobs:
       # run blanked what deploy-health.yml had bound (revision --0001214). Resolved from the deployed
       # estate, before the what-if so the preview and the apply describe the same deployment.
       - name: Resolve the console health binding (#5346)
+        id: health_binding
         env:
           TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
           RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
@@ -3527,6 +3528,17 @@ jobs:
         if: success() && inputs.run_mode == 'whatif-only'
         run: |
           echo "✅ whatif-only complete. Bicep + auth validated; no spend."
+
+      # #5346 - the resolver never stops the apply (a health-only value must not take the whole admin-plane
+      # deploy down), so an UNKNOWN console health binding is reported HERE, after everything else ran:
+      # the deploy completes and the run is honestly red (deploy-integrity R6/R7). `preserved` is only a warning.
+      - name: Fail the run if the console health binding is UNKNOWN (#5346)
+        if: ${{ always() && steps.health_binding.outputs.health_binding == 'unknown' }}
+        env:
+          REASON: ${{ steps.health_binding.outputs.health_binding_reason }}
+        run: |
+          echo "::error::The console health binding is UNKNOWN: ${REASON}. The deploy ran, but LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID on loom-console may now be empty. Re-run deploy-health.yml to re-bind them, or fix the cause above."
+          exit 1
 
       - name: Notify on failure (dedicated, OPEN issue - never a closed one)
         if: failure()
