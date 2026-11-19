@@ -10,7 +10,9 @@ const HUB = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Even
 
 interface Call { method: string; url: string; body?: string; auth?: string }
 
-function rig(responses: Array<{ status: number; body?: unknown }>) {
+interface Canned { status: number; body?: unknown; headers?: Record<string, string>; nonJson?: boolean }
+
+function rig(responses: Canned[]) {
   const calls: Call[] = [];
   let i = 0;
   const fetchFn = (async (url: string, init: RequestInit) => {
@@ -20,8 +22,17 @@ function rig(responses: Array<{ status: number; body?: unknown }>) {
       ...(typeof init.body === 'string' ? { body: init.body } : {}),
       auth: (init.headers as Record<string, string>).authorization as string,
     });
-    const r = responses[Math.min(i++, responses.length - 1)] as { status: number; body?: unknown };
-    return { status: r.status, json: async () => r.body ?? {} } as Response;
+    const r = responses[Math.min(i++, responses.length - 1)] as Canned;
+    // A minimal Headers stand-in: the real Headers class refuses CR/LF, so it could not carry the injection case below.
+    const h = Object.fromEntries(Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+    return {
+      status: r.status,
+      headers: { get: (k: string) => h[k.toLowerCase()] ?? null },
+      json: async () => {
+        if (r.nonJson) throw new SyntaxError('Unexpected token < in JSON');
+        return r.body ?? {};
+      },
+    } as unknown as Response;
   }) as unknown as typeof fetch;
   const arm = new RestTenantArm({
     armEndpoint: ARM,
@@ -134,6 +145,77 @@ describe('RestTenantArm', () => {
     expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ attributes: { enabled: false } });
     await expect(arm.deleteKey('http://169.254.169.254/', 'k')).rejects.toMatchObject({ code: 'bad_vault_uri' });
     expect(calls).toHaveLength(2);
+  });
+});
+
+// #5380: a 403 on the tenant deployment PUT reported only "HTTP 403 Unknown", so nobody could say
+// WHAT ARM refused. These pin that the denied action and scope reach the job failure, and that
+// nothing but identifiers does. Messages are shaped like ARM's real AuthorizationFailed text.
+describe('ARM refusal diagnostics (#5380)', () => {
+  const OID = '11111111-2222-3333-4444-555555555555';
+  const SCOPE = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Authorization/roleAssignments/7a1b`;
+  const AUTHZ_MSG = `The client '${OID}' with object id '${OID}' does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write' over scope '${SCOPE}' or the scope is invalid. If access was recently granted, please refresh your credentials.`;
+  const put = (canned: Canned) =>
+    rig([canned]).arm.deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: {} }).catch((x: unknown) => x);
+
+  it('AuthorizationFailed: the job failure names the denied action and scope, and never the client id or the prose', async () => {
+    const e = (await put({ status: 403, body: { error: { code: 'AuthorizationFailed', message: AUTHZ_MSG } } })) as ArmError;
+    expect(e.diag).toMatchObject({ action: 'Microsoft.Authorization/roleAssignments/write', scope: SCOPE });
+    const msg = (classifyArm(e) as JobFailure).message;
+    // Breaks if the DENIED_ACTION/DENIED_SCOPE match is dropped or classifyArm stops appending it.
+    expect(msg).toContain(`HTTP 403 AuthorizationFailed) [denied Microsoft.Authorization/roleAssignments/write over ${SCOPE}]`);
+    // Breaks if the raw message is appended instead of the matched identifiers.
+    expect(msg).not.toContain(OID);
+    expect(msg).not.toContain('does not have authorization');
+  });
+
+  it('LinkedAuthorizationFailed: reports the DENIED linked action and scope, not the allowed one quoted first', async () => {
+    const linkedScope = `/subscriptions/${SUB}/resourceGroups/other/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-x`;
+    const linked = `The client '${OID}' with object id '${OID}' has permission to perform action 'Microsoft.Resources/deployments/write' on scope '/subscriptions/${SUB}/resourceGroups/${RG}'; however, it does not have permission to perform action(s) 'Microsoft.ManagedIdentity/userAssignedIdentities/assign/action' on the linked scope(s) '${linkedScope}' (respectively) or the linked scope(s) are invalid.`;
+    const e = (await put({ status: 403, body: { error: { code: 'LinkedAuthorizationFailed', message: linked } } })) as ArmError;
+    // Breaks if the plain "action '...'" form is tried first: it would report the ALLOWED deployments/write.
+    expect(e.diag?.action).toBe('Microsoft.ManagedIdentity/userAssignedIdentities/assign/action');
+    expect(e.diag?.scope).toBe(linkedScope);
+  });
+
+  it('a refusal nested in details[] surfaces the detail codes and the nested denied action', async () => {
+    const e = (await put({
+      status: 400,
+      body: { error: { code: 'InvalidTemplateDeployment', message: 'The template deployment failed with multiple errors.', details: [{ code: 'AuthorizationFailed', message: AUTHZ_MSG }, { code: 'Conflict' }] } },
+    })) as ArmError;
+    expect(e.code).toBe('InvalidTemplateDeployment');
+    expect(e.diag?.details).toEqual(['AuthorizationFailed', 'Conflict']); // breaks if details[] is not read
+    expect(e.diag?.action).toBe('Microsoft.Authorization/roleAssignments/write'); // breaks if only the outer message is scanned
+  });
+
+  it('a capitalised { Code } or a bare top-level { code } is read, not reported as Unknown', async () => {
+    expect(((await put({ status: 403, body: { Code: 'RequestDisallowedByPolicy', Message: 'x' } })) as ArmError).code).toBe('RequestDisallowedByPolicy');
+    expect(((await put({ status: 403, body: { error: { Code: 'Forbidden' } } })) as ArmError).code).toBe('Forbidden');
+    expect(((await put({ status: 403, body: { code: 'InvalidAuthenticationToken' } })) as ArmError).code).toBe('InvalidAuthenticationToken');
+  });
+
+  it('with no code at all, reports the body shape and the gateway headers instead of a bare Unknown', async () => {
+    const corr = 'abcdef01-2345-6789-abcd-ef0123456789';
+    const keys = (await put({ status: 403, body: { foo: 1, bar: {} }, headers: { 'x-ms-failure-cause': 'gateway', 'x-ms-correlation-request-id': corr } })) as ArmError;
+    expect(keys.code).toBe('Unknown');
+    expect(keys.message).toBe(`start tenant deployment failed: HTTP 403 Unknown [body keys:foo,bar; cause gateway; correlation ${corr}]`);
+    const html = (await put({ status: 403, nonJson: true })) as ArmError;
+    expect(html.diag?.bodyShape).toBe('empty-or-non-json');
+    expect(((await put({ status: 403, body: {} })) as ArmError).diag?.bodyShape).toBe('empty');
+  });
+
+  it('header values outside the token class are dropped, so a header cannot forge a log line', async () => {
+    const e = (await put({ status: 403, body: { error: { code: 'X' } }, headers: { 'x-ms-failure-cause': 'gateway\nINJECTED', 'x-ms-correlation-request-id': 'a b' } })) as ArmError;
+    expect(e.diag?.failureCause).toBeUndefined(); // breaks if HEADER_TOKEN is not applied
+    expect(e.diag?.correlationId).toBeUndefined();
+    expect(e.message).toBe('start tenant deployment failed: HTTP 403 X'); // positive: the code still lands
+  });
+
+  it('a quoted value outside the action/scope character class is not lifted', async () => {
+    const e = (await put({ status: 403, body: { error: { code: 'AuthorizationFailed', message: "perform action 'x SECRET y' over scope 'not-a-path'" } } })) as ArmError;
+    expect(e.diag?.action).toBeUndefined();
+    expect(e.diag?.scope).toBeUndefined();
+    expect(e.message).not.toContain('SECRET');
   });
 });
 

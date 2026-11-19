@@ -113,30 +113,129 @@ export interface TenantArm {
   deleteKey(vaultUri: string, keyName: string): Promise<void>;
 }
 
-/** ARM / Key Vault HTTP failure. Carries status and the service error CODE only, never the body. */
+/**
+ * What ARM said it refused, lifted out of a 4xx/5xx response (#5380). Every field
+ * is an identifier (error codes, an action name, an ARM scope path, a request id,
+ * header tokens), each sanitised to a closed character class and length-bounded.
+ * Free text (the service `message`, the body) is never kept: the denied action and
+ * scope are matched out of the message and only the match survives.
+ */
+export interface ArmDiagnostics {
+  /** Nested `error.details[].code`, in order, at most 5. */
+  details?: string[];
+  /** Denied action from an AuthorizationFailed-shaped message, e.g. `Microsoft.Resources/deployments/write`. */
+  action?: string;
+  /** Scope the action was denied over, an ARM path. */
+  scope?: string;
+  /** `x-ms-failure-cause` (`gateway`, `service`, ...): who refused it. */
+  failureCause?: string;
+  /** `x-ms-correlation-request-id`, to join the refusal to ARM's own records. */
+  correlationId?: string;
+  /** Set when no error code was found: how the body looked instead (`empty-or-non-json`, `empty`, `keys:a,b`). */
+  bodyShape?: string;
+}
+
+const ID_CHARS = /[^A-Za-z0-9._-]/g;
+const code60 = (v: unknown): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const s = v.replace(ID_CHARS, '').slice(0, 60);
+  return s || undefined;
+};
+// AuthorizationFailed: "...perform action 'Microsoft.X/y/write' over scope '/subscriptions/...'".
+// LinkedAuthorizationFailed: "...HAS permission to perform action 'A' on scope 'S'; however, it does not have
+// permission to perform action(s) 'B' on the linked scope(s) 'L'". The first quoted action there is the one
+// that was ALLOWED, so the "(s)" forms are tried first and the plain forms are the fallback.
+const ACTION_ID = "'([A-Za-z0-9.]+(?:/[A-Za-z0-9._*-]+)+)'";
+const SCOPE_ID = "'(/[A-Za-z0-9./_()-]{1,400})'";
+const DENIED_ACTION = [new RegExp(`action\\(s\\)\\s+${ACTION_ID}`, 'i'), new RegExp(`action\\s+${ACTION_ID}`, 'i')];
+const DENIED_SCOPE = [new RegExp(`linked scope\\(s\\)\\s+${SCOPE_ID}`, 'i'), new RegExp(`scope\\s+${SCOPE_ID}`, 'i')];
+const firstMatch = (res: RegExp[], text: string): string | undefined => {
+  for (const re of res) {
+    const m = re.exec(text)?.[1];
+    if (m) return m;
+  }
+  return undefined;
+};
+const HEADER_TOKEN = /^[A-Za-z0-9._:-]{1,80}$/;
+
+/** Extract an ARM error code and identifier-only diagnostics; never returns free text. */
+export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?: Headers): { code: string; diag: ArmDiagnostics } {
+  const diag: ArmDiagnostics = {};
+  // ARM's usual shape is { error: { code, message, details } }; some RPs and the gateway answer
+  // with a capitalised { Code, Message } or a bare top-level { code, message }.
+  const errObj = (json?.error ?? json?.Error) as Json | undefined;
+  const src: Json | undefined = errObj && typeof errObj === 'object' ? errObj : json;
+  const code = code60(src?.code) ?? code60(src?.Code);
+  const message = typeof src?.message === 'string' ? src.message : typeof src?.Message === 'string' ? src.Message : '';
+  const details = Array.isArray(src?.details) ? (src.details as unknown[]) : [];
+  const detailCodes = details.map((d) => code60((d as Json | null)?.code)).filter((c): c is string => !!c).slice(0, 5);
+  if (detailCodes.length) diag.details = detailCodes;
+  // The denied action/scope may sit on the outer message or on a nested detail's message.
+  const texts = [message, ...details.map((d) => String((d as Json | null)?.message ?? ''))];
+  for (const t of texts) {
+    const a = firstMatch(DENIED_ACTION, t);
+    const s = firstMatch(DENIED_SCOPE, t);
+    if (a && !diag.action) diag.action = a.slice(0, 200);
+    if (s && !diag.scope) diag.scope = s;
+    if (diag.action && diag.scope) break;
+  }
+  const cause = headers?.get('x-ms-failure-cause');
+  if (cause && HEADER_TOKEN.test(cause)) diag.failureCause = cause;
+  const corr = headers?.get('x-ms-correlation-request-id');
+  if (corr && HEADER_TOKEN.test(corr)) diag.correlationId = corr;
+  if (!code) {
+    // res.json() throws on an empty body too, so an unparsed body is "empty or not JSON", no finer.
+    diag.bodyShape = !parsed
+      ? 'empty-or-non-json'
+      : !json || Object.keys(json).length === 0
+        ? 'empty'
+        : `keys:${Object.keys(json)
+            .slice(0, 5)
+            .map((k) => k.replace(ID_CHARS, '').slice(0, 30))
+            .join(',')}`;
+  }
+  return { code: code ?? 'Unknown', diag };
+}
+
+/** One line, identifiers only: ` [denied Microsoft.X/y/write over /subscriptions/...; details A,B; cause gateway; correlation c]`. */
+export function describeDiagnostics(d: ArmDiagnostics | undefined): string {
+  if (!d) return '';
+  const parts: string[] = [];
+  if (d.action) parts.push(`denied ${d.action}${d.scope ? ` over ${d.scope}` : ''}`);
+  else if (d.scope) parts.push(`scope ${d.scope}`);
+  if (d.details?.length) parts.push(`details ${d.details.join(',')}`);
+  if (d.bodyShape) parts.push(`body ${d.bodyShape}`);
+  if (d.failureCause) parts.push(`cause ${d.failureCause}`);
+  if (d.correlationId) parts.push(`correlation ${d.correlationId}`);
+  return parts.length ? ` [${parts.join('; ')}]` : '';
+}
+
+/** ARM / Key Vault HTTP failure. Carries status, the service error CODE and identifier-only diagnostics, never the body. */
 export class ArmError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     readonly op: string,
+    readonly diag?: ArmDiagnostics,
   ) {
-    super(`${op} failed: HTTP ${status} ${code}`);
+    super(`${op} failed: HTTP ${status} ${code}${describeDiagnostics(diag)}`);
   }
 }
 
 /** Turn an ArmError into an operator-actionable JobFailure; anything else passes through unchanged. */
 export function classifyArm(e: unknown): unknown {
   if (!(e instanceof ArmError)) return e;
+  const said = describeDiagnostics(e.diag);
   if (e.status === 401 || e.status === 403) {
     return new JobFailure(
       'permission',
-      `${e.op}: the control-plane identity is not authorised (HTTP ${e.status} ${e.code}). Grant it the role that covers this operation on the stamp resource group or vault, then retry.`,
+      `${e.op}: the control-plane identity is not authorised (HTTP ${e.status} ${e.code})${said}. Grant it the role that covers this operation on the stamp resource group or vault, then retry.`,
     );
   }
   if (e.status === 429 || e.status >= 500 || e.status === 408) {
-    return new JobFailure('transient', `${e.op}: Azure returned HTTP ${e.status} ${e.code}; retry the job.`);
+    return new JobFailure('transient', `${e.op}: Azure returned HTTP ${e.status} ${e.code}${said}; retry the job.`);
   }
-  return new JobFailure('arm_error', `${e.op}: Azure rejected the request (HTTP ${e.status} ${e.code}).`);
+  return new JobFailure('arm_error', `${e.op}: Azure rejected the request (HTTP ${e.status} ${e.code})${said}.`);
 }
 
 // ── REST adapter ──────────────────────────────────────────────────────────────
@@ -203,15 +302,17 @@ export class RestTenantArm implements TenantArm {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     let json: Json | undefined;
+    let parsed = true;
     try {
-      json = (await res.json()) as Json;
+      const v = (await res.json()) as unknown;
+      json = v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : undefined;
     } catch {
       json = undefined;
+      parsed = false;
     }
     if (res.status >= 400 && res.status !== 404) {
-      const err = json?.error as Json | undefined;
-      const code = typeof err?.code === 'string' ? err.code.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 60) : 'Unknown';
-      throw new ArmError(res.status, code || 'Unknown', op);
+      const { code, diag } = armDiagnostics(json, parsed, res.headers);
+      throw new ArmError(res.status, code, op, diag);
     }
     return { status: res.status, ...(json ? { json } : {}) };
   }
