@@ -607,6 +607,20 @@ jobs:
           node scripts/ci/resolve-program-budget-start-date.mjs \
             --subscription "$DEPLOY_SUB"
 
+      # #5346 - carry the console's health binding through the re-render (il5.bicepparam reads
+      # LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID). Supported-in-code; this lane has no recorded run.
+      - name: Resolve the console health binding (#5346)
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane; there is no console health binding to carry."
+            exit 0
+          fi
+          bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+
       # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
       # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
       # the artifact an operator reads before approving a full run, and it

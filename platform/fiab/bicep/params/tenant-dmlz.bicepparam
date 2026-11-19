@@ -337,4 +337,10 @@ param loomSelfHostedIrEnabled = true
 // API Gateway Plane W1-2 - GatewayLlmLogs APIM diagnostic category. W0-9: offered on Commercial.
 param observabilityConfig = {
   apiplaneLlmLogs: true
+  // Health console bind (#5346): resolved from the deployed estate by
+  // scripts/csa-loom/resolve-health-console-binding.sh so a bicep re-render of loom-console does not blank them.
+  // Unset = empty = the vars render empty (deploy-health.yml binds them after the fact).
+  healthCpUrl: readEnvironmentVariable('LOOM_HEALTH_CP_URL', '')
+  healthCpAudience: readEnvironmentVariable('LOOM_HEALTH_CP_AUDIENCE', '')
+  healthDefaultStampId: readEnvironmentVariable('LOOM_HEALTH_DEFAULT_STAMP_ID', '')
 }

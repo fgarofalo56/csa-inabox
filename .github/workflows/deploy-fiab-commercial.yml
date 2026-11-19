@@ -1634,6 +1634,24 @@ jobs:
           node scripts/ci/resolve-program-budget-start-date.mjs \
             --subscription "$TARGET_SUB"
 
+      # #5346 - the console's health binding must SURVIVE this deploy. admin-plane/main.bicep renders
+      # LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID from observabilityConfig.healthCp*, which
+      # commercial.bicepparam reads from these env vars; unresolved they render empty and the scheduled
+      # run blanked what deploy-health.yml had bound (revision --0001214). Resolved from the deployed
+      # estate, before the what-if so the preview and the apply describe the same deployment.
+      - name: Resolve the console health binding (#5346)
+        env:
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane; there is no console health binding to carry."
+            exit 0
+          fi
+          bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$TARGET_SUB"
+
       - name: Bicep what-if (preview)
         id: whatif
         env:
