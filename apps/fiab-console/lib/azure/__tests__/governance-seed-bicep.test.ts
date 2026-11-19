@@ -1,7 +1,7 @@
 /**
  * #5368 - THE DEPLOY-SP GOVERNANCE SEED GRANTS, asserted against the COMPILED ARM.
  *
- * `scripts/csa-loom/seed-governance.sh` upserts into `tenant-settings` and
+ * `scripts/csa-loom/seed-governance.mjs` upserts into `tenant-settings` and
  * `governance-domains`. `loom-console-cosmos.bicep` grants the deploy principal
  * Built-in Data Contributor on THOSE TWO CONTAINERS ONLY, reusing #5367's
  * metadata-only role. Same reading method as feature-grant-seed-bicep.test.ts:

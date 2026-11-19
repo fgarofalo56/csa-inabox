@@ -24,7 +24,7 @@
  * COSMOS ACCESS: AAD data-plane (az access token, no account keys) over the REST API, so no
  * npm install is needed and the host comes from LOOM_COSMOS_ENDPOINT (documents.azure.com or
  * documents.azure.us) -- identical code in every boundary. The deploy identity needs Cosmos
- * DB Built-in Data Contributor (same requirement as seed-governance.sh).
+ * DB Built-in Data Contributor (same requirement as seed-governance.mjs).
  *
  * Env: LOOM_COSMOS_ENDPOINT (required), LOOM_COSMOS_DATABASE (default loom),
  *      LOOM_AUTOMATION_OID_OVERRIDE, CONSOLE_RG, CONSOLE_APP, CONSOLE_SUBSCRIPTION.

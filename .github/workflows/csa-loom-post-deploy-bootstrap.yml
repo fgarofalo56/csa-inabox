@@ -920,42 +920,6 @@ jobs:
             bash scripts/csa-loom/grant-purview-uc-role.sh \
             || echo "::warning::Unified Catalog role grant is portal-only — follow the printed runbook, then the data-products surface activates."
 
-      - name: Seed default governance taxonomy (classifications / labels / domains)
-        env:
-          # Deploy-readiness (#229): make /governance + /admin/security POPULATED
-          # on first login instead of empty. Seeds GLOBAL Cosmos defaults that the
-          # console BFF copies into each tenant on first access. Azure-native; the
-          # optional Purview push only fires when LOOM_PURVIEW_ACCOUNT is set.
-          LOOM_PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
-        run: |
-          set -uo pipefail
-          # The governance docs live in the CONSOLE Cosmos `loom` DB (tenant-settings
-          # + governance-domains containers). In tenant mode the console Cosmos is in
-          # the ADMIN RG; discover it there first, then fall back to the DLZ RG.
-          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
-          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
-          if [ -z "$COSMOS_ACCT" ]; then
-            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
-            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
-          fi
-          if [ -z "$COSMOS_ACCT" ]; then
-            echo "::warning::Could not resolve a cosmos-loom* account in $ADMIN_RG or $DLZ_RG — skipping governance seed."
-            exit 0
-          fi
-          echo "== seeding governance taxonomy into $COSMOS_ACCT (rg=$COSMOS_RG, db=loom) =="
-          chmod +x scripts/csa-loom/seed-governance.sh
-          LOOM_SUBSCRIPTION_ID="$COSMOS_SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
-            LOOM_COSMOS_DATABASE="loom" LOOM_PURVIEW_ACCOUNT="$LOOM_PURVIEW_ACCOUNT" \
-            bash scripts/csa-loom/seed-governance.sh
-          # NOT swallowed (#5368): a Cosmos data-plane failure fails this step. The
-          # script's own ::error:: lines name the container, status and required role.
-          # (The shell has no -e, so the script's exit status is checked explicitly.)
-          seed_rc=$?
-          if [ "$seed_rc" -ne 0 ]; then
-            echo "::error::governance seed exited $seed_rc on $COSMOS_ACCT - see the ::error:: lines above."
-            exit "$seed_rc"
-          fi
-
       - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
         run: |
           set -uo pipefail
@@ -3154,7 +3118,7 @@ jobs:
         if: always()
         run: |
           echo "==== Bootstrap complete ===="
-          echo "Automation-identity grant seed (health.tenant-admin): NOT in this job - it runs in the separate seed-automation-grant job on the in-VNet runner (Commercial); check that job's result."
+          echo "Automation-identity grant seed (health.tenant-admin) AND governance taxonomy seed (classifications / labels / domains): NOT in this job - it runs in the separate seed-automation-grant job on the in-VNet runner (Commercial); check that job's result."
           echo "Console UAMI resolved: $CONSOLE_UAMI_PRINCIPAL (grants below all target this principal)"
           echo "Purview Data Map: data-reader + data-curator + data-source-administrator + collection-administrator granted on root collection (PE toggle + restore handled by script)"
           echo "Weave ontology: PG + Apache AGE graph 'loom_ontology' created; Console UAMI registered as PG principal (object/link/action instance write-back)"
@@ -3283,7 +3247,7 @@ jobs:
   # ceiling. Tracked on #5360.
   # ---------------------------------------------------------------------------
   seed-automation-grant:
-    name: 'Seed automation identity feature grant (in-VNet)'
+    name: 'Seed automation grant + governance taxonomy (in-VNet)'
     needs: bootstrap
     # !cancelled(): the step it replaces ran even after an earlier step failed.
     if: ${{ !cancelled() && needs.bootstrap.result != 'skipped' }}
@@ -3403,3 +3367,36 @@ jobs:
             || fail "azure-read" "could not read documentEndpoint of $COSMOS_ACCT."
           export LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE=loom
           node scripts/csa-loom/seed-automation-feature-grant.mjs || fail "seed" "seed-automation-feature-grant.mjs exited non-zero; read its output above."
+
+      - name: Seed default governance taxonomy (classifications / labels / domains)
+        # #5368. Moved here from the main `bootstrap` job: the Cosmos account blocks public
+        # network access (this runner is in-VNet), and a failing seed in `bootstrap` skipped every
+        # later success()-gated step (38 skipped vs 10). Here a red seed fails only THIS job.
+        # Runs after the automation-grant seed with `if: !cancelled()` so one seed failing does
+        # not hide the other's result; the job still ends red if either failed. NOT
+        # continue-on-error. Needs the deploy identity's container-scoped Data Contributor on
+        # tenant-settings + governance-domains (loom-console-cosmos.bicep governanceSeedDataAssignments).
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          fail() {
+            echo "::error::Governance seed FAILED [$1]: $2"
+            if [ "$BOUNDARY" != "Commercial" ]; then
+              echo "::error::Cloud-parity gap (#5364): boundary '$BOUNDARY' has NO in-VNet loom-aca runner, so this seed ran on a public runner. If the failure above is an HTTP 403 from the Cosmos account firewall, the account is private and cannot be reached from here; that is the missing in-VNet runner, not a bad grant."
+            fi
+            exit 1
+          }
+          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+            || fail "azure-read" "could not LIST Cosmos accounts in $ADMIN_RG, so whether one exists is UNKNOWN."
+          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
+          if [ -z "$COSMOS_ACCT" ] && [ -n "${DLZ_RG:-}" ]; then
+            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv)" \
+              || fail "azure-read" "could not LIST Cosmos accounts in $DLZ_RG, so whether one exists is UNKNOWN."
+            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
+          fi
+          [ -n "$COSMOS_ACCT" ] || fail "configuration" "no cosmos-loom* account found in $ADMIN_RG${DLZ_RG:+ or $DLZ_RG}; there is nowhere to write the governance docs. Deploy the admin plane, then re-run."
+          LOOM_COSMOS_ENDPOINT="$(az cosmosdb show -n "$COSMOS_ACCT" -g "$COSMOS_RG" --subscription "$COSMOS_SUB" --query documentEndpoint -o tsv)" \
+            || fail "azure-read" "could not read documentEndpoint of $COSMOS_ACCT."
+          export LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE=loom
+          echo "== seeding governance taxonomy into $COSMOS_ACCT (rg=$COSMOS_RG, db=loom) =="
+          node scripts/csa-loom/seed-governance.mjs || fail "seed" "seed-governance.mjs exited non-zero; read its output above."

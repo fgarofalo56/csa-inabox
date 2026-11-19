@@ -97,8 +97,8 @@ network-error `not_configured` after a "successful" deploy). The three fixes:
    hub region lacks capacity. `LOOM_PURVIEW_ACCOUNT` is derived from
    `catalog.outputs.purviewAccountName` so the env always matches the real host.
 
-**Populated taxonomy day-one.** `scripts/csa-loom/seed-governance.sh` (run by
-`csa-loom-post-deploy-bootstrap.yml` after seed-catalogs) seeds curated GLOBAL
+**Populated taxonomy day-one.** `scripts/csa-loom/seed-governance.mjs` (run by
+`csa-loom-post-deploy-bootstrap.yml`, job `seed-automation-grant`, in-VNet runner on Commercial; #5368) seeds curated GLOBAL
 defaults — classifications (PII/PHI/PCI-DSS/Confidential/Public/CUI/ITAR),
 sensitivity labels (Public→Restricted), and domains (Finance/HR/Operations/
 Customer/Compliance) — into the Console `loom` Cosmos. The classifications,

@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * Deploy-readiness (#229): copy the GLOBAL default domain taxonomy (seeded at
- * deploy time by scripts/csa-loom/seed-governance.sh) into a brand-new tenant's
+ * deploy time by scripts/csa-loom/seed-governance.mjs) into a brand-new tenant's
  * partition so the surface is POPULATED on first login. A one-time marker doc
  * (`__seeded__`) guards re-seeding, so a user who deletes the default domains is
  * NOT re-seeded on the next list. Best-effort + non-fatal: any failure leaves
