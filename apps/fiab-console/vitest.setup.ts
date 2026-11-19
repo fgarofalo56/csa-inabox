@@ -33,6 +33,13 @@ process.env.LOOM_RATE_LIMIT = process.env.LOOM_RATE_LIMIT ?? 'off';
 // a clean DOM.
 afterEach(() => {
   cleanup();
+  // vitest 4: `vi.restoreAllMocks()` no longer resets call history of plain
+  // `vi.fn()` mocks (it only restores `vi.spyOn` spies). Specs that relied on
+  // their afterEach `restoreAllMocks()` to wipe `expect(fn).not.toHaveBeenCalled()`
+  // state between tests (warehouse/copilot/run-action routes) saw calls leak
+  // from the previous test. Clearing history here restores the vitest-3 isolation
+  // without touching implementations or return values.
+  vi.clearAllMocks();
 });
 
 vi.mock('next/navigation', () => ({

@@ -73,15 +73,15 @@ export default defineConfig({
     // ResizeObserver/matchMedia stubs) is now wired so render() actually mounts —
     // the harness was previously env:'node' with no setupFiles, which made every
     // render test fail to mount (see .claude memory fiab-console-vitest-harness-broken).
+    //
+    // vitest 4 REMOVED `environmentMatchGlobs` (and `workspace`): left in place it is
+    // silently ignored and every file runs on node, so every DOM test dies in ~2ms
+    // with `ReferenceError: document is not defined` (main red after #5357). The
+    // same file->environment mapping is now two `projects` (see below).
     environment: 'node',
-    environmentMatchGlobs: [
-      ['**/*.test.tsx', 'jsdom'],
-    ],
     setupFiles: ['./vitest.setup.ts'],
     globals: false,
     pool: 'forks',
-    poolOptions: {
-      forks: {
         // ── `[vitest-worker]: Timeout calling "onTaskUpdate"` — SOLVED (#2944)
         //
         // READ THIS BEFORE FORMING A THEORY. The explanation that lived here
@@ -144,9 +144,9 @@ export default defineConfig({
         // box could never reproduce, because there the same literal was a large
         // reduction. Same config, opposite effect, decided by core count.
         // min(cap, cores - 1) never RAISES parallelism on a small machine.
-        maxForks: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
-      },
-    },
+    // vitest 4 removed `poolOptions`: `forks.maxForks` is now top-level `maxWorkers`
+    // (left under poolOptions it is IGNORED with a DEPRECATED warning, uncapping forks).
+    maxWorkers: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
     // The first `await import('../route')` in a heavy BFF spec triggers an
     // on-demand TS transform of the route AND its whole dependency graph. Under
     // full-suite parallel forks that cold transform can exceed the default 5s
@@ -168,15 +168,26 @@ export default defineConfig({
     // (those fail all three attempts). Local runs keep retry 0 so flakes
     // stay visible to developers.
     retry: process.env.CI ? 2 : 0,
+    // Root include/exclude = the FULL suite, as literals: scripts/ci/derive-infra-
+    // reading-suites.mjs regex-parses the first include array in this file and
+    // asserts it equals its INCLUDE regexes. Console-root `__tests__` suites were
+    // previously dark because the globs only matched lib/** and app/**.
+    //
+    // Projects use `extends: true`, which MERGES arrays with the root rather than
+    // overriding them (measured: re-declaring `include` per project made the node
+    // project pick up *.test.tsx and run it with no DOM). So the split is done with
+    // `exclude`, which also concatenates: the .test.ts vs .test.tsx split IS the
+    // environment mapping (API/logic on node, render tests on jsdom).
+    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
       'app/**/__tests__/**/*.test.{ts,tsx}',
-      // Console-root suites (registry coverage, APIM policy/XML scope,
-      // Copilot Studio ↔ Dataverse scope) — these were previously dark because
-      // the globs only matched lib/** and app/**.
       '__tests__/**/*.test.{ts,tsx}',
     ],
-    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
+    projects: [
+      { extends: true, test: { name: 'node', environment: 'node', exclude: ['**/*.test.tsx'] } },
+      { extends: true, test: { name: 'jsdom', environment: 'jsdom', exclude: ['**/*.test.ts'] } },
+    ],
     // ── Coverage (rel-T28) ────────────────────────────────────────────────
     // istanbul provider (Babel instrumentation). `all: true` counts EVERY
     // source file under include — not just the ones a test imported — so the
@@ -236,10 +247,14 @@ export default defineConfig({
     //    honest one and is harder to game.
     coverage: {
       provider: 'istanbul',
-      all: true,
+      // vitest 4 removed `coverage.all`: untested files under `include` are now
+      // ALWAYS counted (the old `all: true` behaviour). It also stopped filtering
+      // by extension, so `include` must name source extensions or lib/**/*.py
+      // (lib/notebook/ai-display.py) is fed to the JS transformer and crashes the
+      // run (PR #5365 CI, shard 1: "Unexpected token (1:0)").
       reporter: ['text-summary', 'json-summary', 'text'],
       reportsDirectory: './coverage',
-      include: ['lib/**', 'app/**'],
+      include: ['lib/**/*.{js,cjs,mjs,ts,mts,cts,jsx,tsx}', 'app/**/*.{js,cjs,mjs,ts,mts,cts,jsx,tsx}'],
       exclude: [
         '**/__tests__/**',
         '**/*.test.{ts,tsx}',
