@@ -946,8 +946,15 @@ jobs:
           chmod +x scripts/csa-loom/seed-governance.sh
           LOOM_SUBSCRIPTION_ID="$COSMOS_SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
             LOOM_COSMOS_DATABASE="loom" LOOM_PURVIEW_ACCOUNT="$LOOM_PURVIEW_ACCOUNT" \
-            bash scripts/csa-loom/seed-governance.sh \
-            || echo "::warning::governance seed failed (Cosmos Data Contributor RBAC on $COSMOS_ACCT for the deploy SP?) — surfaces start empty until re-run."
+            bash scripts/csa-loom/seed-governance.sh
+          # NOT swallowed (#5368): a Cosmos data-plane failure fails this step. The
+          # script's own ::error:: lines name the container, status and required role.
+          # (The shell has no -e, so the script's exit status is checked explicitly.)
+          seed_rc=$?
+          if [ "$seed_rc" -ne 0 ]; then
+            echo "::error::governance seed exited $seed_rc on $COSMOS_ACCT - see the ::error:: lines above."
+            exit "$seed_rc"
+          fi
 
       - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
         run: |

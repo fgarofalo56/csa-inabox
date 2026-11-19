@@ -662,3 +662,59 @@ resource featureGrantSeedDataAssignment 'Microsoft.DocumentDB/databaseAccounts/s
     scope: '${account.id}/dbs/${loomDatabase}/colls/${featurePermissions.name}'
   }
 }
+
+// ===========================================================================
+// DEPLOY-SP GOVERNANCE SEED DATA-PLANE GRANT, ALL BOUNDARIES (Refs #5368)
+// ===========================================================================
+//
+// `scripts/csa-loom/seed-governance.sh` (bootstrap step "Seed default
+// governance taxonomy") upserts into `tenant-settings` and `governance-domains`
+// as the deploy service principal. Bootstrap run 44256284701: all 7 upserts
+// failed (reported only as warnings). Same cause class as #5360: this account
+// has `disableLocalAuth: true` and the deploy SP held no data role.
+//
+// Operator decision 2026-11-19: extend the #5367 shape. Built-in Data
+// Contributor for `deployerServicePrincipalId`, scoped to each of the TWO
+// containers ALONE (never account or `dbs/loom`: `loom` is the only database, so
+// either would reach every console container). The `readMetadata`-only role and
+// its assignment declared above for #5360 are REUSED (same principal, same
+// account scope, no document access), so no second custom role is minted.
+// Gate = the #5367 gate (`grantDeployFeatureGrantSeed`).
+//
+// Both containers are DECLARED because a role assignment cannot scope to a
+// container that does not exist. Declared field for field from the live
+// containers (read-only `az cosmosdb sql container show`, 2026-11-19):
+// partitionKey /tenantId Hash, indexingMode consistent + automatic with the
+// default `/*` include, no TTL, no unique keys, LastWriterWins on `/_ts`. The
+// service-default `_etag` exclusion is not restated; the PUT is a no-op on data.
+//
+// CLOUD PARITY: not Gov-only. Commercial verified in compiled ARM only;
+// Gov/GCC/IL5 are supported-in-code, never exercised.
+// ===========================================================================
+
+var governanceSeedContainers = [
+  'tenant-settings'
+  'governance-domains'
+]
+
+resource governanceSeedContainerDecls 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in governanceSeedContainers: {
+  parent: loomDb
+  name: c
+  properties: {
+    resource: {
+      id: c
+      partitionKey: { paths: ['/tenantId'], kind: 'Hash' }
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}]
+
+resource governanceSeedDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = [for (c, i) in governanceSeedContainers: if (grantDeployFeatureGrantSeed) {
+  parent: account
+  name: guid(account.id, deployerServicePrincipalId, c, '00000000-0000-0000-0000-000000000002')
+  properties: {
+    roleDefinitionId: '${account.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+    principalId: deployerServicePrincipalId
+    scope: '${account.id}/dbs/${loomDatabase}/colls/${governanceSeedContainerDecls[i].name}'
+  }
+}]
