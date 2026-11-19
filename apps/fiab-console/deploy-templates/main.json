@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "1359554687724266279"
+      "templateHash": "10605172614486969849"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7456830707535317699"
+              "templateHash": "8148237270300955410"
             }
           },
           "definitions": {
@@ -8658,7 +8658,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "6844117894241623595"
+                      "templateHash": "7829416804019108846"
                     }
                   },
                   "parameters": {
@@ -8819,7 +8819,8 @@
                     "brainScanContainers": [
                       "brain-graph-versions",
                       "brain-findings"
-                    ]
+                    ],
+                    "grantDeployFeatureGrantSeed": "[and(not(empty(parameters('deployerServicePrincipalId'))), not(parameters('skipRoleGrants')))]"
                   },
                   "resources": [
                     {
@@ -9142,6 +9143,82 @@
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-graph-versions')]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), 'feature-permissions')]",
+                      "properties": {
+                        "resource": {
+                          "id": "feature-permissions",
+                          "partitionKey": {
+                            "paths": [
+                              "/tenantId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantDeployFeatureGrantSeed')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-feature-grant-seed-metadata-reader'))]",
+                      "properties": {
+                        "roleName": "Loom Feature Grant Seed Metadata Reader",
+                        "type": "CustomRole",
+                        "assignableScopes": [
+                          "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                        ],
+                        "permissions": [
+                          {
+                            "dataActions": [
+                              "Microsoft.DocumentDB/databaseAccounts/readMetadata"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantDeployFeatureGrantSeed')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), 'loom-feature-grant-seed-metadata-reader'))]",
+                      "properties": {
+                        "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-feature-grant-seed-metadata-reader'))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-feature-grant-seed-metadata-reader'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantDeployFeatureGrantSeed')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), 'feature-permissions', '00000000-0000-0000-0000-000000000002'))]",
+                      "properties": {
+                        "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[format('{0}/dbs/{1}/colls/{2}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), variables('loomDatabase'), 'feature-permissions')]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'feature-permissions')]"
                       ]
                     }
                   ],

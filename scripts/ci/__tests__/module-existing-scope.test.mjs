@@ -2008,6 +2008,8 @@ const CROSS_SUB_CALLSITE_REGISTER = {
     'ADX database creation against a cluster an estate may host in another subscription. Kusto, not storage.',
   [`${PLATFORM_PREFIX}health.bicep healthApimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
     'Same fragment as the ingress.bicep entry below, published from the subscription-level health.bicep once the control plane URL is known (the stamp deploys before the control plane, so the stamp ingress cannot hold it). One Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake. The Reader grant is a separate module (apim-access.bicep) scoped to the stamp resource group.',
+  [`${PLATFORM_PREFIX}health.bicep healthHubVaultPe -> ${PLATFORM_PREFIX}modules/health/hub-vault-pe.bicep`]:
+    'Hub-side private endpoint (#5345) on the stamp Key Vault, written into the hub resource group (derived from the hub Container Apps environment id, which may sit in another subscription). Writes one Microsoft.Network privateEndpoints resource and its privateDnsZoneGroups child; the module contains no roleAssignments and nothing that reaches storage or the lake.',
   [`${PLATFORM_PREFIX}modules/health/ingress.bicep apimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
     'LHDS tenant-routing policy fragment published into an EXISTING API Management service that a brownfield estate may host in another subscription (apimSubscriptionId). Writes one Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake (verified by grep, 0 matches).',
 };

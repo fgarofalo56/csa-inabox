@@ -7,10 +7,22 @@
 
 1. Actions, `deploy-health`, Run workflow. Choose `boundary` (Commercial or
    GCC-High) and `run_mode=whatif-only` first.
-2. For `full`: set `control_plane_audiences`; leave `allow_existing_hub` and
+2. For `full`: leave `control_plane_audiences` empty. It is resolved for you:
+   the input if typed, else repo variable `LOOM_HEALTH_CP_APP_CLIENT_ID`, else
+   the Entra app `loom-health-cp` by display name (must be exactly one), giving
+   `<appId>,api://<appId>`. A full run that cannot resolve it fails; it never
+   deploys without the control plane. After the deploy, the run sets
+   `LOOM_HEALTH_CP_URL`, `LOOM_HEALTH_CP_AUDIENCE` and
+   `LOOM_HEALTH_DEFAULT_STAMP_ID` on `loom-console` and reads them back. A later
+   `deploy-fiab-commercial` that does not carry them resets them; re-run this
+   lane to re-bind (#5346). Leave `allow_existing_hub` and
    `override_estate_pause` false unless intended.
-3. A stood-down or what-if run is titled DRY RUN and is not a deployed SHA.
-4. IL5 and DoD are not offered. IL5 is `health-params/il5-health.bicepparam`,
+3. The post-deploy bootstrap (`bootstrap-health-cp-entra.mjs`) declares Graph
+   `User.ReadBasic.All` + `GroupMember.Read.All` (application) on `loom-health-cp-as` and creates its
+   service principal, so a Global Administrator can grant consent. It does not
+   grant it.
+4. A stood-down or what-if run is titled DRY RUN and is not a deployed SHA.
+5. IL5 and DoD are not offered. IL5 is `health-params/il5-health.bicepparam`,
    supported-in-code only.
 
 ## Tenant create / destroy

@@ -47,7 +47,7 @@ on:
           - whatif-only
           - full
       control_plane_audiences:
-        description: 'Comma-separated accepted token audiences (app id URI and/or client id) for loom-health-cp. EMPTY = the stamp deploys without the control plane, because the service refuses to start without an audience.'
+        description: 'Comma-separated accepted token audiences (app id URI and/or client id) for loom-health-cp. Empty = resolved for you: repository variable LOOM_HEALTH_CP_APP_CLIENT_ID, else an Entra lookup of the app loom-health-cp by display name that must find exactly one, giving <appId>,api://<appId>. A full run that cannot resolve it FAILS; it never deploys without the control plane.'
         type: string
         required: false
         default: ''
@@ -262,12 +262,68 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # AUTO-BIND (#5346): the control plane's token audiences used to be typed in by hand, and an empty
+      # input gave a GREEN run with no control plane and no TLS (run 44235231240). Same order as the
+      # authorization-server app below: dispatch input, then repository variable
+      # LOOM_HEALTH_CP_APP_CLIENT_ID (the variable the post-deploy bootstrap already reads), then an Entra
+      # lookup by display name that must find EXACTLY one app. A full run that cannot resolve it FAILS; a
+      # what-if says so and continues, because it applies nothing.
+      - name: Resolve the control plane token audiences
+        id: audiences
+        if: ${{ steps.verdict.outputs.standdown != 'true' }}
+        env:
+          AUD_INPUT: ${{ inputs.control_plane_audiences }}
+          CP_APP_VAR: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: |
+          set -uo pipefail
+          # The runner shell is `bash -e` and `set -uo pipefail` does not clear it: without this, a failing
+          # `az ... 2> file` ends the script on that line and the RC check below never runs (run 43067631148).
+          set +e
+          mkdir -p temp
+          GUID='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          problem() { # $1 = message
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+            echo "audiences=" >> "$GITHUB_OUTPUT"
+            if [ "$RUN_MODE" = "full" ]; then echo "::error::$1"; exit 1; fi
+            echo "::warning::$1 (what-if continues WITHOUT the control plane; a full run would stop here)."
+            exit 0
+          }
+          AUD=""; SRC=""
+          if [ -n "$AUD_INPUT" ]; then AUD="$AUD_INPUT"; SRC="dispatch input control_plane_audiences"
+          else
+            APP=""
+            if [ -n "$CP_APP_VAR" ]; then APP="$CP_APP_VAR"; SRC="repository variable LOOM_HEALTH_CP_APP_CLIENT_ID"
+            else
+              az ad app list --filter "displayName eq 'loom-health-cp'" --query "[].appId" -o json > temp/cp-app.json 2> temp/cp-app.err
+              RC=$?
+              if [ "$RC" != "0" ]; then
+                problem "could not read Entra to find the app loom-health-cp (az exit $RC: $(head -c 300 temp/cp-app.err)). Whether it exists is UNKNOWN. Set the repository variable LOOM_HEALTH_CP_APP_CLIENT_ID or the dispatch input control_plane_audiences, or grant the deploy identity Graph Application.Read.All."
+              fi
+              N=$(jq 'length' temp/cp-app.json 2> /dev/null)
+              if ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+                problem "az returned output for the loom-health-cp lookup that could not be parsed as a JSON list (got '$(head -c 120 temp/cp-app.json)'), so whether the app exists is UNKNOWN (not a claim that it is missing). Set the repository variable LOOM_HEALTH_CP_APP_CLIENT_ID or the dispatch input control_plane_audiences."
+              fi
+              if [ "$N" != "1" ]; then
+                problem "found $N Entra apps named loom-health-cp; exactly 1 is required and this lane will not guess (and will not deploy without a control plane). Create the app registration, or set LOOM_HEALTH_CP_APP_CLIENT_ID / control_plane_audiences."
+              fi
+              APP=$(jq -r '.[0]' temp/cp-app.json); SRC="Entra lookup by display name loom-health-cp"
+            fi
+            if ! printf '%s' "$APP" | grep -Eq "$GUID"; then
+              problem "the control plane app client id from the $SRC is not a GUID."
+            fi
+            AUD="$APP,api://$APP"
+          fi
+          echo "resolved=true" >> "$GITHUB_OUTPUT"
+          echo "audiences=$AUD" >> "$GITHUB_OUTPUT"
+          echo "::notice::control plane audiences resolved from the $SRC (app ids and URIs, not secrets)."
+
       - name: Discover the hub (registry and Container Apps environment)
         id: hub
         if: ${{ steps.verdict.outputs.standdown != 'true' }}
         env:
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
           PLATFORM: ${{ steps.params.outputs.platform }}
+          AUDIENCES: ${{ steps.audiences.outputs.audiences }}
         run: |
           set -uo pipefail
           HUB_RG="rg-csa-loom-admin-${HUB_LOCATION}"
@@ -332,12 +388,15 @@ jobs:
       # cannot resolve it FAILS here rather than deploying a control plane that crash-loops.
       - name: Resolve the authorization-server Entra app client id
         id: asclient
-        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.control_plane_audiences != '' }}
+        if: ${{ steps.verdict.outputs.standdown != 'true' && steps.audiences.outputs.resolved == 'true' }}
         env:
           AS_INPUT: ${{ inputs.control_plane_as_client_id }}
           AS_VAR: ${{ vars.LOOM_HEALTH_CP_AS_CLIENT_ID || '' }}
         run: |
           set -uo pipefail
+          # The runner shell is `bash -e` and `set -uo pipefail` does not clear it: without this, a failing
+          # `az ... 2> file` ends the script on that line and the RC check below never runs (run 43067631148).
+          set +e
           GUID='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
           problem() { # $1 = message
             if [ "$RUN_MODE" = "full" ]; then echo "::error::$1"; exit 1; fi
@@ -381,7 +440,7 @@ jobs:
           fi
 
       - name: Image preflight - loom-health-cp tag exists in the registry
-        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && inputs.control_plane_audiences != '' }}
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.audiences.outputs.resolved == 'true' }}
         env:
           ACR: ${{ steps.hub.outputs.acr }}
           HUB_RG: ${{ steps.hub.outputs.hub_rg }}
@@ -586,6 +645,8 @@ jobs:
       # template exits 0 when the control plane is SKIPPED, so read its own state back.
       - name: Verify what was deployed
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        env:
+          AUDIENCES: ${{ steps.audiences.outputs.audiences }}
         run: |
           set -euo pipefail
           jq -e '.healthStamp.value.stampName' temp/outputs.json > /dev/null || { echo "::error::The deployment returned no stamp manifest, so no stamp was created. healthEnabled=true was passed, so this is the PostgreSQL gate (healthConfig.postgres) or a template defect."; exit 1; }
@@ -599,7 +660,7 @@ jobs:
             echo "Deployed, NOT verified live: no request to the control plane health route was made."
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$AUDIENCES" != "" ] && [ "$DEPLOYED" != "true" ]; then
-            echo "::error::control_plane_audiences was set but the control plane was NOT deployed: $(jq -r '.healthControlPlaneState.value.reason' temp/outputs.json)"
+            echo "::error::control plane audiences were resolved but the control plane was NOT deployed: $(jq -r '.healthControlPlaneState.value.reason' temp/outputs.json)"
             exit 1
           fi
           # A control plane missing any authorization-server value crash-loops (run 43333990195).
@@ -607,3 +668,86 @@ jobs:
             echo "::error::the control plane deployed WITHOUT authorization-server values and will not start: missing $(jq -c '.healthControlPlaneState.value.authServerMissing' temp/outputs.json)."
             exit 1
           fi
+
+      # AUTO-BIND (#5346): nothing bound LOOM_HEALTH_CP_URL / LOOM_HEALTH_CP_AUDIENCE /
+      # LOOM_HEALTH_DEFAULT_STAMP_ID into the console, so an operator hand-set them in /admin/env-config.
+      # The producer binds them here, from what this run just deployed. Read from the deploy outputs, set
+      # on the one loom-console app, read back. Idempotent: a console that already carries the three
+      # values gets no new revision. DURABILITY, stated: admin-plane/main.bicep renders these three env
+      # vars from observabilityConfig.healthCp*, so a later deploy-fiab-commercial that does not carry
+      # those params resets them; re-running this lane re-binds. See the PR for the follow-up.
+      - name: Bind the health control plane into the console
+        id: bind
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        env:
+          AUDIENCES: ${{ steps.audiences.outputs.audiences }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ "$(jq -r '.healthControlPlaneState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::notice::The control plane was not deployed by this run, so there is nothing to bind into the console."
+            exit 0
+          fi
+          FQDN=$(jq -r '.healthControlPlaneState.value.fqdn // ""' temp/outputs.json)
+          STAMP=$(jq -r '.healthStamp.value.stampName // ""' temp/outputs.json)
+          # The token scope is <audience>/.default for the FIRST audience: prefer the api:// form.
+          AUD=$(printf '%s' "$AUDIENCES" | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | grep -E '^api://' | head -n 1)
+          [ -n "$AUD" ] || AUD=$(printf '%s' "$AUDIENCES" | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$' | head -n 1)
+          if [ -z "$FQDN" ] || [ -z "$AUD" ] || [ -z "$STAMP" ]; then
+            echo "::error::Cannot bind the console: the deploy outputs gave fqdn='$FQDN', stamp='$STAMP', audience='$AUD'. The control plane IS deployed; the console was NOT bound. Set LOOM_HEALTH_CP_URL, LOOM_HEALTH_CP_AUDIENCE and LOOM_HEALTH_DEFAULT_STAMP_ID by hand until this is fixed."
+            exit 1
+          fi
+          URL="https://$FQDN"
+          az containerapp list --query "[?name=='loom-console'].{id:id,rg:resourceGroup,env:properties.template.containers[0].env}" -o json > temp/console.json 2> temp/console.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::Could not LIST Container Apps to find loom-console (az exit $RC: $(head -c 300 temp/console.err)), so whether it exists is UNKNOWN. The control plane IS deployed; the console was NOT bound."
+            exit 1
+          fi
+          N=$(jq 'length' temp/console.json 2> /dev/null)
+          if ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+            echo "::error::The loom-console lookup returned output that could not be parsed as a JSON list (got '$(head -c 120 temp/console.json)'), so whether loom-console exists is UNKNOWN. The control plane IS deployed; the console was NOT bound."
+            exit 1
+          fi
+          if [ "$N" != "1" ]; then
+            echo "::error::Found $N Container Apps named loom-console in this subscription; exactly 1 is required and this lane will not guess which to bind. The control plane IS deployed; the console was NOT bound."
+            exit 1
+          fi
+          CRG=$(jq -r '.[0].rg' temp/console.json)
+          cur() { jq -r --arg n "$1" '[.[0].env[]? | select(.name==$n) | .value] | first // ""' temp/console.json; }
+          if [ "$(cur LOOM_HEALTH_CP_URL)" = "$URL" ] && [ "$(cur LOOM_HEALTH_CP_AUDIENCE)" = "$AUD" ] && [ "$(cur LOOM_HEALTH_DEFAULT_STAMP_ID)" = "$STAMP" ]; then
+            echo "::notice::loom-console in $CRG already carries LOOM_HEALTH_CP_URL, LOOM_HEALTH_CP_AUDIENCE and LOOM_HEALTH_DEFAULT_STAMP_ID with these values; nothing written."
+            echo "### deploy-health: console binding unchanged ($BOUNDARY)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          az containerapp update -n loom-console -g "$CRG" --set-env-vars "LOOM_HEALTH_CP_URL=$URL" "LOOM_HEALTH_CP_AUDIENCE=$AUD" "LOOM_HEALTH_DEFAULT_STAMP_ID=$STAMP" -o none 2> temp/bind.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            if grep -qiE 'AuthorizationFailed|does not have authorization' temp/bind.err; then
+              echo "::error::PERMISSION: the deploy principal cannot update loom-console in $CRG (needs Contributor on it). The control plane IS deployed; the console was NOT bound. az said: $(head -c 300 temp/bind.err)"
+            else
+              echo "::error::az containerapp update on loom-console failed (exit $RC): $(head -c 400 temp/bind.err). The control plane IS deployed; the console was NOT bound."
+            fi
+            exit 1
+          fi
+          az containerapp show -n loom-console -g "$CRG" --query "properties.template.containers[0].env" -o json > temp/console-after.json 2> temp/console-after.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::The update was accepted but loom-console could not be read back (az exit $RC: $(head -c 300 temp/console-after.err)), so the binding is UNVERIFIED."
+            exit 1
+          fi
+          after() { jq -r --arg n "$1" '[.[]? | select(.name==$n) | .value] | first // ""' temp/console-after.json; }
+          BAD=""
+          [ "$(after LOOM_HEALTH_CP_URL)" = "$URL" ] || BAD="$BAD LOOM_HEALTH_CP_URL"
+          [ "$(after LOOM_HEALTH_CP_AUDIENCE)" = "$AUD" ] || BAD="$BAD LOOM_HEALTH_CP_AUDIENCE"
+          [ "$(after LOOM_HEALTH_DEFAULT_STAMP_ID)" = "$STAMP" ] || BAD="$BAD LOOM_HEALTH_DEFAULT_STAMP_ID"
+          if [ -n "$BAD" ]; then
+            echo "::error::Read-back FAILED: loom-console does not carry the intended value for:$BAD."
+            exit 1
+          fi
+          {
+            echo "### deploy-health: console bound ($BOUNDARY)"
+            echo
+            echo "loom-console in $CRG now has LOOM_HEALTH_CP_URL=$URL, LOOM_HEALTH_CP_AUDIENCE=$AUD, LOOM_HEALTH_DEFAULT_STAMP_ID=$STAMP (read back)."
+            echo "Bound, NOT verified live. The stamp id is the deployed stamp name; whether the control plane has it registered and healthy is not checked here."
+          } >> "$GITHUB_STEP_SUMMARY"
