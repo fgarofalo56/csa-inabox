@@ -176,16 +176,24 @@ export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?
   const details = Array.isArray(src?.details) ? (src.details as unknown[]) : [];
   const detailCodes = details.map((d) => code60((d as Json | null)?.code)).filter((c): c is string => !!c).slice(0, 5);
   if (detailCodes.length) diag.details = detailCodes;
-  // The denied action/scope may sit on the outer message or on a nested detail's message.
+  // The denied action/scope may sit on the outer message or on a nested detail's message. Both are
+  // taken from the SAME text: the first text that names an action owns the pair, and its scope is
+  // left unset if that text has none, so "denied A over S" never splices A and S from two errors.
   const texts = [message, ...details.map((d) => String((d as Json | null)?.message ?? ''))];
+  let scopeOnly: string | undefined;
   for (const t of texts) {
     const linked = LINKED_SHAPE.test(t);
     const a = entries((linked ? LINKED_ACTION : PLAIN_ACTION).exec(t)?.[1], 200);
     const s = entries((linked ? LINKED_SCOPE : PLAIN_SCOPE).exec(t)?.[1], 400);
-    if (a && !diag.action) diag.action = a;
-    if (s && !diag.scope) diag.scope = s;
-    if (diag.action && diag.scope) break;
+    if (a) {
+      diag.action = a;
+      if (s) diag.scope = s;
+      break;
+    }
+    scopeOnly ??= s;
   }
+  // No text named an action: a scope alone is still a fact ARM stated, reported as "scope", not "denied".
+  if (!diag.action && scopeOnly) diag.scope = scopeOnly;
   const cause = headers?.get('x-ms-failure-cause');
   if (cause && HEADER_TOKEN.test(cause)) diag.failureCause = cause;
   const corr = headers?.get('x-ms-correlation-request-id');

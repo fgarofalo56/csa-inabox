@@ -210,6 +210,20 @@ describe('ARM refusal diagnostics (#5380)', () => {
     expect(e.diag?.action).toBe('Microsoft.Authorization/roleAssignments/write'); // breaks if only the outer message is scanned
   });
 
+  it('action and scope come from the SAME text: an unparsable scope is left unset, not borrowed from a detail', async () => {
+    // Found in re-review of #5384: the outer Linked scope (non-ASCII RG, outside the scope class) failed to
+    // match, and the scope of an unrelated detail was spliced onto the outer action.
+    const outer = `does not have permission to perform action(s) 'Microsoft.A/b/x' on the linked scope(s) '/subscriptions/${SUB}/resourceGroups/rg-é'.`;
+    const other = `/subscriptions/${SUB}/resourceGroups/OTHER`;
+    const e = (await put({
+      status: 403,
+      body: { error: { code: 'LinkedAuthorizationFailed', message: outer, details: [{ code: 'AuthorizationFailed', message: `perform action 'Microsoft.Z/z/read' over scope '${other}'` }] } },
+    })) as ArmError;
+    expect(e.diag?.action).toBe('Microsoft.A/b/x');
+    expect(e.diag?.scope).toBeUndefined(); // breaks if action and scope are collected independently (would be OTHER)
+    expect(e.message).toContain('[denied Microsoft.A/b/x; details AuthorizationFailed]');
+  });
+
   it('a capitalised { Code } or a bare top-level { code } is read, not reported as Unknown', async () => {
     expect(((await put({ status: 403, body: { Code: 'RequestDisallowedByPolicy', Message: 'x' } })) as ArmError).code).toBe('RequestDisallowedByPolicy');
     expect(((await put({ status: 403, body: { error: { Code: 'Forbidden' } } })) as ArmError).code).toBe('Forbidden');
