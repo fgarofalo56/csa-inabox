@@ -47,7 +47,7 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<SensitivityLa
     if (e?.code !== 404) throw e;
   }
   // Deploy-readiness (#229): inherit the GLOBAL default label set seeded by
-  // scripts/csa-loom/seed-governance.sh so the surface is POPULATED on first
+  // scripts/csa-loom/seed-governance.mjs so the surface is POPULATED on first
   // login. Cloned only at doc-creation (this 404 path); never re-seeds after a
   // user edits/deletes labels. Absent GLOBAL doc → falls back to [].
   let seededLabels: SensitivityLabel[] = [];

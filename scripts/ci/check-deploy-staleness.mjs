@@ -222,7 +222,7 @@ export const WATCHED = [
       'scripts/csa-loom/provision-databricks-compute.sh',
       'scripts/csa-loom/provision-scc-labels-sidecar.sh',
       'scripts/csa-loom/run-spark-storage-fix-invnet-job.sh',
-      'scripts/csa-loom/seed-governance.sh',
+      'scripts/csa-loom/seed-governance.mjs',
       'scripts/csa-loom/upsert-hub-dns-arecords.sh',
       'scripts/csa-loom/wire-spark-telemetry.sh',
     ],

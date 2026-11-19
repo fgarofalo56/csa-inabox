@@ -52,8 +52,8 @@ const REPO_ROOT = path.resolve(CI_DIR, '..', '..');
 // ---------------------------------------------------------------------------
 
 test('detects a shell script that is actually executed', () => {
-  const src = extractDeploySources('        run: bash scripts/csa-loom/seed-governance.sh --rg x\n');
-  assert.equal(src.get('scripts/csa-loom/seed-governance.sh'), 'script');
+  const src = extractDeploySources('        run: bash scripts/csa-loom/seed-catalogs.sh --rg x\n');
+  assert.equal(src.get('scripts/csa-loom/seed-catalogs.sh'), 'script');
 });
 
 // ---------------------------------------------------------------------------
@@ -564,7 +564,7 @@ test('CONTROL: an ::warning:: naming a script is NOT a deploy source (#2816 fals
 });
 
 test('CONTROL: an echoed path is NOT a deploy source', () => {
-  const src = extractDeploySources('          echo "see scripts/csa-loom/seed-governance.sh for details"\n');
+  const src = extractDeploySources('          echo "see scripts/csa-loom/seed-catalogs.sh for details"\n');
   assert.equal(src.size, 0);
 });
 
@@ -617,7 +617,7 @@ test('CONTROL: an unlisted path is NOT covered', () => {
 // classifyEntry — the decision
 // ---------------------------------------------------------------------------
 
-const YAML_ONE_SCRIPT = '        run: bash scripts/csa-loom/seed-governance.sh\n';
+const YAML_ONE_SCRIPT = '        run: bash scripts/csa-loom/seed-catalogs.sh\n';
 
 test('a deploy source missing from paths is a GAP (the #2775 shape)', () => {
   const r = classifyEntry({
@@ -627,14 +627,14 @@ test('a deploy source missing from paths is a GAP (the #2775 shape)', () => {
     plumbing: {},
   });
   assert.equal(r.uncovered.length, 1);
-  assert.equal(r.uncovered[0].path, 'scripts/csa-loom/seed-governance.sh');
+  assert.equal(r.uncovered[0].path, 'scripts/csa-loom/seed-catalogs.sh');
   assert.equal(r.uncovered[0].how, 'script');
 });
 
 test('CONTROL: the same source listed in paths is NOT a gap', () => {
   const r = classifyEntry({
     workflow: 'w.yml',
-    paths: ['.github/workflows/w.yml', 'scripts/csa-loom/seed-governance.sh'],
+    paths: ['.github/workflows/w.yml', 'scripts/csa-loom/seed-catalogs.sh'],
     text: YAML_ONE_SCRIPT,
     plumbing: {},
   });

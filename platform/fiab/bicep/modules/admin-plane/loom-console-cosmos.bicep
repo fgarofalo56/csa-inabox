@@ -667,7 +667,7 @@ resource featureGrantSeedDataAssignment 'Microsoft.DocumentDB/databaseAccounts/s
 // DEPLOY-SP GOVERNANCE SEED DATA-PLANE GRANT, ALL BOUNDARIES (Refs #5368)
 // ===========================================================================
 //
-// `scripts/csa-loom/seed-governance.sh` (bootstrap step "Seed default
+// `scripts/csa-loom/seed-governance.mjs` (seed-automation-grant job step "Seed default
 // governance taxonomy") upserts into `tenant-settings` and `governance-domains`
 // as the deploy service principal. Bootstrap run 44256284701: all 7 upserts
 // failed (reported only as warnings). Same cause class as #5360: this account
