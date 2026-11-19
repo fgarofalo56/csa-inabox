@@ -975,7 +975,7 @@ jobs:
             fi
             echo ""
             echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
-            echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
+            echo "(#4253), the console health binding read (#5346), the what-if, the deploy-verification evidence receipt and its"
             echo "artifact upload, BOTH image preflights — the adoption preflight"
             echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
             echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the retired-image VM replacement,"
@@ -1070,6 +1070,23 @@ jobs:
           fi
           node scripts/ci/resolve-program-budget-start-date.mjs \
             --subscription "$DEPLOY_SUB"
+
+      # #5346 - carry the console's health binding through the re-render (gcc-high.bicepparam reads
+      # LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID). Skipped on a declared-paused estate, like the
+      # budget read above: a paused estate is a deliberate stand-down, not a failed read.
+      - name: Resolve the console health binding (#5346)
+        id: health_binding
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane; there is no console health binding to carry."
+            exit 0
+          fi
+          bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
 
       - name: Bicep what-if
         # STAND DOWN on a DECLARED-paused estate. ARM what-if cannot enumerate
@@ -1929,6 +1946,17 @@ jobs:
         if: success() && inputs.run_mode == 'whatif-only'
         run: |
           echo "✅ whatif-only run complete. Bicep + auth validated; no resources provisioned."
+
+      # #5346 - the resolver never stops the apply (a health-only value must not take the whole admin-plane
+      # deploy down), so an UNKNOWN console health binding is reported HERE, after everything else ran:
+      # the deploy completes and the run is honestly red (deploy-integrity R6/R7). `preserved` is only a warning.
+      - name: Fail the run if the console health binding is UNKNOWN (#5346)
+        if: ${{ always() && steps.health_binding.outputs.health_binding == 'unknown' }}
+        env:
+          REASON: ${{ steps.health_binding.outputs.health_binding_reason }}
+        run: |
+          echo "::error::The console health binding is UNKNOWN: ${REASON}. The deploy ran, but LOOM_HEALTH_CP_URL / _AUDIENCE / _DEFAULT_STAMP_ID on loom-console may now be empty. Re-run deploy-health.yml to re-bind them, or fix the cause above."
+          exit 1
 
       - name: Notify on failure (dedicated, OPEN issue - never a closed one)
         if: failure()

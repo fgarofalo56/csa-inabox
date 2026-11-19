@@ -531,6 +531,8 @@ export const WATCHED = [
       // declared at all. A commit touching it without a subsequent successful
       // run IS drift.
       'scripts/ci/resolve-program-budget-start-date.mjs',
+      // #5346 - resolves the console health binding the *.bicepparam files read; it decides what the apply renders.
+      'scripts/csa-loom/resolve-health-console-binding.sh',
       // ── #3948 — the AAS preflight, the ADX preflight's exact sibling ──────
       // Same class as ensure-adx-cluster-running.mjs above and watched for the
       // same reason: it MUTATES the estate. It resumes a Paused Analysis
@@ -700,6 +702,8 @@ export const WATCHED = [
       // whether main.bicep declares the budget at all — so it is watched here
       // exactly as resolve-dns-inbound-allocation.mjs is.
       'scripts/ci/resolve-program-budget-start-date.mjs',
+      // #5346 - resolves the console health binding the *.bicepparam files read; it decides what the apply renders.
+      'scripts/csa-loom/resolve-health-console-binding.sh',
       // The shared rule BOTH of the above import to tell "definitely absent"
       // from "I could not read it". Editing it changes both preflights at once,
       // which is the point of sharing it — and the reason it has to be watched
@@ -842,6 +846,8 @@ export const WATCHED = [
       // the FIRST run after re-enablement — the worst moment to find it, and
       // the same argument gcc.bicepparam already records for its MSAL wiring.
       'scripts/ci/resolve-program-budget-start-date.mjs',
+      // #5346 - resolves the console health binding the *.bicepparam files read; it decides what the apply renders.
+      'scripts/csa-loom/resolve-health-console-binding.sh',
       // ── #3948, ported to this lane by #4098 ───────────────────────────────
       // The AAS preflight, watched here for exactly the reason the Commercial
       // entry gives: it MUTATES the estate. It resumes a Paused Analysis
@@ -980,6 +986,8 @@ export const WATCHED = [
       // recorded deploy receipt at all, so like GCC this would first bite on a
       // run nobody has made yet.
       'scripts/ci/resolve-program-budget-start-date.mjs',
+      // #5346 - resolves the console health binding the *.bicepparam files read; it decides what the apply renders.
+      'scripts/csa-loom/resolve-health-console-binding.sh',
       // THE IMPORT EDGE. `_arm-absence.mjs` is the shared rule
       // ensure-adx-cluster-running.mjs imports to tell "definitely absent" from
       // "I could not read it". It is `import`ed and NEVER argv, so NO execution

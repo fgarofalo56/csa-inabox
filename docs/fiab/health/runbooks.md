@@ -14,8 +14,16 @@
    deploys without the control plane. After the deploy, the run sets
    `LOOM_HEALTH_CP_URL`, `LOOM_HEALTH_CP_AUDIENCE` and
    `LOOM_HEALTH_DEFAULT_STAMP_ID` on `loom-console` and reads them back. A later
-   `deploy-fiab-commercial` that does not carry them resets them; re-run this
-   lane to re-bind (#5346). Leave `allow_existing_hub` and
+   `deploy-fiab-commercial` used to reset them (#5346). It now carries them:
+   `deploy-fiab-commercial`, `-gcc`, `-gcch` and `-il5` run
+   `scripts/csa-loom/resolve-health-console-binding.sh` before the what-if, which
+   exports the three values from the deployed estate (the one `loom-health-cp`
+   app, its stamp resource group, and the Entra app `loom-health-cp`; the Entra
+   lookup is the default path, and repo variable `LOOM_HEALTH_CP_APP_CLIENT_ID`
+   is an optional override). The script never stops the deploy. If a lookup is
+   unknown it keeps the values the live console already carries (a warning); if
+   that read also fails the deploy still completes and the run is failed at the
+   end naming the reason. Re-run this lane to re-bind. Leave `allow_existing_hub` and
    `override_estate_pause` false unless intended.
 3. The post-deploy bootstrap (`bootstrap-health-cp-entra.mjs`) declares Graph
    `User.ReadBasic.All` + `GroupMember.Read.All` (application) on `loom-health-cp-as` and creates its

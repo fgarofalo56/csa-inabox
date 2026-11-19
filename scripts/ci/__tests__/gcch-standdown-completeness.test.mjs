@@ -1791,6 +1791,14 @@ const DISPOSITIONS = new Map([
   // read does not complete, so against a declared-paused estate it would turn a
   // deliberate stand-down into a red job. It carries GUARD already.
   ["Resolve the program budget's IMMUTABLE start date (#4253)", { mode: 'guard', summary: 'program budget' }],
+  ['Resolve the console health binding (#5346)', { mode: 'guard', summary: 'the console health binding read' }],
+  [
+    'Fail the run if the console health binding is UNKNOWN (#5346)',
+    {
+      mode: 'exempt',
+      why: 'echoes one line and exits 1; no az call, no network, no estate read or write. It only fires when the resolver step (itself guarded on the pause verdict) ran and reported health_binding=unknown, so on a declared-paused estate it cannot run.',
+    },
+  ],
   ['Bicep what-if', { mode: 'guard', summary: 'the what-if' }],
   ['Deploy-verification evidence receipt (§7)', { mode: 'guard', summary: 'evidence receipt' }],
   ['Upload GCC-High verification receipt', { mode: 'guard', summary: 'artifact upload' }],
