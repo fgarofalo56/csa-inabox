@@ -36,10 +36,18 @@ export class CosmosCollection<T extends Doc> implements Collection<T> {
   }
 
   async list(limit: number): Promise<T[]> {
-    const { resources } = await this.container.items
-      .query({ query: 'SELECT * FROM c ORDER BY c.id', parameters: [] }, { maxItemCount: limit })
-      .fetchNext();
-    return (resources as Record<string, unknown>[]).slice(0, limit).map((r) => clean<T>(r));
+    // A cross-partition ORDER BY can return an empty page while hasMoreResults() is still true, and
+    // `resources` can be undefined (empty container), so page until `limit` rows or exhaustion.
+    const it = this.container.items.query(
+      { query: 'SELECT * FROM c ORDER BY c.id', parameters: [] },
+      { maxItemCount: limit },
+    );
+    const rows: Record<string, unknown>[] = [];
+    while (rows.length < limit && it.hasMoreResults()) {
+      const page = await it.fetchNext();
+      rows.push(...((page.resources as Record<string, unknown>[] | undefined) ?? []));
+    }
+    return rows.slice(0, limit).map((r) => clean<T>(r));
   }
 
   async create(doc: T): Promise<T> {
