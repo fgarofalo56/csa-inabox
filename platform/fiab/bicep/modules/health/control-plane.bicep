@@ -478,6 +478,10 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = if (!onAks) {
     appAcrPull
     cosmosDataRole
     containers
+    // Start the CP only after private resolution exists: a process that first resolved the Cosmos
+    // account over the public endpoint kept using it until restarted by hand (#5370).
+    cosmosPe
+    cosmosPeDns
   ]
 }
 

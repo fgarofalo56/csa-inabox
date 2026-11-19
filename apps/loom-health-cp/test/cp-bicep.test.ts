@@ -25,3 +25,16 @@ describe('control-plane.bicep key vault grant (W1-2 follow-up)', () => {
     expect(health).toMatch(/keyVaultId: healthStamp!\.outputs\.stamp\.keyVaultId/);
   });
 });
+
+describe('control-plane.bicep first-deploy ordering (#5370)', () => {
+  it('the container app depends on the Cosmos PE and its DNS zone group', () => {
+    // Input that breaks it: dropping either dependsOn entry lets the CP start (and keep public Cosmos
+    // resolution) before private resolution exists.
+    const start = cp.indexOf("resource app 'Microsoft.App/containerApps");
+    const end = cp.indexOf('\nresource ', start + 10);
+    const block = cp.slice(start, end);
+    const deps = block.slice(block.lastIndexOf('dependsOn: ['));
+    expect(deps).toMatch(/\s+cosmosPeDns\s/);
+    expect(deps).toMatch(/\s+cosmosPe\s/);
+  });
+});
