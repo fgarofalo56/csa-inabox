@@ -63,7 +63,7 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<Classificatio
   }
   // Deploy-readiness (#229): a brand-new tenant inherits the GLOBAL default
   // classification taxonomy seeded at deploy time by
-  // scripts/csa-loom/seed-governance.mjs, so the surface is POPULATED on first
+  // scripts/csa-loom/seed-governance.sh, so the surface is POPULATED on first
   // login instead of empty (mirrors app/api/apps-catalog copy-defaults). Cloned
   // ONLY at doc-creation (this 404 path), so a user who later deletes rules is
   // not re-seeded. Best-effort: an absent GLOBAL doc falls back to [].
