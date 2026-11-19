@@ -22,7 +22,7 @@ import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 import { withHealthTenantAdmin } from '../_lib/tenant-admin-gate';
 import { parseQuotas } from '../_lib/quotas';
 import { apiError, apiOk } from '@/lib/api/respond';
-import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { apiHonestGateError, buildGateEnvelope, GATE_HTTP_STATUS } from '@/lib/api/gate-envelope';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { ensureHealthTenant, readBinding, realDeps } from '@/lib/install/provisioners/health-tenant';
 import { cp, CpError, CpNotConfiguredError, type CpJob, type CpTenant } from '../_lib/cp-client';
@@ -32,6 +32,15 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 25;
 
 const ITEM_TYPE = 'health-tenant';
+
+/**
+ * The gate envelope plus the provisioner's `phase`, so a client that reads `phase` (the G1 spec, a script)
+ * sees WHY provisioning stopped ('no-stamp', 'unconfigured') instead of an undefined phase. Additive: the
+ * envelope keys, status and message the editor reads (`gated`, `gate`, `error`) are unchanged.
+ */
+function gateWithPhase(gateId: string, phase: string, opts: { missing: string[]; message: string }): NextResponse {
+  return NextResponse.json({ ...buildGateEnvelope(gateId, opts), phase }, { status: GATE_HTTP_STATUS });
+}
 
 export const GET = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async (_req, { item }) => {
   const binding = readBinding(item.state);
@@ -89,9 +98,9 @@ export const POST = withHealthTenantAdmin<{ id: string }>('Contributor', async (
   );
   switch (outcome.phase) {
     case 'unconfigured':
-      return apiHonestGateError(outcome.gateId, { missing: outcome.missing, message: outcome.message });
+      return gateWithPhase(outcome.gateId, outcome.phase, { missing: outcome.missing, message: outcome.message });
     case 'no-stamp':
-      return apiHonestGateError(outcome.gateId, { missing: ['LOOM_HEALTH_DEFAULT_STAMP_ID'], message: outcome.message });
+      return gateWithPhase(outcome.gateId, outcome.phase, { missing: ['LOOM_HEALTH_DEFAULT_STAMP_ID'], message: outcome.message });
     case 'cp-error':
       return apiError(`${outcome.code}: ${outcome.message}`, 502, { code: outcome.code, steps: outcome.steps });
     case 'provisioning':

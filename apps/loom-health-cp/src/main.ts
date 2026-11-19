@@ -10,6 +10,7 @@ import { authoredMessage } from './safe-error.js';
 import { DefaultAzureCredential } from '@azure/identity';
 import { loadIngressCertConfig, scheduleIngressCert } from './tls/ingress-cert.js';
 import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
+import { loadStampSelfRegistration, scheduleStampSelfRegistration } from './registry/self-register.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
 // tokens, no request bodies, no clinical data.
@@ -22,16 +23,19 @@ function main(): void {
   let authCfg;
   let tenantCfg;
   let tlsCfg;
+  let stampCfg;
   try {
     cfg = loadConfig();
     authCfg = loadAuthServerConfig(cfg.cloud);
     tenantCfg = loadTenantArmConfig(cfg.cloud);
     tlsCfg = loadIngressCertConfig(cfg.cloud);
+    stampCfg = loadStampSelfRegistration(cfg.cloud);
   } catch (e) {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
   }
   const stores = createCosmosStores(cfg);
+  const tenantArm = tenantArmFromConfig(tenantCfg, cfg.authorityHost);
   const app = compose({
     stores,
     auth: authOptionsFromConfig(cfg),
@@ -39,7 +43,7 @@ function main(): void {
     // Cosmos-backed by default (published via PUT .../bundle); a configured dir overrides it (read-only, dev).
     bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : new CollectionBundleSource(stores.pdpBundles),
     authServer: authServerInitFromConfig(cfg, authCfg),
-    tenantArm: tenantArmFromConfig(tenantCfg, cfg.authorityHost),
+    tenantArm,
     log,
   });
   const server = createServer((req, res) => {
@@ -55,6 +59,15 @@ function main(): void {
     scheduleIngressCert({ cfg: tlsCfg, getToken: async (scope) => (await credential.getToken(scope)).token }, log);
   }
 
+  // #5377: register this stamp in our own registry and mark it healthy once its deployment reads back. A failure
+  // is logged and retried on a timer; the server is already listening and keeps serving.
+  let stopSelfRegister = (): void => {};
+  if (stampCfg) {
+    stopSelfRegister = scheduleStampSelfRegistration({ registry: app.registry, arm: tenantArm, log }, stampCfg);
+  } else {
+    log('stamp.self_register_disabled', { reason: 'LOOM_HEALTH_CP_STAMP_ID unset' });
+  }
+
   // Pick up queued jobs and fail leases left behind by a crashed replica.
   const sweep = setInterval(() => {
     app.jobs.tick().catch((e: unknown) => log('job.sweep_error', { error: e instanceof Error ? e.name : 'unknown' }));
@@ -63,6 +76,7 @@ function main(): void {
 
   const stop = (): void => {
     clearInterval(sweep);
+    stopSelfRegister();
     server.close(() => {
       app.jobs.idle().finally(() => process.exit(0));
     });
