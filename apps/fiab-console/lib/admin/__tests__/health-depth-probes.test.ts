@@ -8,10 +8,11 @@
  * edge is faked.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as armClient from '@/lib/azure/arm-client';
+import * as aasClient from '@/lib/azure/aas-client';
 
 // ── client mocks (the network edge) ──────────────────────────────────────────
-const armMock = { armGet: vi.fn(async () => ({ value: [{ name: 'loom-aas', properties: { state: 'Succeeded' } }], name: 'rg', properties: { provisioningState: 'Succeeded' } })) };
-vi.mock('@/lib/azure/arm-client', () => armMock);
+const armGetMock = vi.spyOn(armClient, 'armGet');
 class AmlNotConfiguredError extends Error { constructor(public missing: string[]) { super('aml not configured'); this.name = 'AmlNotConfiguredError'; } }
 const amlMock = {
   resolveAmlTarget: vi.fn(() => ({ subscriptionId: 's', resourceGroup: 'rg', workspace: 'ws-aml', region: 'eastus2' })),
@@ -29,8 +30,7 @@ const amlMock = {
   AML_ARM_API_VERSION: 'MOCKED-NOT-VALIDATED-HERE',
 };
 vi.mock('@/lib/azure/resolve-aml-target', () => amlMock);
-const aasMock = { aasAvailabilityGate: vi.fn(() => null as any) };
-vi.mock('@/lib/azure/aas-client', () => aasMock);
+const aasAvailabilityGateMock = vi.spyOn(aasClient, 'aasAvailabilityGate');
 const sqlMock = { listServers: vi.fn(async () => [{ name: 'sql-1' }]) };
 vi.mock('@/lib/azure/azure-sql-client', () => sqlMock);
 const pgMock = { postgresQueryGate: vi.fn(() => null as any), executePostgresQuery: vi.fn(async () => ({ columns: ['loom_health'], rows: [[1]] })) };
@@ -60,9 +60,9 @@ function byId(results: Awaited<ReturnType<typeof runExtraProbes>>, id: string) {
 /** Restore every mock to its "configured/reachable" default — clearAllMocks
  *  resets calls but NOT implementations, so a gate-flip in one test would leak. */
 function resetMocksConfigured() {
-  armMock.armGet.mockResolvedValue({ value: [{ name: 'loom-aas', properties: { state: 'Succeeded' } }], name: 'rg', properties: { provisioningState: 'Succeeded' } });
+  armGetMock.mockResolvedValue({ value: [{ name: 'loom-aas', properties: { state: 'Succeeded' } }], name: 'rg', properties: { provisioningState: 'Succeeded' } });
   amlMock.resolveAmlTarget.mockReturnValue({ subscriptionId: 's', resourceGroup: 'rg', workspace: 'ws-aml', region: 'eastus2' } as any);
-  aasMock.aasAvailabilityGate.mockReturnValue(null);
+  aasAvailabilityGateMock.mockReturnValue(null);
   sqlMock.listServers.mockResolvedValue([{ name: 'sql-1' }] as any);
   pgMock.postgresQueryGate.mockReturnValue(null);
   pgMock.executePostgresQuery.mockResolvedValue({ columns: ['loom_health'], rows: [[1]] } as any);
@@ -138,7 +138,7 @@ describe('W-B live probes', () => {
     process.env.LOOM_AAS_SERVER = 'asazure://eastus2.asazure.windows.net/loom';
     process.env.LOOM_AAS_RG = 'rg-admin';
     process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
-    armMock.armGet.mockResolvedValueOnce({ value: [{ name: 'loom-aas', properties: { state: 'Paused' } }] });
+    armGetMock.mockResolvedValueOnce({ value: [{ name: 'loom-aas', properties: { state: 'Paused' } }] });
     const results = await runExtraProbes(h);
     const r = byId(results, 'probe-aas');
     expect(r.status).toBe('warn');

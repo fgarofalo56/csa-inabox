@@ -27,8 +27,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const armMock = { armGet: vi.fn() };
-vi.mock('@/lib/azure/arm-client', () => armMock);
+import * as armClient from '@/lib/azure/arm-client';
+const armGetMock = vi.spyOn(armClient, 'armGet');
 
 import {
   runExtraProbes,
@@ -60,7 +60,7 @@ beforeEach(() => {
   process.env.LOOM_SUBSCRIPTION_ID = SUB_WITH_403;
   process.env.LOOM_ADMIN_RG = RG;
   delete process.env.LOOM_DLZ_RG;
-  armMock.armGet.mockReset();
+  armGetMock.mockReset().mockResolvedValue({ name: RG, location: 'centralus' });
 });
 
 afterEach(() => {
@@ -111,7 +111,7 @@ describe('classifyArmFailure — the status is parsed, never substring-matched',
 
 describe('probe-arm-reader — an unfinished check establishes nothing', () => {
   it('a timeout is warn + inconclusive, and claims neither unreachability nor a token failure', async () => {
-    armMock.armGet.mockRejectedValue(new Error(`timed out after ${ARM_PROBE_BUDGET_MS}ms`));
+    armGetMock.mockRejectedValue(new Error(`timed out after ${ARM_PROBE_BUDGET_MS}ms`));
     const r = await armProbe();
 
     // Before #3729 this was `status: 'fail'` — which drove Core platform to Blocked.
@@ -127,7 +127,7 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
   });
 
   it('retries ONCE on a not-established failure and reports the pass it then gets', async () => {
-    armMock.armGet
+    armGetMock
       .mockRejectedValueOnce(new Error(`timed out after ${ARM_PROBE_BUDGET_MS}ms`))
       .mockResolvedValueOnce({ name: RG, location: 'centralus' });
     const r = await armProbe();
@@ -136,23 +136,23 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
     expect(r.detail).toContain(RG);
     // Honest about the retry rather than silently swallowing the first attempt.
     expect(r.detail).toMatch(/first attempt did not complete/i);
-    expect(armMock.armGet).toHaveBeenCalledTimes(2);
+    expect(armGetMock).toHaveBeenCalledTimes(2);
   });
 
   it('does NOT retry a proven failure — a denial repeats identically', async () => {
-    armMock.armGet.mockRejectedValue(new Error(`ARM GET /subscriptions/${SUB_WITH_403}/resourcegroups/${RG}?api-version=2021-04-01 failed 403: AuthorizationFailed`));
+    armGetMock.mockRejectedValue(new Error(`ARM GET /subscriptions/${SUB_WITH_403}/resourcegroups/${RG}?api-version=2021-04-01 failed 403: AuthorizationFailed`));
     const r = await armProbe();
 
     expect(r.status).toBe('fail');
     expect(r.inconclusive).toBeUndefined();
-    expect(armMock.armGet).toHaveBeenCalledTimes(1);
+    expect(armGetMock).toHaveBeenCalledTimes(1);
     expect(r.remediation).toMatch(/Reader/);
     expect(r.portalSteps?.join(' ')).toMatch(/Access control/i);
     expect(r.fixScript).toMatch(/az role assignment create/);
   });
 
   it('a 404 names the resource group as the problem — the env Fix-it IS the fix here', async () => {
-    armMock.armGet.mockRejectedValue(new Error(`ARM GET /subscriptions/${SUB_WITH_403}/resourcegroups/${RG}?api-version=2021-04-01 failed 404: ResourceGroupNotFound`));
+    armGetMock.mockRejectedValue(new Error(`ARM GET /subscriptions/${SUB_WITH_403}/resourcegroups/${RG}?api-version=2021-04-01 failed 404: ResourceGroupNotFound`));
     const r = await armProbe();
 
     expect(r.status).toBe('fail');
@@ -162,7 +162,7 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
   });
 
   it('a transport failure says the endpoint was unreachable AND that a token was acquired', async () => {
-    armMock.armGet.mockRejectedValue(new Error('getaddrinfo ENOTFOUND management.azure.com'));
+    armGetMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND management.azure.com'));
     const r = await armProbe();
 
     expect(r.status).toBe('fail');
@@ -171,7 +171,7 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
   });
 
   it('a credential failure says the request never left the app — it does not blame the network', async () => {
-    armMock.armGet.mockRejectedValue(new Error('Failed to acquire ARM token'));
+    armGetMock.mockRejectedValue(new Error('Failed to acquire ARM token'));
     const r = await armProbe();
 
     expect(r.status).toBe('fail');
@@ -180,18 +180,18 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
   });
 
   it('a clean read passes with the resolved resource group', async () => {
-    armMock.armGet.mockResolvedValue({ name: RG, location: 'centralus' });
+    armGetMock.mockResolvedValue({ name: RG, location: 'centralus' });
     const r = await armProbe();
 
     expect(r.status).toBe('pass');
     expect(r.detail).toContain('centralus');
     expect(r.inconclusive).toBeUndefined();
-    expect(armMock.armGet).toHaveBeenCalledTimes(1);
+    expect(armGetMock).toHaveBeenCalledTimes(1);
   });
 
   it('genuinely-missing config still fails hard, and ships the env Fix-it for it', async () => {
     delete process.env.LOOM_SUBSCRIPTION_ID;
-    armMock.armGet.mockResolvedValue({ name: RG, location: 'centralus' });
+    armGetMock.mockResolvedValue({ name: RG, location: 'centralus' });
     const r = await armProbe();
 
     expect(r.status).toBe('fail');
@@ -199,7 +199,7 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
     expect(r.detail).toMatch(/LOOM_SUBSCRIPTION_ID/);
     expect(r.portalSteps?.join(' ')).toMatch(/LOOM_SUBSCRIPTION_ID/);
     // The probe never reached ARM at all.
-    expect(armMock.armGet).not.toHaveBeenCalled();
+    expect(armGetMock).not.toHaveBeenCalled();
   });
 
   it('the retry budget is strictly larger than the first attempt', () => {
@@ -279,7 +279,7 @@ describe('classifyProbeFailure — the shared probe classifier (#3793)', () => {
 describe('converted probes no longer manufacture a denial from a subscription id (#3793)', () => {
   it('the Azure SQL probe reports a 500 as warn with no role-grant script', async () => {
     process.env.LOOM_AZURE_SQL_DEFAULT_SERVER = 'sql-loom';
-    armMock.armGet.mockRejectedValue(
+    armGetMock.mockRejectedValue(
       new Error(`ARM GET /subscriptions/${SUB_WITH_403}/providers/Microsoft.Sql/servers failed 500: InternalServerError`),
     );
     const all = await runExtraProbes(h);
