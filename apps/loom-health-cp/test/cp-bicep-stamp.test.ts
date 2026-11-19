@@ -30,14 +30,33 @@ describe('stamp self-registration wiring (#5377)', () => {
     expect(health).toContain("== 'DEV' ? 'S'");
   });
 
-  it('grants Reader (acdd72a7...) on the stamp resource group only, never Contributor or Owner', () => {
-    // Input that breaks it: Contributor b24988ac-6180-42a0-ab88-20f7382dd24c or Owner 8e3af657-a8ff-443c-a75c-2fe8c4bcb635.
-    expect(cp).toContain("var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'");
-    expect(cp).not.toContain('b24988ac-6180-42a0-ab88-20f7382dd24c');
+  it('grants Contributor + a CONDITIONED RBAC Administrator on the stamp resource group only, never Owner or User Access Administrator (#5380)', () => {
+    // Operator decision on #5380 replaced #5379's Reader. Inputs that break this test:
+    //  - Owner 8e3af657-a8ff-443c-a75c-2fe8c4bcb635 or User Access Administrator 18d7d88d-d35e-4fb5-a5c3-7773c20a72d9 anywhere in the file;
+    //  - a `scope:` on either assignment (it would leave the stamp resource group);
+    //  - the RBAC Administrator assignment losing its `condition:` or `conditionVersion: '2.0'` (it would become unrestricted);
+    //  - either assignment losing its `!skipRoleGrants` gate or pointing at another principal.
+    // The condition's role SET is pinned against tenant.bicep by scripts/ci/__tests__/health-cp-stamp-rg-grants.test.mjs.
+    expect(cp).toContain("var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'");
+    expect(cp).toContain("var rbacAdministratorRoleId = 'f58310d9-a9f6-439a-9e8d-f62e7b41a168'");
     expect(cp).not.toContain('8e3af657-a8ff-443c-a75c-2fe8c4bcb635');
-    const block = cp.slice(cp.indexOf('resource cpStampReader'), cp.indexOf('// ── Ingress TLS certificate'));
-    expect(block).toContain('!skipRoleGrants');
-    expect(block).toContain('principalId: cpIdentity.properties.principalId');
-    expect(block).not.toContain('scope:');
+    expect(cp).not.toContain('18d7d88d-d35e-4fb5-a5c3-7773c20a72d9');
+    expect(cp).not.toContain('resource cpStampReader');
+    const block = (name: string): string => {
+      const start = cp.indexOf(`resource ${name} `);
+      expect(start, name).toBeGreaterThan(-1);
+      return cp.slice(start, cp.indexOf('\n}\n', start) + 2);
+    };
+    for (const name of ['cpStampContributor', 'cpStampRbacAdmin']) {
+      const b = block(name);
+      expect(b, name).toContain('!skipRoleGrants');
+      expect(b, name).toContain('principalId: cpIdentity.properties.principalId');
+      expect(b, name).not.toContain('scope:');
+    }
+    expect(block('cpStampContributor')).toContain('contributorRoleId');
+    const admin = block('cpStampRbacAdmin');
+    expect(admin).toContain('rbacAdministratorRoleId');
+    expect(admin).toContain('condition: rbacAdminCondition');
+    expect(admin).toContain("conditionVersion: '2.0'");
   });
 });
