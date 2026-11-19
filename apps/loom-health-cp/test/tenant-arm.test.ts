@@ -178,6 +178,28 @@ describe('ARM refusal diagnostics (#5380)', () => {
     expect(e.diag?.scope).toBe(linkedScope);
   });
 
+  it('LinkedAuthorizationFailed with SEVERAL linked actions reports every denied one, never the allowed one', async () => {
+    // ARM comma-joins a linked list inside ONE quoted string ("(respectively)"). Found in review of #5384:
+    // a class without the comma failed the (s) form and fell back to the plain form, naming the ALLOWED action.
+    const s1 = `/subscriptions/${SUB}/resourceGroups/net/providers/Microsoft.Network/virtualNetworks/v/subnets/a`;
+    const s2 = `/subscriptions/${SUB}/resourceGroups/ids/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-x`;
+    const msg = `The client '${OID}' with object id '${OID}' has permission to perform action 'Microsoft.Compute/virtualMachines/write' on scope '/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Compute/virtualMachines/vm'; however, it does not have permission to perform action(s) 'Microsoft.Network/virtualNetworks/subnets/join/action,Microsoft.ManagedIdentity/userAssignedIdentities/assign/action' on the linked scope(s) '${s1},${s2}' (respectively) or the linked scope(s) are invalid.`;
+    const e = (await put({ status: 403, body: { error: { code: 'LinkedAuthorizationFailed', message: msg } } })) as ArmError;
+    // Breaks if the (s) class loses the comma list: the result would be Microsoft.Compute/virtualMachines/write.
+    expect(e.diag?.action).toBe('Microsoft.Network/virtualNetworks/subnets/join/action,Microsoft.ManagedIdentity/userAssignedIdentities/assign/action');
+    expect(e.diag?.scope).toBe(`${s1},${s2}`);
+    expect(e.message).not.toContain('virtualMachines/write');
+  });
+
+  it('a Linked message whose list does not parse reports no action, rather than falling back to the allowed one', async () => {
+    const msg = `has permission to perform action 'Microsoft.Compute/virtualMachines/write' on scope '/subscriptions/${SUB}'; however, it does not have permission to perform action(s) 'not a list' on the linked scope(s) 'nor this'.`;
+    const e = (await put({ status: 403, body: { error: { code: 'LinkedAuthorizationFailed', message: msg } } })) as ArmError;
+    // Breaks if a Linked message is allowed to fall back to the plain "action '...'" form.
+    expect(e.diag?.action).toBeUndefined();
+    expect(e.diag?.scope).toBeUndefined();
+    expect(e.code).toBe('LinkedAuthorizationFailed'); // positive: the code still lands
+  });
+
   it('a refusal nested in details[] surfaces the detail codes and the nested denied action', async () => {
     const e = (await put({
       status: 400,
@@ -212,7 +234,9 @@ describe('ARM refusal diagnostics (#5380)', () => {
   });
 
   it('a quoted value outside the action/scope character class is not lifted', async () => {
-    const e = (await put({ status: 403, body: { error: { code: 'AuthorizationFailed', message: "perform action 'x SECRET y' over scope 'not-a-path'" } } })) as ArmError;
+    // Each value is otherwise action/scope-shaped (a "/" and a leading "/"), so only the space keeps it
+    // out: widening either class to admit a space turns this red.
+    const e = (await put({ status: 403, body: { error: { code: 'AuthorizationFailed', message: "perform action 'Microsoft.X/a SECRET b' over scope '/subscriptions/a SECRET b'" } } })) as ArmError;
     expect(e.diag?.action).toBeUndefined();
     expect(e.diag?.scope).toBeUndefined();
     expect(e.message).not.toContain('SECRET');

@@ -123,9 +123,9 @@ export interface TenantArm {
 export interface ArmDiagnostics {
   /** Nested `error.details[].code`, in order, at most 5. */
   details?: string[];
-  /** Denied action from an AuthorizationFailed-shaped message, e.g. `Microsoft.Resources/deployments/write`. */
+  /** Denied action from an AuthorizationFailed-shaped message, e.g. `Microsoft.Resources/deployments/write`. A LinkedAuthorizationFailed list is comma-joined, at most 5. */
   action?: string;
-  /** Scope the action was denied over, an ARM path. */
+  /** Scope the action was denied over, an ARM path; comma-joined (at most 5) for a linked list, positionally matching `action`. */
   scope?: string;
   /** `x-ms-failure-cause` (`gateway`, `service`, ...): who refused it. */
   failureCause?: string;
@@ -144,18 +144,24 @@ const code60 = (v: unknown): string | undefined => {
 // AuthorizationFailed: "...perform action 'Microsoft.X/y/write' over scope '/subscriptions/...'".
 // LinkedAuthorizationFailed: "...HAS permission to perform action 'A' on scope 'S'; however, it does not have
 // permission to perform action(s) 'B' on the linked scope(s) 'L'". The first quoted action there is the one
-// that was ALLOWED, so the "(s)" forms are tried first and the plain forms are the fallback.
-const ACTION_ID = "'([A-Za-z0-9.]+(?:/[A-Za-z0-9._*-]+)+)'";
-const SCOPE_ID = "'(/[A-Za-z0-9./_()-]{1,400})'";
-const DENIED_ACTION = [new RegExp(`action\\(s\\)\\s+${ACTION_ID}`, 'i'), new RegExp(`action\\s+${ACTION_ID}`, 'i')];
-const DENIED_SCOPE = [new RegExp(`linked scope\\(s\\)\\s+${SCOPE_ID}`, 'i'), new RegExp(`scope\\s+${SCOPE_ID}`, 'i')];
-const firstMatch = (res: RegExp[], text: string): string | undefined => {
-  for (const re of res) {
-    const m = re.exec(text)?.[1];
-    if (m) return m;
-  }
-  return undefined;
-};
+// that was ALLOWED. The "(s)" forms carry a comma-joined LIST ("(respectively)"), so they accept one,
+// and a Linked message never falls back to the plain forms: no match there reports nothing rather
+// than naming the allowed action as the denied one (deploy-integrity R7).
+const ACTION_ONE = '[A-Za-z0-9.]+(?:/[A-Za-z0-9._*-]+)+';
+const SCOPE_ONE = '/[A-Za-z0-9./_()-]{1,400}';
+const list = (one: string): string => `'(${one}(?:\\s*,\\s*${one}){0,9})'`;
+const LINKED_ACTION = new RegExp(`action\\(s\\)\\s+${list(ACTION_ONE)}`, 'i');
+const LINKED_SCOPE = new RegExp(`linked scope\\(s\\)\\s+${list(SCOPE_ONE)}`, 'i');
+const PLAIN_ACTION = new RegExp(`action\\s+'(${ACTION_ONE})'`, 'i');
+const PLAIN_SCOPE = new RegExp(`scope\\s+'(${SCOPE_ONE})'`, 'i');
+const LINKED_SHAPE = /linked scope|action\(s\)/i;
+/** At most 5 entries of a comma list, re-joined with "," and no spaces. */
+const entries = (m: string | undefined, max: number): string | undefined =>
+  m
+    ?.split(/\s*,\s*/)
+    .slice(0, 5)
+    .map((x) => x.slice(0, max))
+    .join(',');
 const HEADER_TOKEN = /^[A-Za-z0-9._:-]{1,80}$/;
 
 /** Extract an ARM error code and identifier-only diagnostics; never returns free text. */
@@ -173,9 +179,10 @@ export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?
   // The denied action/scope may sit on the outer message or on a nested detail's message.
   const texts = [message, ...details.map((d) => String((d as Json | null)?.message ?? ''))];
   for (const t of texts) {
-    const a = firstMatch(DENIED_ACTION, t);
-    const s = firstMatch(DENIED_SCOPE, t);
-    if (a && !diag.action) diag.action = a.slice(0, 200);
+    const linked = LINKED_SHAPE.test(t);
+    const a = entries((linked ? LINKED_ACTION : PLAIN_ACTION).exec(t)?.[1], 200);
+    const s = entries((linked ? LINKED_SCOPE : PLAIN_SCOPE).exec(t)?.[1], 400);
+    if (a && !diag.action) diag.action = a;
     if (s && !diag.scope) diag.scope = s;
     if (diag.action && diag.scope) break;
   }
