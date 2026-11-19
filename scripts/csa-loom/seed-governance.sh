@@ -52,15 +52,46 @@ az account set --subscription "$SUB" >/dev/null 2>&1 || true
 # ---------------------------------------------------------------------------
 # Idempotent upsert helper: create-or-replace one item in a container.
 # ---------------------------------------------------------------------------
+# A data-plane failure is FATAL (#5368, deploy-integrity R6/R7): the script
+# records it in SEED_FAILED and exits non-zero at the end. It never claims a cause
+# it did not establish: the HTTP status is only named when az's own error text
+# carries it, and the role is stated as what the status REQUIRES, not as a
+# diagnosis of why this principal lacks it.
+SEED_FAILED=0
+
+report_failure() {  # container item-id az-error-text
+  local container="$1" id="$2" err="$3" first
+  first="$(printf '%s' "$err" | tr '\r\n' '  ' | cut -c1-300)"
+  if printf '%s' "$err" | grep -Eiq 'forbidden|\b403\b|does not have required rbac'; then
+    echo "::error::governance seed FAILED: Cosmos returned HTTP 403 (Forbidden) for container '$container' (item '$id', account '$COSMOS', db '$DB'). A 403 means the signed-in identity lacks a data-plane role there; it needs Cosmos DB Built-in Data Contributor scoped to '$container' (granted by loom-console-cosmos.bicep governanceSeedDataAssignments, #5368). az said: $first"
+  elif printf '%s' "$err" | grep -Eiq 'not ?found|\b404\b|does not exist'; then
+    echo "::error::governance seed FAILED: Cosmos returned HTTP 404 (NotFound) for container '$container' (item '$id', account '$COSMOS', db '$DB'). A 404 means the container, database or account was not found by that name; the container is declared in loom-console-cosmos.bicep (governanceSeedContainerDecls, #5368). The signed-in identity also needs Cosmos DB Built-in Data Contributor scoped to '$container'. az said: $first"
+  else
+    echo "::error::governance seed FAILED for container '$container' (item '$id', account '$COSMOS', db '$DB'): the HTTP status was not identified from az's output, so no cause is asserted. az said: $first"
+  fi
+  SEED_FAILED=1
+}
+
 upsert() {  # container partition-key item-id json-body
-  local container="$1" pk="$2" id="$3" body="$4"
-  az cosmosdb sql container item create \
+  local container="$1" pk="$2" id="$3" body="$4" err
+  # create: success, or a conflict (item already exists) which falls through to replace.
+  if err="$(az cosmosdb sql container item create \
     --account-name "$COSMOS" -g "$RG" -d "$DB" -c "$container" \
-    --partition-key-value "$pk" --body "$body" >/dev/null 2>&1 || \
-  az cosmosdb sql container item replace \
+    --partition-key-value "$pk" --body "$body" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  # 403/404 are not conflicts: replace cannot succeed where create was refused.
+  if printf '%s' "$err" | grep -Eiq 'forbidden|\b403\b|does not have required rbac|not ?found|\b404\b|does not exist'; then
+    report_failure "$container" "$id" "$err"
+    return 0
+  fi
+  # Anything else (an existing item reads as Conflict/409): replace it.
+  if err="$(az cosmosdb sql container item replace \
     --account-name "$COSMOS" -g "$RG" -d "$DB" -c "$container" \
-    --partition-key-value "$pk" --item-id "$id" --body "$body" >/dev/null 2>&1 || \
-  echo "::warning::governance seed upsert failed for $container/$id (Cosmos RBAC? container missing?)"
+    --partition-key-value "$pk" --item-id "$id" --body "$body" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  report_failure "$container" "$id" "$err"
 }
 
 # ---------------------------------------------------------------------------
@@ -120,12 +151,13 @@ DOMAINS_SRC=$(cat <<'JSON'
 ]
 JSON
 )
-echo "$DOMAINS_SRC" | jq -c '.[]' | while IFS= read -r d; do
+# Process substitution (not a pipe) so upsert() failures reach SEED_FAILED in THIS shell.
+while IFS= read -r d; do
   id=$(echo "$d" | jq -r .id)
   doc=$(echo "$d" | jq -c --arg t "$TENANT" --arg now "$NOW" \
     '. + {tenantId:$t, createdBy:"csa-loom-seed", createdAt:$now, updatedBy:"csa-loom-seed", updatedAt:$now}')
   upsert governance-domains "$TENANT" "$id" "$doc"
-done
+done < <(echo "$DOMAINS_SRC" | jq -c '.[]')
 
 # ---------------------------------------------------------------------------
 # 4. OPT-IN Purview deepening — best-effort, never fatal.
@@ -141,6 +173,11 @@ if [ -n "${LOOM_PURVIEW_ACCOUNT:-}" ]; then
   echo "==> LOOM_PURVIEW_ACCOUNT=$LOOM_PURVIEW_ACCOUNT set — Purview deepening is handled by the"
   echo "    console's syncClassificationTaxonomyToPurview on first classifications mutation"
   echo "    (data-plane roles granted by grant-purview-datamap-role.sh). No extra action here."
+fi
+
+if [ "$SEED_FAILED" -ne 0 ]; then
+  echo "::error::governance seed did NOT complete: at least one Cosmos upsert failed (see the ::error:: lines above). The governance surfaces will be empty until this passes."
+  exit 1
 fi
 
 echo "==> Governance taxonomy seed complete (classifications + sensitivity labels + domains, tenant=$TENANT)."

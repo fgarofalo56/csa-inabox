@@ -112,21 +112,30 @@ describe('#5360 deploy-SP feature-permissions grant (compiled ARM)', () => {
 
   it('NO NEW assignment targets any other container or a wider scope', () => {
     // Population of deployer-principal data grants: brain loop (copy), the seed
-    // grant, the metadata companion. Anything else on deployerServicePrincipalId
-    // is a widening. Breaks on a 4th assignment for the deployer param.
+    // grant, the metadata companion, and (#5368, asserted in governance-seed-bicep.test.ts)
+    // the governance-seed loop. Anything else on deployerServicePrincipalId is a
+    // widening. Breaks on a 6th assignment for the deployer param.
     const deployerGrants = assignments.filter(
       (r) => r.properties?.principalId === "[parameters('deployerServicePrincipalId')]",
     );
     const names = deployerGrants.map((r) =>
       r.copy?.name === 'brainScanDataAssignments'
         ? 'brain-loop'
-        : isFeatureSeed(r)
+        : r.copy?.name === 'governanceSeedDataAssignments'
+          ? 'governance-loop'
+          : isFeatureSeed(r)
           ? 'feature-seed'
           : scopeOf(r) === ACCOUNT_SCOPE
             ? 'metadata:' + (String(r.name).includes('feature-grant-seed') ? 'feature' : 'brain')
             : 'UNEXPECTED:' + scopeOf(r),
     );
-    expect(names.sort()).toEqual(['brain-loop', 'feature-seed', 'metadata:brain', 'metadata:feature']);
+    expect(names.sort()).toEqual([
+      'brain-loop',
+      'feature-seed',
+      'governance-loop',
+      'metadata:brain',
+      'metadata:feature',
+    ]);
   });
 
   it('the container the grant scopes to is DECLARED, partitioned /tenantId', () => {

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10605172614486969849"
+      "templateHash": "6596491019449810717"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8148237270300955410"
+              "templateHash": "18364120777104506400"
             }
           },
           "definitions": {
@@ -8658,7 +8658,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7829416804019108846"
+                      "templateHash": "17787666216334642969"
                     }
                   },
                   "parameters": {
@@ -8820,7 +8820,11 @@
                       "brain-graph-versions",
                       "brain-findings"
                     ],
-                    "grantDeployFeatureGrantSeed": "[and(not(empty(parameters('deployerServicePrincipalId'))), not(parameters('skipRoleGrants')))]"
+                    "grantDeployFeatureGrantSeed": "[and(not(empty(parameters('deployerServicePrincipalId'))), not(parameters('skipRoleGrants')))]",
+                    "governanceSeedContainers": [
+                      "tenant-settings",
+                      "governance-domains"
+                    ]
                   },
                   "resources": [
                     {
@@ -9219,6 +9223,52 @@
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'feature-permissions')]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "governanceSeedContainerDecls",
+                        "count": "[length(variables('governanceSeedContainers'))]"
+                      },
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), variables('governanceSeedContainers')[copyIndex()])]",
+                      "properties": {
+                        "resource": {
+                          "id": "[variables('governanceSeedContainers')[copyIndex()]]",
+                          "partitionKey": {
+                            "paths": [
+                              "/tenantId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "governanceSeedDataAssignments",
+                        "count": "[length(variables('governanceSeedContainers'))]"
+                      },
+                      "condition": "[variables('grantDeployFeatureGrantSeed')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), variables('governanceSeedContainers')[copyIndex()], '00000000-0000-0000-0000-000000000002'))]",
+                      "properties": {
+                        "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[format('{0}/dbs/{1}/colls/{2}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), variables('loomDatabase'), variables('governanceSeedContainers')[copyIndex()])]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), variables('governanceSeedContainers')[copyIndex()])]"
                       ]
                     }
                   ],
