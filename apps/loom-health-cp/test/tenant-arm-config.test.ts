@@ -117,7 +117,9 @@ describe('main.ts wiring', () => {
   it('passes tenantArm to compose()', () => {
     // Input that breaks it: removing the `tenantArm:` line -> tenant.create answers "unknown job kind" again (#5162).
     const composeCall = main.slice(main.indexOf('compose({'), main.indexOf('const server'));
-    expect(composeCall).toContain('tenantArm: tenantArmFromConfig(tenantCfg, cfg.authorityHost)');
+    // The adapter is built once (#5377: self-registration reads the stamp deployment through the same instance).
+    expect(main).toContain('const tenantArm = tenantArmFromConfig(tenantCfg, cfg.authorityHost);');
+    expect(composeCall).toMatch(/^\s*tenantArm,\s*$/m);
   });
 });
 

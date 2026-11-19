@@ -70,6 +70,10 @@ allowed caller app.
 | `LOOM_HEALTH_CP_TLS_FQDN` | no | Ingress public FQDN (certificate CN and only DNS SAN) |
 | `LOOM_HEALTH_CP_TLS_CERT_NAME` | no | Certificate name, default `lhds-ingress-selfsigned` |
 | `LOOM_HEALTH_CP_TLS_RENEW_BEFORE_DAYS` | no | Integer 1-300, default `30` |
+| `LOOM_HEALTH_CP_STAMP_ID` | no | Stamp self-registration (#5377). Set = at startup and every 30 s until settled, the control plane creates this stamp in its own registry if absent, then moves `creating` to `healthy` once it reads the `lhds-stamp-<id>` deployment (with its `stamp` outputs) in `rg-csa-loom-health-<id>-<region>` through ARM (needs Reader on that resource group). `healthy` therefore means "the stamp deployed and this identity can read it", not an engine or ingress probe. An existing stamp is never rewritten and a `paused`, `draining` or `evacuated` one is never moved back. Failures log status and code only and retry; the server still starts. Unset = off (logged). With it set the three below are required, else startup fails naming them |
+| `LOOM_HEALTH_CP_STAMP_REGION` | with STAMP_ID | Stamp region, 3-30 chars of a-z0-9 (the resource group suffix) |
+| `LOOM_HEALTH_CP_STAMP_CLASS` | with STAMP_ID | `S`, `M` or `L` (the `dev` profile registers as `S`) |
+| `LOOM_HEALTH_CP_STAMP_BASE_URL` | with STAMP_ID | Stamp ingress base URL, `https://` with no credentials, query or fragment |
 | `LOOM_HEALTH_CP_GRAPH_CONSENT_URL` | no | Admin-consent URL shown by the readiness gate's Fix-it |
 | `PORT` | no | Listen port, default `8080` |
 | `AZURE_CLIENT_ID` | no | Client id of a user-assigned managed identity (read by `DefaultAzureCredential`) |

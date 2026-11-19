@@ -123,6 +123,18 @@ param skipRoleGrants bool = false
 @description('Log Analytics workspace id for Cosmos diagnostics. Empty = none.')
 param workspaceId string = ''
 
+@description('Stamp self-registration (#5377): the id of the stamp this control plane registers in its own registry on start (create-if-absent, then healthy once the stamp deployment reads back). Empty = no registration and no stamp env is emitted. Region, class and baseUrl are then required.')
+param stampId string = ''
+
+@description('Region of the stamp (the stamp resource group suffix). Required with stampId.')
+param stampRegion string = ''
+
+@description('Stamp size class S, M or L (the dev profile registers as S). Required with stampId.')
+param stampClass string = ''
+
+@description('Stamp public ingress base URL (https://<ingress fqdn>), recorded as the stamp baseUrl the routing publisher serves. Required with stampId.')
+param stampBaseUrl string = ''
+
 @description('Tags.')
 param tags object = {}
 
@@ -243,6 +255,22 @@ resource cpKeyOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
     principalId: cpIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     description: 'LHDS control plane: disable and delete tenant keys on tenant.destroy (crypto-shred).'
+  }
+}
+
+// ── Stamp resource group: read back the stamp deployment (#5377) ──────────────
+// Self-registration marks the stamp healthy only after it reads the stamp deployment record
+// (lhds-stamp-<id>) in this resource group. Reader is the narrowest built-in role that can do it,
+// scoped to the stamp resource group (this module's scope). tenant.create needs more than this.
+var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+
+resource cpStampReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(stampId) && !skipRoleGrants) {
+  name: guid(resourceGroup().id, cpIdentity.id, readerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: read the stamp deployment record to confirm the stamp before marking it healthy.'
   }
 }
 
@@ -388,7 +416,16 @@ var tlsEnv = issueIngressCert ? [
   { name: 'LOOM_HEALTH_CP_TLS_CERT_NAME', value: tlsCertName }
 ] : []
 
-var cpEnv = concat(authEnv, tlsEnv, [
+// Stamp self-registration (#5377, apps/loom-health-cp src/registry/self-register.ts). Emitted whole or not
+// at all: the service refuses to start on a partial set. The cloud comes from LOOM_HEALTH_CP_CLOUD.
+var stampEnv = empty(stampId) ? [] : [
+  { name: 'LOOM_HEALTH_CP_STAMP_ID', value: stampId }
+  { name: 'LOOM_HEALTH_CP_STAMP_REGION', value: stampRegion }
+  { name: 'LOOM_HEALTH_CP_STAMP_CLASS', value: stampClass }
+  { name: 'LOOM_HEALTH_CP_STAMP_BASE_URL', value: stampBaseUrl }
+]
+
+var cpEnv = concat(authEnv, tlsEnv, stampEnv, [
   { name: 'PORT', value: string(servicePort) }
   { name: 'LOOM_HEALTH_CP_CLOUD', value: cloudName }
   { name: 'LOOM_HEALTH_CP_TENANT_ID', value: entraTenantId }

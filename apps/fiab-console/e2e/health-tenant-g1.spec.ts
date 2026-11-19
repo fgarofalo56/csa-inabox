@@ -171,7 +171,24 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     let last: any = null;
     let lastStatus = 0;
     while (Date.now() < deadline) {
-      const r = await getJson(page, `/api/health/tenants/${itemId}`);
+      let r = await getJson(page, `/api/health/tenants/${itemId}`);
+      // GET is read-only and never provisions. While the item is unbound, ask the BFF to ensure it (idempotent
+      // POST, the same call the editor makes on open) and FAIL FAST on a stop the provisioner reports (#5377):
+      // a gated phase ('no-stamp', 'unconfigured') or a control-plane error will not clear by waiting 12 minutes.
+      if (r.status === 200 && r.body?.phase === 'unbound') {
+        const p = await page.request.post(`${BASE}/api/health/tenants/${itemId}`, { data: { retry: false }, timeout: 90_000 });
+        const pb = await p.json().catch(() => ({}));
+        failIfTenantAdminGate(p.status(), pb, `POST /api/health/tenants/${itemId}`);
+        // Breaks on a 503 gate (phase 'no-stamp' / 'unconfigured') or a 502 control-plane error: throws with the
+        // provisioner's own phase and message, not a timeout with `phase` undefined.
+        if (p.status() === 503 || p.status() === 502 || pb?.gated === true) {
+          throw new Error(
+            `tenant create stopped before any ARM resource: HTTP ${p.status()} phase=${pb?.phase ?? '(none)'} ` +
+            `gate=${pb?.gate?.id ?? '(none)'} message=${JSON.stringify(String(pb?.error ?? pb?.message ?? '').slice(0, 300))}`,
+          );
+        }
+        r = await getJson(page, `/api/health/tenants/${itemId}`);
+      }
       last = r.body; lastStatus = r.status;
       if (r.status === 200 && last?.phase === 'failed') {
         throw new Error(`tenant create failed: binding.lastError=${JSON.stringify(last?.binding?.lastError)} liveError=${JSON.stringify(last?.liveError)} job.error=${JSON.stringify(last?.job?.error)}`);

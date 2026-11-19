@@ -262,6 +262,12 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     authGraphConsentUrl: string(controlPlaneConfig.?authGraphConsentUrl ?? '')
     authSigningKeyId: string(controlPlaneConfig.?authSigningKeyId ?? '')
     skipRoleGrants: skipRoleGrants
+    // #5377: the control plane registers this stamp itself. The id and region are the stamp resource
+    // group's (rg-csa-loom-health-<id>-<region>); the dev profile registers as class S.
+    stampId: healthStampName
+    stampRegion: healthLocation
+    stampClass: toUpper(string(healthConfig.?profile ?? 'dev')) == 'DEV' ? 'S' : toUpper(string(healthConfig.?profile ?? 'dev'))
+    stampBaseUrl: empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
   }
