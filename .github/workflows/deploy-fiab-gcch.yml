@@ -975,7 +975,7 @@ jobs:
             fi
             echo ""
             echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
-            echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
+            echo "(#4253), the console health binding read (#5346), the what-if, the deploy-verification evidence receipt and its"
             echo "artifact upload, BOTH image preflights — the adoption preflight"
             echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
             echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the retired-image VM replacement,"
