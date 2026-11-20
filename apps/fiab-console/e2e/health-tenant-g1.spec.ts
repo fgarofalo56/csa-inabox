@@ -275,7 +275,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     const shots: [string, () => Promise<void>][] = [
       ['editor-light', async () => { await page.emulateMedia({ colorScheme: 'light' }); }],
       ['editor-dark', async () => { await page.emulateMedia({ colorScheme: 'dark' }); }],
-      ['editor-narrow-420', async () => { await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 420, height: 900 }); }],
+      ['editor-narrow-768', async () => { await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 768, height: 900 }); }],
     ];
     for (const [name, setup] of shots) {
       await setup();
@@ -285,10 +285,50 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
       expect(body.length, `${name} screenshot size`).toBeGreaterThan(5_000);
       await testInfo.attach(name, { body, contentType: 'image/png' });
     }
-    // Narrow pass: no horizontal page overflow. Breaks if scrollWidth exceeds the 420px viewport.
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    await testInfo.attach('narrow-horizontal-overflow-px', { body: String(overflow), contentType: 'text/plain' });
-    expect(overflow, 'horizontal overflow in px at 420px wide').toBeLessThanOrEqual(1);
+    // Narrow pass (#5399, ux-standards.md section 9.7). The AppShell root is capped at 100vw with
+    // overflow hidden and its <main> scrolls its own overflow, so a wide editor shows up as
+    // <main> overflow (in-flow content), not page overflow. Both are measured. Page overflow is the old
+    // html/body min-width gutter (348px at 420px), deleted on #5399.
+    const MAIN = 'main.loom-app-grid-bg';
+    const measure = () => page.evaluate((sel) => {
+      const m = document.querySelector(sel);
+      return {
+        doc: document.documentElement.scrollWidth - window.innerWidth,
+        main: m ? m.scrollWidth - m.clientWidth : -1,
+      };
+    }, MAIN);
+    // Positive controls on the REAL shell, so the instrument is shown to see overflow where it
+    // exists: a 2000px child inside <main> must read as <main> overflow, and one appended to
+    // <body> must read as page overflow. Each is removed before the real measurement.
+    const probe = (target: 'main' | 'body') => page.evaluate(([sel, t]) => {
+      const host = t === 'main' ? document.querySelector(sel) : document.body;
+      if (!host) return { doc: -1, main: -1 };
+      const d = document.createElement('div');
+      d.style.cssText = t === 'main' ? 'width:2000px;height:1px' : 'position:absolute;top:0;left:0;width:2000px;height:1px';
+      host.appendChild(d);
+      const m = document.querySelector(sel);
+      const r = { doc: document.documentElement.scrollWidth - window.innerWidth, main: m ? m.scrollWidth - m.clientWidth : -1 };
+      d.remove();
+      return r;
+    }, [MAIN, target] as const);
+    const ctlMain = await probe('main');
+    const ctlBody = await probe('body');
+    // Breaks if the selector no longer finds <main> (-1) or if <main> stops scrolling its overflow.
+    expect(ctlMain.main, 'positive control: a 2000px child must overflow <main>').toBeGreaterThan(500);
+    // Breaks if page overflow became unmeasurable (e.g. html/body `overflow-x: clip`).
+    expect(ctlBody.doc, 'positive control: a 2000px body child must overflow the page').toBeGreaterThan(500);
+    for (const width of [768, 420]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(800);
+      const o = await measure();
+      await testInfo.attach(`narrow-overflow-${width}`, { body: JSON.stringify(o), contentType: 'application/json' });
+      // Breaks if the html/body min-width gutter comes back (348 at 420) or anything is
+      // positioned past the viewport at body level.
+      expect(o.doc, `page overflow in px at ${width}px wide`).toBeLessThanOrEqual(1);
+      // 768 is the smallest supported width: breaks if editor content is wider than <main>
+      // there (a fixed-width ribbon, an untruncated breadcrumb). Below 768 it is reported only.
+      if (width === 768) expect(o.main, '<main> overflow in px at the 768px supported floor').toBeLessThanOrEqual(1);
+    }
     await page.setViewportSize({ width: 1600, height: 1000 });
   });
 
