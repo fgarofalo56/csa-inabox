@@ -136,15 +136,18 @@ G1 run 44468120431: step 1 (`GET /api/health/tenants` 200) PASS; step 2 (the ite
 
 All are deployed on Commercial dev01. The ACR build of `loom-health-cp` succeeded in 44659268695, and revision `--0000010` was restarted at 02:33Z.
 
-**BLOCKED on #5380.** `tenant.create` fails with `code=permission` on the CP's GET of the `lhds-stamp-dev01` deployment. The response is a bare 403: no JSON, no correlation id, and no Activity Log event.
-- G1 run 44661794270 hit it at 02:39:54Z, and no tenant deployment exists in ARM.
-- The in-VNet positive control (#5387 `bbc0cda6`, run 44666713225) ran from the SAME CAE (`cae-csa-loom-centralus`). The deploy SP got 20 of 20 `200 application/json` responses with correlation ids. The network path is therefore ruled out; the cause is in the CP's own request (its token, identity or process).
-- The runner managed-identity arm was NOT measured.
+**2026-11-20 later: create path deployed and verified on Commercial dev01; G1 steps 1-3 PASS.**
+- #5395 (`3555396d7`): `tenant.bicep` dependsOn edges (role grants + capacity alert waited on nothing, so every create failed ResourceNotFound). LIVE: tenant deployment `lhds-tenant-g1-202611200813` Succeeded.
+- #5394 (`73e26d5ed`): bounded retry + fingerprint for a non-ARM 403. LIVE: three poll 403s each recovered, `tenant.create` job.succeeded. #5380's 403 is a Microsoft edge page (title `Microsoft`, `x-msedge-ref` Ref A/B/C), not ARM authz and not the CP identity.
+- #5397 (`5aac755d4`): G1 step 3 finalises the binding the way the editor does.
+- #5398 (`fe0d0d2bf`): destroy retains the immutable audit account and crypto-shreds its key (OPERATOR DECISION 2026-11-20 on #5392), deletes both PEs, waits (8 min, under the job lease) for an in-flight create.
+- Rolled by ACR build 44750962061 + restart of `--0000010` at 14:21Z. G1 run 44753035218: steps 1-3 PASS (create + bind in 2.2 min; the editor shows bound/active, 10 resources read back). Destroy LIVE: only the retained audit account remains for `g1-202611201425`.
 
-**Owed, in order:**
-1. Read the failed job's #5386 diagnostic message (#5388 makes G1 fail fast and print it).
-2. Read back the CP's identity wiring, names only.
-3. Re-run G1.
+**Still failing:**
+1. G1 step 4: 348 px horizontal overflow at a 420 px viewport (#5399; element not identified, likely shared item chrome).
+2. Destroy ends `shred_unverified`: hypothesis = the key read-back races Key Vault's async soft-delete (#5392 comment, fix = bounded poll for deletedDate). NOT established.
 
-The orphan Reader from #5379 stays on the stamp RG until G1 passes (operator decision 2026-11-20). Follow-ups: #5314, #5324, #5328, #5373, #5388. | 2026-11-20 |
+**Owed, in order:** the #5392 shred read-back poll -> the #5399 overflow -> roll -> G1 (all 5 steps) -> re-submit `tenant.destroy` for leaked `g1-202611200813` and `g1-202611201425` -> edge probe (W1b-2) -> Inferno (W1b-3).
+
+The orphan Reader from #5379 stays on the stamp RG until G1 passes (operator decision 2026-11-20). Follow-ups: #5314, #5324, #5328, #5373, #5396. | 2026-11-20 |
 | W1b-5 GCC-High: Trivy+cosign gate then deploy-health via Actions | todo | | sonnet | #4584, #5123 | 2026-11-14 |
