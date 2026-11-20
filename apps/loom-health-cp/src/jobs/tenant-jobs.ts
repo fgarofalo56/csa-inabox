@@ -17,9 +17,13 @@ import type { StampDoc, TenantDoc } from '../registry/types.js';
 import type { Collection } from '../store/types.js';
 import {
   classifyArm,
+  KEY_SUFFIXES,
+  privateEndpointName,
   stampResourceGroup,
   tenantNames,
+  type DeploymentSettle,
   type KeyReadback,
+  type ResourceReadback,
   type TenantArm,
   type TenantManifest,
 } from './tenant-arm.js';
@@ -208,6 +212,25 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         await ctx.receipt('tenant.destroying', `tenant=${r.tenant.id}`);
       }
 
+      // 0. Never sweep a deployment that is still creating resources (#5392 defect 1): a delete
+      // racing an in-flight create leaves whatever the deployment writes next. Wait boundedly for
+      // a terminal state; still running after the cap fails typed and retryable, with nothing touched.
+      let settle: DeploymentSettle;
+      try {
+        settle = await deps.arm.awaitTenantDeployment(r.rg, r.tenant.id);
+      } catch (e) {
+        throw classifyArm(e);
+      }
+      if (settle.state === 'in_flight') {
+        throw new JobFailure(
+          'deployment_in_flight',
+          `the tenant deployment lhds-tenant-${r.tenant.id} in ${r.rg} still reported provisioningState=${settle.provisioningState || 'unreported'} after ${settle.polls} read(s) over the bounded wait; nothing was deleted and no key was shredded. Retry the job once the deployment has finished.`,
+        );
+      }
+      if (settle.state === 'terminal') {
+        await ctx.receipt('deployment.settled', `deployment=lhds-tenant-${r.tenant.id} provisioningState=${settle.provisioningState} reads=${settle.polls}`);
+      }
+
       let lookup;
       try {
         lookup = await deps.arm.getTenantManifest(r.rg, r.tenant.id);
@@ -251,23 +274,42 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         }
       }
 
+      // OPERATOR DECISION 2026-11-20 (#5392): retain + crypto-shred. The audit account carries
+      // version-level immutability (tenant.bicep, 2190 days) and Azure refuses to delete it
+      // (AccountProtectedFromDeletion), so it is NEVER deleted: it is kept for its retention period
+      // and its CMK key is shredded below, which leaves its content unreadable. Only that one
+      // account, matched by its manifest id, is exempt; every other delete failure fails the job.
+      const retainedId = manifest.auditAccountId;
+      const isRetained = (id: string): boolean => retainedId !== '' && id === retainedId;
+
       // 1. Data-bearing resources first. Keys outlive them until every consumer is gone.
       const all = expectedResources(manifest, r.stamp.id, r.tenant.id);
-      const dataResources = all.filter(([kind]) => !kind.startsWith('key.'));
-      // Order: consumers of the identity and keys before the identity itself.
-      const order = ['database', 'eventhub', 'storage.pixel', 'storage.audit', 'alert.capacity', 'identity'];
+      const dataResources = all.filter(([kind, id]) => !kind.startsWith('key.') && !isRetained(id));
+      // Each account's private endpoint (storage.bicep `pe-<account>-blob`, same resource group as
+      // the account) is not a manifest output, so it is derived from the account id. Deleting a PE
+      // also deletes the NIC Azure created for it. Both PEs go, the retained account's included.
+      for (const [kind, accountId] of [['pe.pixel', manifest.pixelAccountId], ['pe.audit', manifest.auditAccountId]] as const) {
+        if (!accountId) continue;
+        const scope = accountId.split('/providers/')[0] ?? '';
+        dataResources.push([kind, `${scope}/providers/Microsoft.Network/privateEndpoints/${privateEndpointName(lastSegment(accountId))}`, '']);
+      }
+      // Order: a PE before its account; consumers of the identity and keys before the identity itself.
+      const order = ['database', 'eventhub', 'pe.pixel', 'pe.audit', 'storage.pixel', 'alert.capacity', 'identity'];
       dataResources.sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
       for (const [kind, id] of dataResources) {
         try {
           await deps.arm.deleteResource(id);
         } catch (e) {
-          throw classifyArm(e);
+          const f = classifyArm(e);
+          // Name WHICH delete failed; the code and the authored text are kept as they were.
+          throw f instanceof JobFailure ? new JobFailure(f.code, `deleting ${kind} (${id}): ${f.message}`) : f;
         }
         await ctx.receipt('resource.deleted', `${kind} id=${id}`);
       }
 
-      // 2. Prove every consumer is really gone before any key is touched: a key shredded while
-      // an account still exists would leave that account encrypted under nothing.
+      // 2. Prove every deleted resource is really gone before any key is touched: a key shredded
+      // while a pixel account still exists would leave that account encrypted under nothing. The
+      // retained audit account is the one deliberate exception (it is shredded on purpose).
       const stillThere: string[] = [];
       for (const [kind, id] of dataResources) {
         let rb;
@@ -280,6 +322,18 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
       }
       if (stillThere.length > 0) {
         throw new JobFailure('destroy_incomplete', `still present after delete: ${stillThere.join(', ')}; keys were NOT shredded. Retry the job.`);
+      }
+
+      // The retained account as ARM reports it now. Version-level immutability has no single
+      // account-wide end date (each blob version is held for the period from when it was
+      // written), so the retention period in days is what is recorded.
+      let retained: ResourceReadback | undefined;
+      if (retainedId) {
+        try {
+          retained = await deps.arm.readResource(retainedId);
+        } catch (e) {
+          throw classifyArm(e);
+        }
       }
 
       // 3. Crypto-shred: disable, delete, then read the state back as evidence.
@@ -295,6 +349,8 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
           throw classifyArm(e);
         }
       }
+      const auditKey = names.keyNames[KEY_SUFFIXES.indexOf('st-audit')];
+      let auditKeyState: KeyReadback | undefined;
       const unshredded: string[] = [];
       for (const name of names.keyNames) {
         let k: KeyReadback;
@@ -308,9 +364,23 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
           `key=${name} live=${k.exists} deletedDate=${k.deletedDate ?? 'none'} scheduledPurgeDate=${k.scheduledPurgeDate ?? 'none'}`,
         );
         if (k.exists || !k.deletedDate) unshredded.push(name);
+        if (name === auditKey) auditKeyState = k;
       }
       if (unshredded.length > 0) {
         throw new JobFailure('shred_unverified', `key state did not read back as deleted for: ${unshredded.join(', ')}`);
+      }
+
+      // 4. The retained audit account is part of a SUCCESSFUL destroy: recorded, with its key's
+      // shredded state, only after that state read back as deleted.
+      // Two receipts because the runner caps a receipt detail at 300 chars and a live id is ~170.
+      if (retained) {
+        const imm = retained.immutability;
+        const name = manifest.auditAccountName || lastSegment(retainedId);
+        await ctx.receipt('storage.audit.retained', `name=${name} id=${retainedId} exists=${retained.exists}`);
+        await ctx.receipt(
+          'storage.audit.retention',
+          `name=${name} immutability=${imm ? (imm.enabled ? 'enabled' : 'disabled') : 'unreported'} retentionDays=${imm?.periodDays ?? 'unreported'} policy=${imm?.policyState ?? 'unreported'} key=${auditKey} keyLive=${String(auditKeyState?.exists)} keyDeletedDate=${auditKeyState?.deletedDate ?? 'none'}`,
+        );
       }
     },
   };
