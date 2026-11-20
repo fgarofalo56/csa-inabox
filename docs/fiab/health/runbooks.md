@@ -38,11 +38,25 @@
 - Create: `POST /api/health/tenants` registers the tenant; job `tenant.create`
   (empty input) deploys `tenant.bicep` and reads back resource ids.
 - Destroy: job `tenant.destroy` requires `confirmTenantId` equal to the job
-  subject. Crypto-shred is evidenced by key state.
-- **Not wired**: `main.ts` does not register these handlers or an ARM adapter,
-  so submitting these kinds via `POST /api/health/jobs` is not expected to work
-  today. Key Vault data-plane disable/delete also needs a Crypto Officer grant
-  (W1-2 execution state).
+  subject. Deleting the health-tenant item in the console submits it.
+  - If the tenant deployment `lhds-tenant-<slug>` is still `Running` or
+    `Accepted`, destroy waits for it (at most 15 min) before naming or deleting
+    anything. If it is still running at the cap, the job fails
+    `deployment_in_flight` with nothing deleted. Retry it later.
+  - It deletes the database, event hub, both private endpoints
+    (`pe-<account>-blob`), the pixel storage account, the capacity alert and
+    the tenant identity, and proves each is gone.
+  - **The audit storage account is retained, not deleted** (operator decision
+    2026-11-20, #5392). It is immutable for its retention period (2190 days),
+    and Azure refuses to delete it (`AccountProtectedFromDeletion`). Its
+    customer-managed key is crypto-shredded with the tenant's other keys, so
+    the retained content is unreadable. The job records this as success, with
+    the `storage.audit.retained` and `storage.audit.retention` receipts.
+  - Crypto-shred is evidenced by key state: every key reads back
+    `live=false` with a deleted date.
+- Both kinds are registered when the control plane has a tenant ARM config
+  (`compose.ts`). The control-plane identity needs Key Vault Crypto Officer on
+  the stamp vault (`control-plane.bicep`) to shred keys.
 
 ## PDP bundle publish
 
