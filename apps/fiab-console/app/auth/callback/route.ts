@@ -403,7 +403,11 @@ export async function GET(req: NextRequest) {
       redirectUri: `${origin(req)}/auth/callback`,
       // PKCE (rel-T12): prove this browser initiated the flow. Omitted when the
       // hardening is disabled or no cookie was set, preserving the prior exchange.
-      ...(flow ? { codeVerifier: flow.verifier } : {}),
+      // The nonce MUST ride along: since @azure/msal-node 7.2 the exchange always
+      // validates the id_token nonce and rejects one with no expected nonce
+      // (nonce_mismatch), which looped every sign-in after #5385. Our own check
+      // below stays as defence in depth.
+      ...(flow ? { codeVerifier: flow.verifier, nonce: flow.nonce } : {}),
     });
     if (!result?.account || !result.accessToken)
       return htmlRedirect(`/?auth_error=no_token`, undefined, [...clearAuthflow, ...stamp('no_token')]);
