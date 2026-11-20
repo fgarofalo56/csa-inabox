@@ -221,6 +221,11 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
         }
         r = await getJson(page, `/api/health/tenants/${itemId}`);
         last = r.body; lastStatus = r.status;
+        // Breaks if the finalise said 'bound' but the binding write never landed (provisioner persist() is
+        // best-effort): the GET would keep reading 'provisioning' and the loop would re-POST into the timeout.
+        if (r.status !== 200 || last?.phase !== 'bound') {
+          throw new Error(`finalise returned bound but the GET reads HTTP ${r.status} phase=${last?.phase ?? '(none)'}: the binding write did not land`);
+        }
       }
       if (r.status === 200 && last?.phase === 'bound' && last?.tenant?.status === 'active') break;
       await page.waitForTimeout(POLL_MS);
