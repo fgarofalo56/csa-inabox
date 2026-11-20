@@ -200,6 +200,12 @@ resource tenantIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   tags: tenantTags
 }
 
+// These two `existing` handles point at accounts the pixelStorage / auditStorage
+// modules above CREATE. An `existing` reference carries no edge to the module, so
+// every resource that scopes to or references them MUST name its storage module in
+// `dependsOn`; without it ARM runs them concurrently with the account write and the
+// tenant deployment fails ResourceNotFound (#5380, lhds-tenant-g1-202611200452).
+// Guarded by apps/loom-health-cp/test/cp-bicep-tenant-dependson.test.ts.
 resource pixelAccount 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
   name: pixelAccountName
 }
@@ -216,6 +222,9 @@ resource pixelRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!s
     principalId: tenantIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
+  dependsOn: [
+    pixelStorage
+  ]
 }
 
 resource auditRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
@@ -226,6 +235,9 @@ resource auditRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!s
     principalId: tenantIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
+  dependsOn: [
+    auditStorage
+  ]
 }
 
 // Key-scoped: the tenant identity can use ONLY its own four keys.
@@ -289,6 +301,9 @@ resource capacityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
       { actionGroupId: alertActionGroupId }
     ]
   }
+  dependsOn: [
+    pixelStorage
+  ]
 }
 
 @description('Tenant manifest: every resource id the control plane reads back and records. Names equal the ones derived from the tenant slug.')
