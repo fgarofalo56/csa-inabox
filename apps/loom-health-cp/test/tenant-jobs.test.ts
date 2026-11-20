@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { JobRunner } from '../src/jobs/runner.js';
 import {
   ArmError,
+  privateEndpointName,
   stampResourceGroup,
   tenantNames,
+  type DeploymentSettle,
   type KeyReadback,
   type ResourceReadback,
   type TenantArm,
@@ -22,6 +24,11 @@ const SLUG = 'acme-health';
 const RG = stampResourceGroup(STAMP, 'eastus2');
 const VAULT = 'https://kv-lhds-dev01-abc.vault.azure.net/';
 const id = (type: string, name: string) => `/subscriptions/${SUB}/resourceGroups/${RG}/providers/${type}/${name}`;
+const peId = (accountName: string) => id('Microsoft.Network/privateEndpoints', privateEndpointName(accountName));
+const PIXEL_ID = id('Microsoft.Storage/storageAccounts', 'sthpxacmehealth1');
+const AUDIT_ID = id('Microsoft.Storage/storageAccounts', 'sthtaacmehealth1');
+const PE_PIXEL = peId('sthpxacmehealth1');
+const PE_AUDIT = peId('sthtaacmehealth1');
 
 class FakeArm implements TenantArm {
   resources = new Map<string, string>(); // id -> name as ARM reports it
@@ -40,10 +47,25 @@ class FakeArm implements TenantArm {
   };
   throwOnDeploy: Error | undefined;
   stickyIds = new Set<string>(); // delete silently does nothing
+  /** ids whose DELETE throws, as Azure does for an immutable account (AccountProtectedFromDeletion). */
+  deleteThrows = new Map<string, Error>();
+  /** ids that carry version-level immutability (readResource reports it). */
+  immutableDays = new Map<string, number>();
   keyDeleteIsNoop = false;
   renameOnDeploy: { suffix: string; to: string } | undefined;
+  /** provisioningState of lhds-tenant-<slug>; undefined = Succeeded once deployed, else absent. */
+  deploymentState: string | undefined;
+  settleCalls = 0;
   private manifest: TenantManifest | undefined;
 
+  async awaitTenantDeployment(): Promise<DeploymentSettle> {
+    this.settleCalls++;
+    const s = this.deploymentState ?? (this.manifest ? 'Succeeded' : undefined);
+    if (s === undefined) return { state: 'absent' };
+    return ['Succeeded', 'Failed', 'Canceled'].includes(s)
+      ? { state: 'terminal', provisioningState: s, polls: 1 }
+      : { state: 'in_flight', provisioningState: s, polls: 181 };
+  }
   async getStampManifest() {
     return this.stampState === 'found' ? { state: 'found' as const, value: this.stampManifest } : { state: this.stampState };
   }
@@ -86,16 +108,25 @@ class FakeArm implements TenantArm {
       const name = rid.split('/').pop() as string;
       this.resources.set(rid, this.renameOnDeploy && rid.endsWith(this.renameOnDeploy.suffix) ? this.renameOnDeploy.to : name);
     }
+    // storage.bicep puts a private endpoint `pe-<account>-blob` beside each account (same RG).
+    for (const acc of [m.pixelAccountName, m.auditAccountName]) this.resources.set(peId(acc), privateEndpointName(acc));
+    // Like Azure: the immutable audit account refuses DELETE.
+    this.immutableDays.set(m.auditAccountId, 2190);
+    this.deleteThrows.set(m.auditAccountId, new ArmError(409, 'AccountProtectedFromDeletion', 'delete resource'));
     for (const k of m.keyNames) if (!this.keys.has(k)) this.keys.set(k, { name: k, exists: true, enabled: true });
     this.manifest = m;
     return m;
   }
   async readResource(rid: string): Promise<ResourceReadback> {
     const name = this.resources.get(rid);
-    return name === undefined ? { id: rid, exists: false } : { id: rid, exists: true, name };
+    if (name === undefined) return { id: rid, exists: false };
+    const days = this.immutableDays.get(rid);
+    return { id: rid, exists: true, name, ...(days !== undefined ? { immutability: { enabled: true, periodDays: days, policyState: 'Unlocked' } } : {}) };
   }
   async deleteResource(rid: string) {
     this.deleteCalls.push(rid);
+    const err = this.deleteThrows.get(rid);
+    if (err) throw err;
     if (!this.stickyIds.has(rid)) this.resources.delete(rid);
   }
   async readKey(_v: string, name: string): Promise<KeyReadback> {
@@ -158,6 +189,14 @@ describe('names agree with tenant.bicep', () => {
     // 'lhds_${replace(tenantSlug, '-', '_')}' -> lhds_abc_d
     expect(lift(/name: '(lhds_)\$\{replace\(tenantSlug, '-', '_'\)\}'/) + 'abc_d').toBe(n.databaseName);
   });
+  it('the private endpoint name destroy derives equals storage.bicep `pe-${accountName}-blob`', () => {
+    const storage = readFileSync(new URL('../../../platform/fiab/bicep/modules/health/storage.bicep', import.meta.url), 'utf8');
+    const m = /resource pe 'Microsoft\.Network\/privateEndpoints@[^']+' = \{\s*name: '([^']+)'/.exec(storage);
+    if (!m?.[1]) throw new Error('private endpoint name not found in storage.bicep');
+    // Input that breaks it: a rename in storage.bicep (e.g. pe-${accountName}) makes destroy delete a non-existent id.
+    expect(m[1].replace('${accountName}', 'sthpxabc')).toBe(privateEndpointName('sthpxabc'));
+  });
+
   it('key suffix order equals the bicep keySuffixes order (readback pairs keys by index)', () => {
     expect(lift(/var keySuffixes = \[([^\]]+)\]/).replaceAll("'", '').split(', ')).toEqual(n.keyNames.map((k) => k.replace('t-abc-d-', '')));
   });
@@ -172,7 +211,8 @@ describe('tenant.create', () => {
     const readbacks = job.receipts.filter((r) => r.step === 'readback');
     // 5 fixed resources + database + 4 keys = 10; fewer means a resource was skipped.
     expect(readbacks).toHaveLength(10);
-    for (const rid of arm.resources.keys()) expect(readbacks.some((r) => r.detail.includes(rid)), rid).toBe(true);
+    // Private endpoints are not tenant.bicep outputs and create does not read them back (destroy derives them).
+    for (const rid of arm.resources.keys()) if (!rid.includes('/privateEndpoints/')) expect(readbacks.some((r) => r.detail.includes(rid)), rid).toBe(true);
     expect(job.receipts.filter((r) => r.step === 'key.state').map((r) => r.detail)).toEqual(
       tenantNames(STAMP, SLUG).keyNames.map((k) => `key=${k} exists=true enabled=true`),
     );
@@ -274,11 +314,12 @@ describe('tenant.destroy', () => {
     expect(tenants.docs.get(SLUG)?.status).toBe('active');
   });
 
-  it('deletes every resource, THEN shreds the keys, and reads the key state back as deleted', async () => {
+  it('deletes every resource but the retained audit account, THEN shreds the keys, and reads the key state back as deleted', async () => {
     const { arm, tenants, run } = await created();
     const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
-    expect(arm.resources.size).toBe(0);
+    // Input that breaks it: any other surviving id (a PE, the identity) joins the audit account here.
+    expect([...arm.resources.keys()]).toEqual([AUDIT_ID]);
     expect(tenants.docs.get(SLUG)?.status).toBe('destroying');
     const steps = job.receipts.map((r) => r.step);
     const lastDelete = steps.lastIndexOf('resource.deleted');
@@ -313,8 +354,11 @@ describe('tenant.destroy', () => {
     // The old behaviour failed here with tenant_manifest_missing and left the tenant undeletable.
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
     expect(job.receipts.some((r) => r.step === 'manifest.derived')).toBe(true);
-    expect(arm.resources.size).toBe(0); // all 10: 6 resources + 4 keys, including the hash-named storage accounts
-    expect(arm.deleteCalls).toHaveLength(6);
+    // Everything but the retained audit account: 5 resources + 2 PEs + 4 keys, the hash-named pixel account included.
+    expect([...arm.resources.keys()]).toEqual([AUDIT_ID]);
+    expect(arm.deleteCalls).toHaveLength(7); // 6 would mean a PE was not derived from the tag-found account
+    expect(arm.deleteCalls).not.toContain(AUDIT_ID);
+    expect(job.receipts.find((r) => r.step === 'storage.audit.retained')?.detail).toContain(`id=${AUDIT_ID}`);
     expect(arm.deleteCalls.some((id) => id.endsWith(`/eventhubs/eh-t-${SLUG}`))).toBe(true);
     expect(arm.keyOps.filter((o) => o.startsWith('delete:'))).toHaveLength(4);
     expect(tenants.docs.get(SLUG)?.status).toBe('destroying');
@@ -359,6 +403,93 @@ describe('tenant.destroy', () => {
     expect(job.error?.message).toContain('storage.pixel');
     expect(arm.keyOps).toEqual([]); // any entry means keys were shredded under a live account
     for (const k of tenantNames(STAMP, SLUG).keyNames) expect(arm.keys.get(k)?.enabled).toBe(true);
+  });
+
+  describe('retain + crypto-shred the immutable audit account (#5392, operator decision 2026-11-20)', () => {
+    it('succeeds without ever DELETEing the audit account, shreds its key, and records it retained', async () => {
+      const { arm, run } = await created();
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      // Input that breaks it: re-adding storage.audit to the delete list -> the fake's 409 fails the job.
+      expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+      expect(arm.deleteCalls.filter((x) => x === AUDIT_ID)).toHaveLength(0);
+      expect(arm.resources.has(AUDIT_ID)).toBe(true);
+      const auditKey = `t-${SLUG}-st-audit`;
+      expect(arm.keyOps).toEqual(expect.arrayContaining([`disable:${auditKey}`, `delete:${auditKey}`]));
+      expect(arm.keys.get(auditKey)).toMatchObject({ exists: false, deletedDate: '2026-10-26T00:00:00.000Z' });
+      // Exactly one of each, naming the account by name and id, its retention, and the key's shredded
+      // state. Exact equality, so the runner's 300-char receipt cap truncating either one breaks it.
+      expect(job.receipts.filter((r) => r.step === 'storage.audit.retained').map((r) => r.detail)).toEqual([
+        `name=sthtaacmehealth1 id=${AUDIT_ID} exists=true`,
+      ]);
+      expect(job.receipts.filter((r) => r.step === 'storage.audit.retention').map((r) => r.detail)).toEqual([
+        `name=sthtaacmehealth1 immutability=enabled retentionDays=2190 policy=Unlocked key=${auditKey} keyLive=false keyDeletedDate=2026-10-26T00:00:00.000Z`,
+      ]);
+      // The retained receipt follows the shred evidence, never precedes it.
+      const steps = job.receipts.map((r) => r.step);
+      expect(steps.indexOf('storage.audit.retained')).toBeGreaterThan(steps.lastIndexOf('key.shredded'));
+    });
+
+    it('deletes both private endpoints, each before its account, and proves them gone', async () => {
+      const { arm, run } = await created();
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+      // Input that breaks it: dropping the PE derivation -> neither id is in deleteCalls and both survive.
+      expect(arm.deleteCalls).toEqual(expect.arrayContaining([PE_PIXEL, PE_AUDIT]));
+      expect(arm.resources.has(PE_PIXEL)).toBe(false);
+      expect(arm.resources.has(PE_AUDIT)).toBe(false);
+      expect(arm.deleteCalls.indexOf(PE_PIXEL)).toBeLessThan(arm.deleteCalls.indexOf(PIXEL_ID));
+      expect(job.receipts.filter((r) => r.step === 'resource.deleted').map((r) => r.detail)).toEqual(
+        expect.arrayContaining([`pe.pixel id=${PE_PIXEL}`, `pe.audit id=${PE_AUDIT}`]),
+      );
+    });
+
+    it('a PE that survives its delete is caught by the proof of absence and no key is shredded', async () => {
+      const { arm, run } = await created();
+      arm.stickyIds.add(PE_AUDIT); // input that breaks it: excluding PEs from the readback lets this pass
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.error?.code).toBe('destroy_incomplete');
+      expect(job.error?.message).toContain('pe.audit');
+      expect(arm.keyOps).toEqual([]);
+    });
+
+    it('a NON-audit storage delete failure still fails the job: it is not retained, and no key is shredded', async () => {
+      const { arm, run } = await created();
+      // The same 409 code Azure returns for the audit account, on the PIXEL account. A handler that
+      // retained any storage failure would continue and report it retained.
+      arm.deleteThrows.set(PIXEL_ID, new ArmError(409, 'AccountProtectedFromDeletion', 'delete resource'));
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.state).toBe('failed');
+      expect(job.error?.code).toBe('arm_error');
+      expect(job.error?.message).toContain(`deleting storage.pixel (${PIXEL_ID})`);
+      expect(job.error?.message).toContain('HTTP 409 AccountProtectedFromDeletion');
+      expect(job.receipts.some((r) => r.step === 'storage.audit.retained')).toBe(false);
+      expect(arm.keyOps).toEqual([]);
+      expect(arm.resources.has(PIXEL_ID)).toBe(true);
+    });
+  });
+
+  describe('destroy against an in-flight create (#5392 defect 1)', () => {
+    it.each(['Running', 'Accepted'])('a %s tenant deployment fails deployment_in_flight with no delete and no shred', async (state) => {
+      const { arm, tenants, run } = await created();
+      arm.deploymentState = state;
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      // Input that breaks it: removing the settle check -> destroy sweeps and deleteCalls fills up.
+      expect(job.error?.code).toBe('deployment_in_flight');
+      expect(job.error?.message).toContain(`provisioningState=${state}`);
+      expect(job.error?.message).toContain('nothing was deleted');
+      expect(arm.settleCalls).toBe(1);
+      expect(arm.deleteCalls).toEqual([]);
+      expect(arm.keyOps).toEqual([]);
+      expect(tenants.docs.get(SLUG)?.status).toBe('destroying'); // a new create is refused meanwhile
+    });
+
+    it('a terminal (Failed) deployment proceeds and records the settled state', async () => {
+      const { arm, run } = await created();
+      arm.deploymentState = 'Failed';
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+      expect(job.receipts.find((r) => r.step === 'deployment.settled')?.detail).toBe(`deployment=lhds-tenant-${SLUG} provisioningState=Failed reads=1`);
+    });
   });
 
   it('fails shred_unverified when the vault still reports the key live after delete', async () => {

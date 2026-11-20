@@ -84,6 +84,8 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
   let itemId = '';
   let itemDeleted = false;
   let armIds: string[] = [];
+  // Step 3's readbacks with their kinds: step 5 splits them into deleted / retained (storage.audit) / shredded (key.*).
+  let armReadbacks: { kind: string; id: string }[] = [];
   let tenantId = '';
 
   test.beforeEach(async ({ context }) => {
@@ -261,6 +263,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     // Breaks if the job never reached tenant.active.
     expect(receipts.some((x) => x.step === 'tenant.active'), 'create job must record tenant.active').toBe(true);
     armIds = Array.from(new Set(readbacks.map((x) => x.id)));
+    armReadbacks = readbacks.map((x) => ({ kind: x.kind, id: x.id }));
   });
 
   test('4. editor screenshots: light, dark, narrow', async ({ page }, testInfo) => {
@@ -289,7 +292,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     await page.setViewportSize({ width: 1600, height: 1000 });
   });
 
-  test('5. DELETE destroys the tenant; every ARM id is deleted and the key is shredded', async ({ page }, testInfo) => {
+  test('5. DELETE destroys the tenant; every ARM id but the retained audit account is deleted and every key is shredded', async ({ page }, testInfo) => {
     test.setTimeout(DESTROY_TIMEOUT_MS + 3 * 60_000);
     expect(armIds.length, 'step 3 must have recorded ARM ids to look for').toBeGreaterThanOrEqual(1);
     const r = await page.request.delete(`${BASE}/api/workspaces/${wsId}/items/${itemId}`, { timeout: 120_000 });
@@ -319,17 +322,47 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     // Breaks if the job read back is not the destroy kind (wrong job id).
     expect(job?.kind, 'job kind').toBe('tenant.destroy');
 
+    // Retain + crypto-shred contract (#5392, operator decision 2026-11-20): every created ARM resource
+    // is deleted EXCEPT the immutable audit account, which is retained with its CMK key shredded.
+    // Keys are not ARM-deleted resources; they are evidenced by key.shredded below.
     const deleted = receipts.filter((x) => x.step === 'resource.deleted').map((x) => x.detail.toLowerCase());
-    // Breaks for any ARM id from the create readback with no resource.deleted line (a leaked resource).
+    const audit = armReadbacks.filter((x) => x.kind === 'storage.audit');
+    const keys = armReadbacks.filter((x) => x.kind.startsWith('key.'));
+    const deletable = armReadbacks.filter((x) => x.kind !== 'storage.audit' && !x.kind.startsWith('key.'));
+    // Breaks if step 3's readback lost the audit account or the keys (the splits below would then witness nothing).
+    expect(audit.length, 'step 3 readback must include exactly one storage.audit id').toBe(1);
+    expect(keys.length, 'step 3 readback must include the tenant keys').toBeGreaterThanOrEqual(1);
+    const auditId = audit[0]!.id.toLowerCase();
     // Case-insensitive: ARM echoes casing differently between read and delete paths.
-    const missing = armIds.filter((id) => !deleted.some((d) => d.includes(`id=${id.toLowerCase()}`)));
+    const hasDeleted = (id: string) => deleted.some((d) => d.includes(`id=${id.toLowerCase()}`));
+    // Breaks for any non-audit, non-key ARM id from the create readback with no resource.deleted line (a leaked resource).
+    const missing = deletable.filter((x) => !hasDeleted(x.id)).map((x) => `${x.kind} ${x.id}`);
     expect(missing, `ARM ids created but with no resource.deleted receipt (${deleted.length} deleted lines)`).toEqual([]);
+    // Breaks if destroy deleted (or tried and recorded deleting) the audit account instead of retaining it.
+    expect(hasDeleted(auditId), 'the audit account must NOT have a resource.deleted receipt').toBe(false);
+    // Breaks if the private endpoints are dropped from destroy (they are not in the create readback, so named by kind).
+    for (const pe of ['pe.pixel', 'pe.audit']) {
+      expect(deleted.some((d) => d.startsWith(`${pe} id=`) && d.includes('/microsoft.network/privateendpoints/')), `resource.deleted for ${pe}`).toBe(true);
+    }
+
+    const retained = receipts.filter((x) => x.step === 'storage.audit.retained');
+    const retention = receipts.filter((x) => x.step === 'storage.audit.retention');
+    await attachJson(testInfo, 'audit-retained', { retained, retention });
+    // Breaks if the audit account is not reported retained, or a different id is.
+    expect(retained.length, 'exactly one storage.audit.retained receipt').toBe(1);
+    expect(retained[0]!.detail.toLowerCase(), 'retained receipt names the audit account id').toContain(`id=${auditId} `);
+    // Breaks if the retained account's key reads back live, or with no deletedDate.
+    expect(retention.length, 'exactly one storage.audit.retention receipt').toBe(1);
+    expect(retention[0]!.detail, 'audit key reads back shredded').toMatch(/\bkeyLive=false keyDeletedDate=\d{4}-\d{2}-\d{2}T/);
 
     const shredded = receipts.filter((x) => x.step === 'key.shredded');
     await attachJson(testInfo, 'key-shredded', shredded);
-    // Breaks if no key was shredded (crypto-shred step absent).
-    expect(shredded.length, 'destroy must record >=1 key.shredded receipt').toBeGreaterThanOrEqual(1);
-    // Breaks if any shredded key is still live.
-    expect(shredded.filter((x) => !/\blive=false\b/.test(x.detail)), 'key.shredded lines that are not live=false').toEqual([]);
+    // Breaks if any created key has no key.shredded line, or one that is live / carries no deletedDate.
+    const unshredded = keys
+      .map((k) => k.kind.slice('key.'.length))
+      .filter((name) => !shredded.some((x) => new RegExp(`^key=${name} live=false deletedDate=\\d{4}-`).test(x.detail)));
+    expect(unshredded, 'keys created but not read back shredded').toEqual([]);
+    // Breaks if the audit key (st-audit) specifically was skipped.
+    expect(keys.some((k) => k.kind.endsWith('-st-audit')), 'the audit key is among the created keys').toBe(true);
   });
 });

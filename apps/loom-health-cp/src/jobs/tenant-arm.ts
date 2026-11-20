@@ -9,6 +9,7 @@
 // equal the names modules/health/tenant.bicep declares (test/tenant-jobs.test.ts
 // lifts the bicep literals and compares them, so a rename in one place fails).
 
+import { LEASE_MS } from './runner.js';
 import { JobFailure } from './types.js';
 
 export interface TenantNames {
@@ -64,12 +65,50 @@ export interface TenantManifest {
   keyNames: string[];
 }
 
+/**
+ * `pe-<accountName>-blob`: the private endpoint storage.bicep creates beside each tenant account,
+ * in the same resource group. Not a tenant.bicep output, so destroy derives it from the account name.
+ */
+export function privateEndpointName(accountName: string): string {
+  return `pe-${accountName}-blob`;
+}
+
+/** Version-level immutability of a storage account, as ARM reports it (identifiers and numbers only). */
+export interface ImmutabilityReadback {
+  enabled: boolean;
+  /** `immutabilityPolicy.immutabilityPeriodSinceCreationInDays`, when ARM returns it. */
+  periodDays?: number;
+  /** `immutabilityPolicy.state` (`Unlocked` / `Locked`), when ARM returns it. */
+  policyState?: string;
+}
+
 export interface ResourceReadback {
   id: string;
   exists: boolean;
   /** Last path segment of the id as ARM reports it (`name`). */
   name?: string;
+  /** Storage accounts only, when ARM reports `immutableStorageWithVersioning`. */
+  immutability?: ImmutabilityReadback;
 }
+
+/** ARM deployment provisioning states after which nothing more will be created (#5392). */
+export const TERMINAL_DEPLOYMENT_STATES = ['Succeeded', 'Failed', 'Canceled'] as const;
+/**
+ * How long tenant.destroy waits for an in-flight tenant deployment to settle (#5392). Derived from the
+ * job lease and kept 2 min UNDER it: the wait writes no receipt while it polls, so a cap at or past
+ * LEASE_MS would let the runner reclaim the job as `interrupted` first and `deployment_in_flight`
+ * could never be reported. The 2 min also absorbs the non-ARM 403 retry backoff on each read.
+ */
+export const TENANT_DEPLOY_SETTLE_MS = LEASE_MS - 2 * 60 * 1000;
+
+/**
+ * State of the tenant deployment record before destroy names anything. `in_flight` = ARM still
+ * reports a non-terminal state (Running, Accepted, ...) after the bounded wait.
+ */
+export type DeploymentSettle =
+  | { state: 'absent' }
+  | { state: 'terminal'; provisioningState: string; polls: number }
+  | { state: 'in_flight'; provisioningState: string; polls: number };
 
 export interface KeyReadback {
   name: string;
@@ -91,6 +130,11 @@ export type Lookup<T> = { state: 'absent' } | { state: 'no_outputs' } | { state:
 export interface TenantArm {
   /** Outputs of the stamp deployment (`stamp` object). */
   getStampManifest(resourceGroup: string, stampId: string): Promise<Lookup<Record<string, unknown>>>;
+  /**
+   * Read the tenant deployment's provisioningState and, while it is not terminal, poll it for at
+   * most `maxWaitMs` (default TENANT_DEPLOY_SETTLE_MS). Never cancels or touches the deployment.
+   */
+  awaitTenantDeployment(resourceGroup: string, slug: string, maxWaitMs?: number): Promise<DeploymentSettle>;
   /** Outputs of the tenant deployment record. */
   getTenantManifest(resourceGroup: string, slug: string): Promise<Lookup<TenantManifest>>;
   /** `/subscriptions/<id>/resourceGroups/<rg>`, so derived resource ids need no manifest. */
@@ -423,6 +467,7 @@ const API_BY_TYPE: Record<string, string> = {
   'microsoft.managedidentity/userassignedidentities': '2023-01-31',
   'microsoft.insights/metricalerts': '2018-03-01',
   'microsoft.keyvault/vaults/keys': '2024-11-01',
+  'microsoft.network/privateendpoints': '2024-05-01',
 };
 const DEPLOYMENT_API = '2024-03-01';
 const KV_API = '7.5';
@@ -551,6 +596,23 @@ export class RestTenantArm implements TenantArm {
     return m ? { state: 'found', value: m } : { state: 'no_outputs' };
   }
 
+  async awaitTenantDeployment(rg: string, slug: string, maxWaitMs = TENANT_DEPLOY_SETTLE_MS): Promise<DeploymentSettle> {
+    const path = this.deploymentPath(rg, tenantDeploymentName(slug));
+    // reads - 1 sleeps of pollMs each, so the total wait never exceeds maxWaitMs.
+    // max(1, pollMs): a pollMs of 0 would make reads Infinity and loop forever on a non-terminal state.
+    const reads = Math.floor(Math.max(0, maxWaitMs) / Math.max(1, this.pollMs)) + 1;
+    let state = '';
+    for (let n = 1; n <= reads; n++) {
+      const r = await this.call('GET', this.arm(path), this.armScope, 'read tenant deployment state');
+      if (r.status === 404) return { state: 'absent' };
+      // Identifier-only: a state outside the class reads as empty, and an empty state is NOT terminal.
+      state = String((r.json?.properties as Json | undefined)?.provisioningState ?? '').replace(/[^A-Za-z]/g, '').slice(0, 30);
+      if ((TERMINAL_DEPLOYMENT_STATES as readonly string[]).includes(state)) return { state: 'terminal', provisioningState: state, polls: n };
+      if (n < reads) await this.sleep(this.pollMs);
+    }
+    return { state: 'in_flight', provisioningState: state, polls: reads };
+  }
+
   async deployTenant(i: { resourceGroup: string; slug: string; displayName: string; maxStorageGiB: number; stamp: Json }): Promise<TenantManifest> {
     const path = this.deploymentPath(i.resourceGroup, tenantDeploymentName(i.slug));
     await this.call('PUT', this.arm(path), this.armScope, 'start tenant deployment', {
@@ -594,7 +656,8 @@ export class RestTenantArm implements TenantArm {
     const r = await this.call('GET', this.arm(id, this.apiFor(id, 'read resource')), this.armScope, 'read resource');
     if (r.status === 404) return { id, exists: false };
     const name = typeof r.json?.name === 'string' ? r.json.name : undefined;
-    return { id: typeof r.json?.id === 'string' ? r.json.id : id, exists: true, ...(name ? { name } : {}) };
+    const imm = immutabilityOf(r.json);
+    return { id: typeof r.json?.id === 'string' ? r.json.id : id, exists: true, ...(name ? { name } : {}), ...(imm ? { immutability: imm } : {}) };
   }
 
   async deleteResource(id: string): Promise<void> {
@@ -637,6 +700,20 @@ export class RestTenantArm implements TenantArm {
   async deleteKey(vaultUri: string, name: string): Promise<void> {
     await this.call('DELETE', this.keyUrl(vaultUri, name), this.o.vaultScope, 'delete key');
   }
+}
+
+/** `properties.immutableStorageWithVersioning` of a storage account; undefined when ARM did not return it. */
+function immutabilityOf(json: Json | undefined): ImmutabilityReadback | undefined {
+  const w = (json?.properties as Json | undefined)?.immutableStorageWithVersioning as Json | undefined;
+  if (!w || typeof w !== 'object') return undefined;
+  const p = w.immutabilityPolicy as Json | undefined;
+  const days = p?.immutabilityPeriodSinceCreationInDays;
+  const st = typeof p?.state === 'string' ? p.state.replace(/[^A-Za-z]/g, '').slice(0, 20) : '';
+  return {
+    enabled: w.enabled === true,
+    ...(typeof days === 'number' && Number.isInteger(days) && days >= 0 ? { periodDays: days } : {}),
+    ...(st ? { policyState: st } : {}),
+  };
 }
 
 function manifestFromOutputs(outputs: Json | undefined): TenantManifest | undefined {
