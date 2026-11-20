@@ -10,7 +10,7 @@ const HUB = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Even
 
 interface Call { method: string; url: string; body?: string; auth?: string }
 
-interface Canned { status: number; body?: unknown; headers?: Record<string, string>; nonJson?: boolean }
+interface Canned { status: number; body?: unknown; headers?: Record<string, string>; nonJson?: boolean; text?: string }
 
 function rig(responses: Canned[]) {
   const calls: Call[] = [];
@@ -28,6 +28,7 @@ function rig(responses: Canned[]) {
     return {
       status: r.status,
       headers: { get: (k: string) => h[k.toLowerCase()] ?? null },
+      text: async () => r.text ?? (r.nonJson ? '' : JSON.stringify(r.body ?? {})),
       json: async () => {
         if (r.nonJson) throw new SyntaxError('Unexpected token < in JSON');
         return r.body ?? {};
@@ -234,7 +235,7 @@ describe('ARM refusal diagnostics (#5380)', () => {
     const corr = 'abcdef01-2345-6789-abcd-ef0123456789';
     const keys = (await put({ status: 403, body: { foo: 1, bar: {} }, headers: { 'x-ms-failure-cause': 'gateway', 'x-ms-correlation-request-id': corr } })) as ArmError;
     expect(keys.code).toBe('Unknown');
-    expect(keys.message).toBe(`start tenant deployment failed: HTTP 403 Unknown [body keys:foo,bar; cause gateway; correlation ${corr}]`);
+    expect(keys.message).toBe(`start tenant deployment failed: HTTP 403 Unknown [body keys:foo,bar; len 18; first {; cause gateway; correlation ${corr}]`);
     const html = (await put({ status: 403, nonJson: true })) as ArmError;
     expect(html.diag?.bodyShape).toBe('empty-or-non-json');
     expect(((await put({ status: 403, body: {} })) as ArmError).diag?.bodyShape).toBe('empty');
@@ -254,6 +255,61 @@ describe('ARM refusal diagnostics (#5380)', () => {
     expect(e.diag?.action).toBeUndefined();
     expect(e.diag?.scope).toBeUndefined();
     expect(e.message).not.toContain('SECRET');
+  });
+});
+
+describe('wide diagnostics for a bare ARM refusal (#5380)', () => {
+  const get = (canned: Canned) => rig([canned]).arm.getStampManifest(RG, 'dev01').catch((x: unknown) => x) as Promise<ArmError>;
+
+  it('a bare 403 with an empty body reports type, length, server, request id and first byte', async () => {
+    const e = await get({ status: 403, text: '', nonJson: true, headers: { 'content-type': 'Text/Plain; charset=utf-8', server: 'Microsoft-HTTPAPI/2.0', 'x-ms-request-id': 'req-123' } });
+    // Each breaks if its field is dropped, mis-cased or left unstripped (charset would survive without the split).
+    expect(e.diag).toMatchObject({ contentType: 'text/plain', contentLength: 0, server: 'Microsoft-HTTPAPI/2.0', requestId: 'req-123', firstByte: 'empty' });
+    expect(e.message).toBe('read stamp deployment failed: HTTP 403 Unknown [body empty-or-non-json; type text/plain; len 0; server Microsoft-HTTPAPI/2.0; request req-123; first empty]');
+  });
+
+  it('an HTML 403 is classed first "<" with the measured byte length when no content-length header exists', async () => {
+    const html = '  \n<html><body>Forbidden</body></html>';
+    const e = await get({ status: 403, text: html, nonJson: true, headers: { 'content-type': 'text/html' } });
+    expect(e.diag?.firstByte).toBe('<'); // breaks if leading whitespace is not skipped (would be "other")
+    expect(e.diag?.contentType).toBe('text/html');
+    expect(e.diag?.contentLength).toBe(Buffer.byteLength(html));
+    expect(e.message).not.toContain('Forbidden'); // body text is never echoed
+  });
+
+  it('a numeric content-length header wins over the measured length; a non-numeric one is ignored', async () => {
+    expect((await get({ status: 403, text: 'abc', nonJson: true, headers: { 'content-length': '999' } })).diag?.contentLength).toBe(999);
+    expect((await get({ status: 403, text: 'abc', nonJson: true, headers: { 'content-length': '9 9' } })).diag?.contentLength).toBe(3);
+  });
+
+  it('a JSON AuthorizationFailed 403 carries NO wide fields, and still renders action, scope and correlation', async () => {
+    const SC = `/subscriptions/${SUB}/resourceGroups/${RG}`;
+    const e = await get({
+      status: 403,
+      body: { error: { code: 'AuthorizationFailed', message: `perform action 'Microsoft.Resources/deployments/read' over scope '${SC}'` } },
+      headers: { 'content-type': 'application/json', server: 'Microsoft-HTTPAPI/2.0', 'x-ms-request-id': 'r1', 'x-ms-correlation-request-id': 'corr-1' },
+    });
+    // Breaks if the wide fields are filled outside the no-code branch.
+    expect([e.diag?.contentType, e.diag?.contentLength, e.diag?.server, e.diag?.requestId, e.diag?.firstByte]).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    // Positive pair: the existing rendering is intact.
+    expect(e.message).toBe(`read stamp deployment failed: HTTP 403 AuthorizationFailed [denied Microsoft.Resources/deployments/read over ${SC}; correlation corr-1]`);
+  });
+
+  it('a hostile server / content-type / request id is dropped, never echoed raw', async () => {
+    const e = await get({
+      status: 403,
+      text: '',
+      nonJson: true,
+      headers: { server: 'evil; x=1 INJECTED', 'content-type': 'text/html\nINJECTED', 'x-ms-request-id': 'a b' },
+    });
+    expect(e.diag?.server).toBeUndefined(); // breaks if SERVER_TOKEN admits spaces or ";"
+    expect(e.diag?.contentType).toBeUndefined(); // breaks if MEDIA_TYPE is not applied
+    expect(e.diag?.requestId).toBeUndefined();
+    expect(e.message).not.toContain('INJECTED');
+    const long = await get({ status: 403, text: '', nonJson: true, headers: { server: 'a'.repeat(61) } });
+    expect(long.diag?.server).toBeUndefined(); // breaks if the length cap is removed
+    const ok = await get({ status: 403, text: '', nonJson: true, headers: { server: 'a'.repeat(60) } });
+    expect(ok.diag?.server).toBe('a'.repeat(60)); // positive: the cap is a boundary, not a blanket drop
   });
 });
 
