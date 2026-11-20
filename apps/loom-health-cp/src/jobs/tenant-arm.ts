@@ -350,9 +350,9 @@ export function classifyArm(e: unknown): unknown {
     // R7: what is established is the ABSENCE of ARM's markers, not who refused, so no role is named.
     const html = e.diag?.contentType === 'text/html' || e.diag?.firstByte === '<' ? 'an HTML 403' : 'a 403';
     const d = e.diag;
-    const clues = d?.title || d?.azureRef || d?.msedgeRef || d?.cache || d?.via || d?.server;
+    const clues = d?.title || d?.azureRef || d?.msedgeRef || d?.cache || d?.via || d?.server || d?.failureCause;
     const who = clues
-      ? 'the title, server and edge headers above are the only clues to who answered.'
+      ? 'the title, server, cause and edge headers above are the only clues to who answered.'
       : 'nothing in the response identifies who answered.';
     return new JobFailure(
       'permission',

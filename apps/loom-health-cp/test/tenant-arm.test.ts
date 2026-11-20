@@ -356,7 +356,7 @@ describe('non-ARM HTML 403: fingerprint and bounded retry (#5380)', () => {
     expect(f.code).toBe('permission'); // breaks if exhaustion is classified transient (would invite an unbounded outer retry)
     expect(f.message).toContain("refused by an HTML 403 without ARM's markers (origin unidentified"); // breaks if the message asserts the 403 was not from ARM
     // Breaks if the clue clause stops being conditional on captured clues (this response HAS a title and x-azure-ref).
-    expect(f.message).toContain('the title, server and edge headers above are the only clues to who answered.');
+    expect(f.message).toContain('the title, server, cause and edge headers above are the only clues to who answered.');
     expect(f.message).toContain('on all 3 attempt(s)');
     expect(f.message).toContain(`type text/html; len ${Buffer.byteLength(PAGE)}; first <; title 403 Forbidden; x-azure-ref ${REF}`);
     // R7: breaks if the message claims the CP identity was denied, which nothing established.
@@ -371,6 +371,15 @@ describe('non-ARM HTML 403: fingerprint and bounded retry (#5380)', () => {
     // Breaks if the clue clause is unconditional: no title or edge header was captured, so claiming them is false.
     expect(f.message).toContain('nothing in the response identifies who answered.');
     expect(f.message).not.toContain('only clues');
+  });
+
+  it('a codeless 403 whose ONLY clue is x-ms-failure-cause still counts it as a clue (R7)', async () => {
+    const { arm } = rig([{ status: 403, text: '', nonJson: true, headers: { 'x-ms-failure-cause': 'gateway' } }]);
+    const f = classifyArm(await deploy(arm).catch((x: unknown) => x)) as JobFailure;
+    expect(f.message).toContain('cause gateway'); // positive: the cause is printed
+    // Breaks if failureCause is left out of the clue list: the message would print a cause, then deny any clue exists.
+    expect(f.message).toContain('only clues to who answered.');
+    expect(f.message).not.toContain('nothing in the response identifies');
   });
 
   it('a genuine ARM JSON 403 (error.code, even without x-ms-request-id) is NOT retried: exactly one fetch', async () => {
