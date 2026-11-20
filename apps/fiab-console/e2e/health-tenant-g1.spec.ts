@@ -203,6 +203,25 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
           `binding.lastError=${JSON.stringify(last?.binding?.lastError)} liveError=${JSON.stringify(last?.liveError)}`,
         );
       }
+      // FINALISE like the editor does (tenant-editor.tsx, the provisioning poll): when the live create job has
+      // SUCCEEDED, ensure once more so the provisioner records the readback receipts and the binding goes
+      // 'bound'. The GET is read-only and never finalises, so without this the spec waits 12 min on a tenant
+      // that is already active (run 44700233998: tenant.status 'active', binding 'provisioning', resources []).
+      // Breaks if the provisioner refuses to bind a succeeded job (e.g. 'readback_missing'): throws its phase.
+      if (r.status === 200 && last?.phase === 'provisioning' && jobState === 'succeeded') {
+        const f = await page.request.post(`${BASE}/api/health/tenants/${itemId}`, { data: { retry: false }, timeout: 90_000 });
+        const fb = await f.json().catch(() => ({}));
+        failIfTenantAdminGate(f.status(), fb, `POST /api/health/tenants/${itemId} (finalise)`);
+        if (fb?.phase !== 'bound') {
+          await attachJson(testInfo, 'finalise-not-bound', { status: f.status(), phase: fb?.phase, error: fb?.error, binding: fb?.binding, steps: fb?.steps });
+          throw new Error(
+            `create job succeeded but finalise did not bind: HTTP ${f.status()} phase=${fb?.phase ?? '(none)'} ` +
+            `code=${fb?.error?.code ?? '(none)'} message=${JSON.stringify(String(fb?.error?.message ?? fb?.error ?? '').slice(0, 300))}`,
+          );
+        }
+        r = await getJson(page, `/api/health/tenants/${itemId}`);
+        last = r.body; lastStatus = r.status;
+      }
       if (r.status === 200 && last?.phase === 'bound' && last?.tenant?.status === 'active') break;
       await page.waitForTimeout(POLL_MS);
     }
