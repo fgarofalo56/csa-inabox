@@ -19,7 +19,7 @@
  */
 
 // Header-value allowlist: no CR/LF, quotes, angle brackets. Length-capped.
-const HEADER_RE = /^[A-Za-z0-9._~+\-/=:;, ]{1,128}$/;
+const HEADER_BAD = /[^A-Za-z0-9._~+\-/=:;, ]/; // linear: any one disallowed char; length capped in safeHeader
 const CODE_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const MEDIA_RE = /^[A-Za-z0-9!#$&^_.+-]{1,64}\/[A-Za-z0-9!#$&^_.+-]{1,64}$/;
 const SEG_RE = /^[A-Za-z0-9._()-]{1,90}$/;
@@ -27,7 +27,7 @@ const SEG_RE = /^[A-Za-z0-9._()-]{1,90}$/;
 /** A header value is printable only if it matches the strict allowlist. */
 export function safeHeader(v) {
   if (v === null || v === undefined || v === '') return '-';
-  return HEADER_RE.test(String(v)) ? String(v) : 'invalid';
+  const s = String(v); return s.length <= 128 && !HEADER_BAD.test(s) ? s : 'invalid';
 }
 
 export function mediaType(ct) {
