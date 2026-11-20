@@ -58,13 +58,23 @@ const FAKE_AUTHORIZE = 'https://login.microsoftonline.test/oauth2/v2.0/authorize
 let nonceToEcho = '';
 /** Whether the fake code exchange should succeed (Loop B) or is never reached (Loop A). */
 let exchangeSucceeds = true;
+/** The last request the callback passed to acquireTokenByCode. */
+let lastExchange: Record<string, unknown> | null = null;
 
 vi.mock('@/lib/auth/msal', () => ({
   getMsalClient: () => ({
     getAuthCodeUrl: async (opts: { state?: string }) =>
       `${FAKE_AUTHORIZE}?state=${encodeURIComponent(opts.state ?? '')}`,
-    acquireTokenByCode: async () => {
+    acquireTokenByCode: async (req: Record<string, unknown>) => {
+      lastExchange = req;
       if (!exchangeSucceeds) throw new Error('exchange refused by the harness');
+      // The real rule since @azure/msal-node 7.2 (msal-common 16.17 ResponseHandler): the exchange
+      // ALWAYS opts into nonce validation, so an id_token nonce with no matching `nonce` on the request
+      // is rejected with nonce_mismatch. A fake that ignored its argument let #5385 pass CI while every
+      // live sign-in looped (2026-11-20). Breaks if the callback drops `nonce` from the exchange.
+      if (nonceToEcho && req.nonce !== nonceToEcho) {
+        throw Object.assign(new Error('nonce_mismatch: no expected nonce was supplied'), { errorCode: 'nonce_mismatch' });
+      }
       return {
         account: {
           homeAccountId: 'oid-1111.tid-2222',
@@ -310,6 +320,7 @@ describe('#3334 — the sign-in loop terminates', () => {
     sessionCookieVisibleToServer = undefined;
     exchangeSucceeds = true;
     nonceToEcho = '';
+    lastExchange = null;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -461,6 +472,10 @@ describe('#3334 — the sign-in loop terminates', () => {
     expect(walk.terminalPath).toBe('/');
     expect(walk.hops).toBe(2);
     expect(jar.store.get('loom_session')?.value).toBeTruthy();
+    // The exchange carried the authflow nonce (msal-node >= 7.2 rejects one without it).
+    // Breaks if the callback omits `nonce` from acquireTokenByCode; control: the nonce is non-empty.
+    expect(nonceToEcho, 'control: the hardened flow minted a nonce').not.toBe('');
+    expect(lastExchange?.nonce, 'acquireTokenByCode must receive the authflow nonce').toBe(nonceToEcho);
     // The counter exists (the callback stamped its outcome) but has counted
     // NOTHING — no attempt was ever attributed, because none failed.
     const breaker = jar.store.get(AUTH_BREAKER_COOKIE);
