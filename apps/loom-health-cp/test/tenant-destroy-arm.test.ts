@@ -1,6 +1,7 @@
 // RestTenantArm pieces tenant.destroy needs for #5392: the bounded in-flight wait on the tenant
 // deployment, the storage-account immutability readback, and the private-endpoint API version.
 import { describe, expect, it } from 'vitest';
+import { LEASE_MS } from '../src/jobs/runner.js';
 import { RestTenantArm, TENANT_DEPLOY_SETTLE_MS } from '../src/jobs/tenant-arm.js';
 
 const SUB = '00000000-0000-0000-0000-000000000001';
@@ -40,8 +41,12 @@ function rig(responses: Canned[]) {
 const dep = (provisioningState?: string): Canned => ({ status: 200, body: { properties: provisioningState === undefined ? {} : { provisioningState } } });
 
 describe('awaitTenantDeployment (#5392 defect 1)', () => {
-  it('the default cap is 15 minutes', () => {
-    expect(TENANT_DEPLOY_SETTLE_MS).toBe(900_000); // a larger cap would let destroy hang past the job budget
+  it('the default cap stays under the job lease, so deployment_in_flight can actually be reported', () => {
+    // Breaks if the cap reaches LEASE_MS: the runner would reclaim the job as `interrupted` mid-wait (it writes
+    // no receipt while polling) and the typed deployment_in_flight failure could never surface.
+    expect(TENANT_DEPLOY_SETTLE_MS).toBeLessThan(LEASE_MS);
+    // Positive: still a real wait (8 min), not a cap shrunk to nothing to satisfy the bound above.
+    expect(TENANT_DEPLOY_SETTLE_MS).toBe(480_000);
   });
 
   it('Running, Running, Succeeded: polls until terminal and reports the reads', async () => {

@@ -9,6 +9,7 @@
 // equal the names modules/health/tenant.bicep declares (test/tenant-jobs.test.ts
 // lifts the bicep literals and compares them, so a rename in one place fails).
 
+import { LEASE_MS } from './runner.js';
 import { JobFailure } from './types.js';
 
 export interface TenantNames {
@@ -92,8 +93,13 @@ export interface ResourceReadback {
 
 /** ARM deployment provisioning states after which nothing more will be created (#5392). */
 export const TERMINAL_DEPLOYMENT_STATES = ['Succeeded', 'Failed', 'Canceled'] as const;
-/** How long tenant.destroy waits for an in-flight tenant deployment to settle (#5392). */
-export const TENANT_DEPLOY_SETTLE_MS = 15 * 60 * 1000;
+/**
+ * How long tenant.destroy waits for an in-flight tenant deployment to settle (#5392). Derived from the
+ * job lease and kept 2 min UNDER it: the wait writes no receipt while it polls, so a cap at or past
+ * LEASE_MS would let the runner reclaim the job as `interrupted` first and `deployment_in_flight`
+ * could never be reported. The 2 min also absorbs the non-ARM 403 retry backoff on each read.
+ */
+export const TENANT_DEPLOY_SETTLE_MS = LEASE_MS - 2 * 60 * 1000;
 
 /**
  * State of the tenant deployment record before destroy names anything. `in_flight` = ARM still
@@ -593,7 +599,8 @@ export class RestTenantArm implements TenantArm {
   async awaitTenantDeployment(rg: string, slug: string, maxWaitMs = TENANT_DEPLOY_SETTLE_MS): Promise<DeploymentSettle> {
     const path = this.deploymentPath(rg, tenantDeploymentName(slug));
     // reads - 1 sleeps of pollMs each, so the total wait never exceeds maxWaitMs.
-    const reads = Math.floor(Math.max(0, maxWaitMs) / this.pollMs) + 1;
+    // max(1, pollMs): a pollMs of 0 would make reads Infinity and loop forever on a non-terminal state.
+    const reads = Math.floor(Math.max(0, maxWaitMs) / Math.max(1, this.pollMs)) + 1;
     let state = '';
     for (let n = 1; n <= reads; n++) {
       const r = await this.call('GET', this.arm(path), this.armScope, 'read tenant deployment state');

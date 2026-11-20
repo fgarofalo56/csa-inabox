@@ -40,7 +40,7 @@
 - Destroy: job `tenant.destroy` requires `confirmTenantId` equal to the job
   subject. Deleting the health-tenant item in the console submits it.
   - If the tenant deployment `lhds-tenant-<slug>` is still `Running` or
-    `Accepted`, destroy waits for it (at most 15 min) before naming or deleting
+    `Accepted`, destroy waits for it (at most 8 min, kept under the 10 min job lease) before naming or deleting
     anything. If it is still running at the cap, the job fails
     `deployment_in_flight` with nothing deleted. Retry it later.
   - It deletes the database, event hub, both private endpoints
