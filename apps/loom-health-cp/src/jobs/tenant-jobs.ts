@@ -45,10 +45,14 @@ export interface TenantJobDeps {
  * Key Vault soft-delete is a long-running operation: right after DELETE keys/{name}, both
  * GET keys/{name} and GET deletedkeys/{name} can 404 until the deleted-key record appears (the
  * SDK's beginDeleteKey poller treats exactly that 404 as "still in progress"). So the read-back
- * polls. Budget: the keys are read together, one sleep per ROUND, so the total wait is
- * (SHRED_READS - 1) * SHRED_POLL_MS = 5 * 5 s = 25 s regardless of key count. The destroy may
- * already have spent TENANT_DEPLOY_SETTLE_MS (8 min) of the 10 min LEASE_MS waiting for an
- * in-flight create, so this must stay well inside the remaining 2 min.
+ * polls. Budget: the keys are read together, one sleep per ROUND, so the SLEEP total is
+ * (SHRED_READS - 1) * SHRED_POLL_MS = 5 * 5 s = 25 s regardless of key count. The lease is
+ * measured from the job's last receipt, not from its start: runner.ts tick() expires a job when
+ * now - updatedAt > LEASE_MS (10 min), and every ctx.receipt refreshes updatedAt. The 8 min
+ * settle wait ends in a receipt (or throws), so it does not count here. The longest stretch with
+ * no receipt runs from the last `resource.deleted` to the `key.shredded` receipts. With every
+ * GET hitting the full non-ARM 403 backoff in tenant-arm.ts it is about 470 s, of which the poll
+ * is about 313 s (25 s of sleep plus the 403 retries). That fits inside 600 s.
  */
 export const SHRED_READS = 6;
 export const SHRED_POLL_MS = 5000;
