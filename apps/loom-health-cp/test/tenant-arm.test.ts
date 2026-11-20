@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ArmError, RestTenantArm, classifyArm, resourceTypeOf } from '../src/jobs/tenant-arm.js';
+import { ArmError, RestTenantArm, TITLE_MAX, classifyArm, htmlTitle, resourceTypeOf } from '../src/jobs/tenant-arm.js';
 import { JobFailure } from '../src/jobs/types.js';
 
 const SUB = '00000000-0000-0000-0000-000000000001';
@@ -35,6 +35,8 @@ function rig(responses: Canned[]) {
       },
     } as unknown as Response;
   }) as unknown as typeof fetch;
+  const logs: { event: string; fields: Record<string, string | number> }[] = [];
+  const sleeps: number[] = [];
   const arm = new RestTenantArm({
     armEndpoint: ARM,
     subscriptionId: SUB,
@@ -42,10 +44,13 @@ function rig(responses: Canned[]) {
     vaultScope: 'https://vault.azure.net/.default',
     loadTemplate: async () => ({ $schema: 'x' }),
     fetchFn,
-    sleep: async () => {},
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     maxPolls: 3,
+    log: (event, fields) => logs.push({ event, fields }),
   });
-  return { arm, calls };
+  return { arm, calls, logs, sleeps };
 }
 
 describe('RestTenantArm', () => {
@@ -302,7 +307,7 @@ describe('wide diagnostics for a bare ARM refusal (#5380)', () => {
       nonJson: true,
       headers: { server: 'evil; x=1 INJECTED', 'content-type': 'text/html\nINJECTED', 'x-ms-request-id': 'a b' },
     });
-    expect(e.diag?.server).toBeUndefined(); // breaks if SERVER_TOKEN admits spaces or ";"
+    expect(e.diag?.server).toBeUndefined(); // breaks if SERVER_TOKEN admits ";" or "=" (a product list is space-separated, never ";")
     expect(e.diag?.contentType).toBeUndefined(); // breaks if MEDIA_TYPE is not applied
     expect(e.diag?.requestId).toBeUndefined();
     expect(e.message).not.toContain('INJECTED');
@@ -310,6 +315,124 @@ describe('wide diagnostics for a bare ARM refusal (#5380)', () => {
     expect(long.diag?.server).toBeUndefined(); // breaks if the length cap is removed
     const ok = await get({ status: 403, text: '', nonJson: true, headers: { server: 'a'.repeat(60) } });
     expect(ok.diag?.server).toBe('a'.repeat(60)); // positive: the cap is a boundary, not a blanket drop
+  });
+});
+
+// #5380 live shape (G1 run 44676840702): the poll GET got "HTTP 403 Unknown [body empty-or-non-json;
+// len 875; first <]": an HTML page with no x-ms-request-id, intermittent per request. These pin the
+// fingerprint it now carries and the bounded retry that applies ONLY to that non-ARM shape.
+describe('non-ARM HTML 403: fingerprint and bounded retry (#5380)', () => {
+  const REF = '20251120T101500Z-17d8c9b4f5b6xyzq';
+  const PAGE = '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1><p>Request blocked.</p></body></html>';
+  const HTML_403: Canned = { status: 403, text: PAGE, nonJson: true, headers: { 'content-type': 'text/html; charset=utf-8', 'x-azure-ref': REF } };
+  const deploy = (arm: RestTenantArm) => arm.deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: {} });
+
+  it('HTML 403 then 200: succeeds on the second attempt and logs the fingerprint of the refused one', async () => {
+    const { arm, calls, logs, sleeps } = rig([HTML_403, { status: 200, body: { properties: { outputs: { stamp: { value: { stampName: 'dev01' } } } } } }]);
+    // Breaks if the retry is removed: the first 403 would reject instead of resolving.
+    expect(await arm.getStampManifest(RG, 'dev01')).toEqual({ state: 'found', value: { stampName: 'dev01' } });
+    expect(calls).toHaveLength(2); // breaks if a success is retried or the retry is skipped
+    expect(sleeps).toEqual([2000]); // breaks if the first backoff is not 2 s
+    // Breaks if the log omits the fingerprint fields or logs only on exhaustion.
+    expect(logs).toEqual([
+      {
+        event: 'arm.non_arm_403',
+        fields: { op: 'read stamp deployment', method: 'GET', attempt: 1, of: 3, outcome: 'retrying', status: 403, code: 'Unknown', bodyShape: 'empty-or-non-json', contentType: 'text/html', contentLength: Buffer.byteLength(PAGE), firstByte: '<', title: '403 Forbidden', azureRef: REF },
+      },
+    ]);
+    // REGRESSION GUARD, not coverage (assertion-design rule 5): fingerprint() never reads the token
+    // today, so no current input fails this; it exists to catch a future change that logs it.
+    expect(JSON.stringify(logs)).not.toContain('tok:');
+  });
+
+  it('HTML 403 x3 on the PUT: fails closed as permission after exactly 3 attempts, naming type, title and edge ref', async () => {
+    const { arm, calls, logs, sleeps } = rig([HTML_403]); // the rig repeats its last response forever
+    const e = await deploy(arm).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ArmError);
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'PUT', 'PUT']); // breaks if the bound is 2, 4 or absent (the rig never stops refusing)
+    expect(sleeps).toEqual([2000, 4000]); // breaks if backoff is unbounded or not applied
+    expect(logs.map((l) => l.fields.outcome)).toEqual(['retrying', 'retrying', 'exhausted']); // breaks if any refused attempt goes unlogged
+    const f = classifyArm(e) as JobFailure;
+    expect(f.code).toBe('permission'); // breaks if exhaustion is classified transient (would invite an unbounded outer retry)
+    expect(f.message).toContain("refused by an HTML 403 without ARM's markers (origin unidentified"); // breaks if the message asserts the 403 was not from ARM
+    // Breaks if the clue clause stops being conditional on captured clues (this response HAS a title and x-azure-ref).
+    expect(f.message).toContain('the title, server, cause and edge headers above are the only clues to who answered.');
+    expect(f.message).toContain('on all 3 attempt(s)');
+    expect(f.message).toContain(`type text/html; len ${Buffer.byteLength(PAGE)}; first <; title 403 Forbidden; x-azure-ref ${REF}`);
+    // R7: breaks if the message claims the CP identity was denied, which nothing established.
+    expect(f.message).not.toContain('not authorised');
+  });
+
+  it('an empty codeless 403 with no edge headers: the message says nothing identifies the answerer (R7)', async () => {
+    const { arm, calls } = rig([{ status: 403, text: '', nonJson: true }]);
+    const f = classifyArm(await deploy(arm).catch((x: unknown) => x)) as JobFailure;
+    expect(calls).toHaveLength(3); // positive: still the non-ARM retry path
+    expect(f.message).toContain("refused by a 403 without ARM's markers"); // breaks if a non-HTML body is labelled HTML
+    // Breaks if the clue clause is unconditional: no title or edge header was captured, so claiming them is false.
+    expect(f.message).toContain('nothing in the response identifies who answered.');
+    expect(f.message).not.toContain('only clues');
+  });
+
+  it('a codeless 403 whose ONLY clue is x-ms-failure-cause still counts it as a clue (R7)', async () => {
+    const { arm } = rig([{ status: 403, text: '', nonJson: true, headers: { 'x-ms-failure-cause': 'gateway' } }]);
+    const f = classifyArm(await deploy(arm).catch((x: unknown) => x)) as JobFailure;
+    expect(f.message).toContain('cause gateway'); // positive: the cause is printed
+    // Breaks if failureCause is left out of the clue list: the message would print a cause, then deny any clue exists.
+    expect(f.message).toContain('only clues to who answered.');
+    expect(f.message).not.toContain('nothing in the response identifies');
+  });
+
+  it('a genuine ARM JSON 403 (error.code, even without x-ms-request-id) is NOT retried: exactly one fetch', async () => {
+    const { arm, calls, logs, sleeps } = rig([{ status: 403, body: { error: { code: 'AuthorizationFailed', message: 'x' } } }, { status: 200 }]);
+    const e = await deploy(arm).catch((x: unknown) => x);
+    // Breaks if the retry predicate ignores error.code: the second response (200) would be reached.
+    expect(calls).toHaveLength(1);
+    expect([logs, sleeps]).toEqual([[], []]);
+    const f = classifyArm(e) as JobFailure;
+    expect(f.code).toBe('permission');
+    expect(f.message).toContain('the control-plane identity is not authorised (HTTP 403 AuthorizationFailed)'); // positive: the ARM path is unchanged
+  });
+
+  it('a codeless 403 that carries x-ms-request-id came from ARM and is NOT retried', async () => {
+    const { arm, calls } = rig([{ status: 403, text: '', nonJson: true, headers: { 'x-ms-request-id': 'r-1' } }, { status: 200 }]);
+    await expect(deploy(arm)).rejects.toBeInstanceOf(ArmError);
+    expect(calls).toHaveLength(1); // breaks if the predicate ignores x-ms-request-id
+  });
+
+  it('text/html; charset=utf-8 is recorded as text/html', async () => {
+    const e = (await rig([HTML_403]).arm.getStampManifest(RG, 'dev01').catch((x: unknown) => x)) as ArmError;
+    // Breaks if the parameter strip is reverted: "text/html; charset=utf-8" fails MEDIA_TYPE and nothing is recorded.
+    expect(e.diag?.contentType).toBe('text/html');
+  });
+
+  it('the title is sanitised: tags, entities, token- and id-shaped words removed, bounded to TITLE_MAX', async () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9';
+    const page = `<html><head><title>Access &amp; <b>Denied</b> &lt;script&gt; ${jwt} MRN-123456 ${'Blocked by proxy '.repeat(30)}</title></head></html>`;
+    const e = (await rig([{ status: 403, text: page, nonJson: true }]).arm.getStampManifest(RG, 'dev01').catch((x: unknown) => x)) as ArmError;
+    // By construction: "Access Denied script " (21) + 3 x "Blocked by proxy " (51) + "Blocked " (8) = 80, trimmed to 79.
+    const expected = `Access Denied script ${'Blocked by proxy '.repeat(30)}`.slice(0, TITLE_MAX).trim();
+    expect(expected).toHaveLength(79);
+    // Breaks if the length bound is dropped (the 500+ char title would survive) or tags/entities leak.
+    expect(e.diag?.title).toBe(expected);
+    expect(e.message).not.toContain(jwt.slice(0, 12)); // breaks if token-shaped words are kept
+    expect(e.message).not.toContain('123456'); // breaks if id-shaped words are kept
+    expect(htmlTitle('<title> &lt;&gt; <i></i> </title>')).toBeUndefined(); // nothing left: no empty "title" field
+  });
+
+  it('edge headers are recorded when allowlist-clean and dropped when not; a server product list is admitted', async () => {
+    const msedge = 'Ref A: 0A1B2C3D Ref B: BL2EDGE0108 Ref C: 2025-11-20T10:15:00Z';
+    const ok = (await rig([{ status: 403, text: '', nonJson: true, headers: { 'x-msedge-ref': msedge, 'x-cache': 'TCP_DENIED from proxy:3128', via: '1.1 squid (squid/4.10)', server: 'Microsoft-HTTPAPI/2.0 Microsoft-IIS/10.0' } }])
+      .arm.getStampManifest(RG, 'dev01')
+      .catch((x: unknown) => x)) as ArmError;
+    // Each breaks if its header is not read or its allowlist is narrower than the real value.
+    expect(ok.diag).toMatchObject({ msedgeRef: msedge, cache: 'TCP_DENIED from proxy:3128', via: '1.1 squid (squid/4.10)', server: 'Microsoft-HTTPAPI/2.0 Microsoft-IIS/10.0' });
+    expect(ok.message).toContain(`x-msedge-ref ${msedge}; x-cache TCP_DENIED from proxy:3128; via 1.1 squid (squid/4.10)`);
+    const bad = (await rig([{ status: 403, text: '', nonJson: true, headers: { 'x-azure-ref': 'a b', 'x-msedge-ref': 'Ref A; INJECTED', 'x-cache': 'HIT\nINJECTED', via: '1.1 "q"' } }])
+      .arm.getStampManifest(RG, 'dev01')
+      .catch((x: unknown) => x)) as ArmError;
+    // Breaks if any allowlist admits a space (azure-ref), ";", a newline or a quote.
+    expect([bad.diag?.azureRef, bad.diag?.msedgeRef, bad.diag?.cache, bad.diag?.via]).toEqual([undefined, undefined, undefined, undefined]);
+    expect(bad.message).not.toContain('INJECTED');
   });
 });
 

@@ -143,6 +143,16 @@ export interface ArmDiagnostics {
   requestId?: string;
   /** Set with `bodyShape`: class of the first non-whitespace char: `<`, `{`, `[`, `empty` or `other`. */
   firstByte?: string;
+  /** Set with `bodyShape` for an HTML-looking body: its `<title>`, tags/entities stripped, closed char class, ≤ 80 chars (`htmlTitle`). */
+  title?: string;
+  /** Set with `bodyShape`: Azure Front Door / Microsoft edge `x-azure-ref`, allowlist-validated. */
+  azureRef?: string;
+  /** Set with `bodyShape`: Microsoft edge `x-msedge-ref` (`Ref A: ... Ref B: ... Ref C: ...`), allowlist-validated. */
+  msedgeRef?: string;
+  /** Set with `bodyShape`: `x-cache` of a caching proxy (`TCP_DENIED from proxy`), allowlist-validated. */
+  cache?: string;
+  /** Set with `bodyShape`: `via` of an intermediary (`1.1 squid`), allowlist-validated. */
+  via?: string;
 }
 
 const ID_CHARS = /[^A-Za-z0-9._-]/g;
@@ -174,8 +184,50 @@ const entries = (m: string | undefined, max: number): string | undefined =>
     .join(',');
 const HEADER_TOKEN = /^[A-Za-z0-9._:-]{1,80}$/;
 const MEDIA_TYPE = /^[a-z0-9][a-z0-9.+-]{0,60}\/[a-z0-9][a-z0-9.+-]{0,60}$/;
-// `Microsoft-HTTPAPI/2.0` style; spaces, `;`, parentheses and control chars are not admitted.
-const SERVER_TOKEN = /^[A-Za-z0-9._:/-]{1,60}$/;
+// `Microsoft-HTTPAPI/2.0` style. RFC 9110 lets `server` be a LIST of products separated by single
+// spaces (`Microsoft-HTTPAPI/2.0 Microsoft-IIS/10.0`), and an intermediary that answered instead of
+// ARM may send one, so up to 4 products are admitted. Each product keeps the old class and 60-char
+// cap; `;`, `=`, parentheses (RFC comments, free text) and control chars are still refused.
+const SERVER_TOKEN = /^[A-Za-z0-9._:/-]{1,60}(?: [A-Za-z0-9._:/-]{1,60}){0,3}$/;
+// Edge-identifying headers (#5380): which intermediary answered. Closed classes, no `;` (the
+// describeDiagnostics separator), no quotes, no control chars, so none can forge a log line.
+const AZURE_REF = /^[A-Za-z0-9+/=._:-]{1,120}$/; // `20251120T101500Z-abc...` or the older base64 form
+const MSEDGE_REF = /^[A-Za-z0-9 .:_-]{1,160}$/; // `Ref A: 0A1B Ref B: BL2EDGE0108 Ref C: 2025-11-20T10:15:00Z`
+const X_CACHE = /^[A-Za-z0-9 ._:/-]{1,80}$/; // `TCP_DENIED from proxy:3128`
+const VIA = /^[A-Za-z0-9 ._:/(),-]{1,120}$/; // `1.1 squid (squid/4.10)`
+const edgeHeader = (headers: Headers | undefined, name: string, re: RegExp): string | undefined => {
+  const v = headers?.get(name)?.trim().replace(/ {2,}/g, ' ');
+  return v && re.test(v) ? v : undefined;
+};
+
+/** Longest title kept; also the bound the #5380 sanitisation test pins. */
+export const TITLE_MAX = 80;
+// Only the head of the body is searched, so a huge page costs a bounded regex scan.
+const TITLE_SCAN = 8192;
+const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title\s*>/i;
+const TITLE_CHARS = /[^A-Za-z0-9 .,:_()-]+/g;
+/**
+ * The `<title>` of an HTML body, reduced to a closed character class: tags and entities are
+ * removed, anything outside `[A-Za-z0-9 .,:_()-]` becomes a space, whitespace collapses, and the
+ * result is cut to TITLE_MAX. A word that is token-shaped (longer than 24 chars) or id-shaped (6+
+ * digits: an MRN, SSN, phone or account number) is dropped whole, so a title cannot carry a bearer
+ * token, a key or a long numeric identifier into the job message. Short words survive (a name, a
+ * 5-digit number), so this bounds the leak, it does not make PHI impossible; it relies on an
+ * intermediary's error page not carrying patient data. Returns undefined when nothing is left.
+ */
+export function htmlTitle(body: string | undefined): string | undefined {
+  if (!body) return undefined;
+  const m = TITLE_RE.exec(body.slice(0, TITLE_SCAN));
+  if (!m?.[1]) return undefined;
+  const words = m[1]
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&#?[A-Za-z0-9]{1,10};?/g, ' ')
+    .replace(TITLE_CHARS, ' ')
+    .split(/\s+/)
+    .filter((w) => w && w.length <= 24 && (w.match(/\d/g)?.length ?? 0) < 6);
+  const out = words.join(' ').slice(0, TITLE_MAX).trim();
+  return out || undefined;
+}
 
 /** Extract an ARM error code and identifier-only diagnostics; never returns free text. */
 export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?: Headers, bodyText?: string): { code: string; diag: ArmDiagnostics } {
@@ -235,6 +287,18 @@ export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?
       const c = bodyText.trimStart()[0];
       diag.firstByte = c === undefined ? 'empty' : c === '<' || c === '{' || c === '[' ? c : 'other';
     }
+    if (diag.firstByte === '<' || diag.contentType === 'text/html') {
+      const title = htmlTitle(bodyText);
+      if (title) diag.title = title;
+    }
+    const azureRef = edgeHeader(headers, 'x-azure-ref', AZURE_REF);
+    if (azureRef) diag.azureRef = azureRef;
+    const msedgeRef = edgeHeader(headers, 'x-msedge-ref', MSEDGE_REF);
+    if (msedgeRef) diag.msedgeRef = msedgeRef;
+    const cache = edgeHeader(headers, 'x-cache', X_CACHE);
+    if (cache) diag.cache = cache;
+    const via = edgeHeader(headers, 'via', VIA);
+    if (via) diag.via = via;
   }
   return { code: code ?? 'Unknown', diag };
 }
@@ -252,6 +316,11 @@ export function describeDiagnostics(d: ArmDiagnostics | undefined): string {
   if (d.server) parts.push(`server ${d.server}`);
   if (d.requestId) parts.push(`request ${d.requestId}`);
   if (d.firstByte) parts.push(`first ${d.firstByte}`);
+  if (d.title) parts.push(`title ${d.title}`);
+  if (d.azureRef) parts.push(`x-azure-ref ${d.azureRef}`);
+  if (d.msedgeRef) parts.push(`x-msedge-ref ${d.msedgeRef}`);
+  if (d.cache) parts.push(`x-cache ${d.cache}`);
+  if (d.via) parts.push(`via ${d.via}`);
   if (d.failureCause) parts.push(`cause ${d.failureCause}`);
   if (d.correlationId) parts.push(`correlation ${d.correlationId}`);
   return parts.length ? ` [${parts.join('; ')}]` : '';
@@ -264,6 +333,10 @@ export class ArmError extends Error {
     readonly code: string,
     readonly op: string,
     readonly diag?: ArmDiagnostics,
+    /** How many requests were made before giving up (> 1 only after a non-ARM 403 retry). */
+    readonly attempts = 1,
+    /** The refusal carried no ARM error code AND no `x-ms-request-id`: ARM itself never answered. */
+    readonly nonArm = false,
   ) {
     super(`${op} failed: HTTP ${status} ${code}${describeDiagnostics(diag)}`);
   }
@@ -273,6 +346,19 @@ export class ArmError extends Error {
 export function classifyArm(e: unknown): unknown {
   if (!(e instanceof ArmError)) return e;
   const said = describeDiagnostics(e.diag);
+  if (e.status === 403 && e.nonArm) {
+    // R7: what is established is the ABSENCE of ARM's markers, not who refused, so no role is named.
+    const html = e.diag?.contentType === 'text/html' || e.diag?.firstByte === '<' ? 'an HTML 403' : 'a 403';
+    const d = e.diag;
+    const clues = d?.title || d?.azureRef || d?.msedgeRef || d?.cache || d?.via || d?.server || d?.failureCause;
+    const who = clues
+      ? 'the title, server, cause and edge headers above are the only clues to who answered.'
+      : 'nothing in the response identifies who answered.';
+    return new JobFailure(
+      'permission',
+      `${e.op}: refused by ${html} without ARM's markers (origin unidentified; no ARM error code, no x-ms-request-id) on all ${e.attempts} attempt(s) (HTTP ${e.status} ${e.code})${said}. No ARM authorization error was returned, so no missing role is established; ${who}`,
+    );
+  }
   if (e.status === 401 || e.status === 403) {
     return new JobFailure(
       'permission',
@@ -303,6 +389,31 @@ export interface RestTenantArmOptions {
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
   maxPolls?: number;
+  /** Structured event logger; defaults to the same one-JSON-line-per-event stdout format main.ts uses. */
+  log?: (event: string, fields: Record<string, string | number>) => void;
+}
+
+/**
+ * Non-ARM 403 retry policy (#5380). Total attempts, and the sleep before attempt n+1. Bounded:
+ * at most 3 requests and 6 s of waiting per call, then fail closed with the last refusal.
+ */
+export const NON_ARM_403_ATTEMPTS = 3;
+export const NON_ARM_403_BACKOFF_MS = [2000, 4000] as const;
+
+function stdoutLog(event: string, fields: Record<string, string | number>): void {
+  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + '\n');
+}
+
+/** The sanitised fingerprint of a refusal: identifiers only (every value already allowlist-validated). */
+function fingerprint(e: ArmError): Record<string, string | number> {
+  const d = e.diag ?? {};
+  const out: Record<string, string | number> = { status: e.status, code: e.code };
+  const keys = ['bodyShape', 'contentType', 'contentLength', 'firstByte', 'title', 'server', 'azureRef', 'msedgeRef', 'cache', 'via', 'correlationId'] as const;
+  for (const k of keys) {
+    const v = d[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
 }
 
 const API_BY_TYPE: Record<string, string> = {
@@ -331,15 +442,46 @@ export class RestTenantArm implements TenantArm {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly pollMs: number;
   private readonly maxPolls: number;
+  private readonly log: (event: string, fields: Record<string, string | number>) => void;
 
   constructor(private readonly o: RestTenantArmOptions) {
     this.f = o.fetchFn ?? fetch;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.pollMs = o.pollMs ?? 5000;
     this.maxPolls = o.maxPolls ?? 360; // 30 min at the default
+    this.log = o.log ?? stdoutLog;
   }
 
+  /**
+   * One ARM / Key Vault request, with a bounded retry for ONE failure shape only (#5380): a 403
+   * carrying neither an ARM error code nor an `x-ms-request-id`, i.e. a refusal ARM itself never
+   * authored (live: an 875-byte HTML page, intermittent per request, while 20/20 requests from the
+   * same environment got ARM JSON). Every refused attempt logs its sanitised fingerprint; after
+   * NON_ARM_403_ATTEMPTS it fails closed with the last refusal (classifyArm -> `permission`). A
+   * genuine ARM 403 (AuthorizationFailed etc.) carries a code and is thrown on the first attempt.
+   *
+   * Retry safety per verb: GET is read-only. The tenant deployment PUT is idempotent: same
+   * deterministic deployment name, same template and parameters, Incremental mode, so a repeat
+   * converges on the same resources and cannot duplicate one (if ARM had in fact accepted the first
+   * PUT and the deployment is still running, the repeat gets a 409 Conflict, not a duplicate; that
+   * surfaces as a normal ArmError). PATCH (key enabled:false) and DELETE
+   * are idempotent too, and a DELETE whose target is already gone answers 404, which call() accepts.
+   */
   private async call(method: string, url: string, scope: string, op: string, body?: Json): Promise<{ status: number; json?: Json }> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.callOnce(method, url, scope, op, attempt, body);
+      } catch (e) {
+        if (!(e instanceof ArmError) || !e.nonArm) throw e;
+        const last = attempt >= NON_ARM_403_ATTEMPTS;
+        this.log('arm.non_arm_403', { op, method, attempt, of: NON_ARM_403_ATTEMPTS, outcome: last ? 'exhausted' : 'retrying', ...fingerprint(e) });
+        if (last) throw e;
+        await this.sleep(NON_ARM_403_BACKOFF_MS[attempt - 1] ?? 4000);
+      }
+    }
+  }
+
+  private async callOnce(method: string, url: string, scope: string, op: string, attempt: number, body?: Json): Promise<{ status: number; json?: Json }> {
     const res = await this.f(url, {
       method,
       headers: {
@@ -366,7 +508,9 @@ export class RestTenantArm implements TenantArm {
     }
     if (res.status >= 400 && res.status !== 404) {
       const { code, diag } = armDiagnostics(json, parsed, res.headers, text);
-      throw new ArmError(res.status, code, op, diag);
+      // Raw presence, not the validated value: a malformed-but-present request id still means ARM answered.
+      const nonArm = res.status === 403 && code === 'Unknown' && !res.headers?.get('x-ms-request-id');
+      throw new ArmError(res.status, code, op, diag, attempt, nonArm);
     }
     return { status: res.status, ...(json ? { json } : {}) };
   }
