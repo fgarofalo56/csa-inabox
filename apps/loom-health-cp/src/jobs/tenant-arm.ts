@@ -133,6 +133,16 @@ export interface ArmDiagnostics {
   correlationId?: string;
   /** Set when no error code was found: how the body looked instead (`empty-or-non-json`, `empty`, `keys:a,b`). */
   bodyShape?: string;
+  /** Set with `bodyShape`: media type only, lower-cased, parameters stripped (`text/html`). */
+  contentType?: string;
+  /** Set with `bodyShape`: the `content-length` header if numeric, else the measured body bytes. */
+  contentLength?: number;
+  /** Set with `bodyShape`: the `server` header, token-validated, so an intermediary can be named. */
+  server?: string;
+  /** Set with `bodyShape`: `x-ms-request-id`, token-validated. */
+  requestId?: string;
+  /** Set with `bodyShape`: class of the first non-whitespace char: `<`, `{`, `[`, `empty` or `other`. */
+  firstByte?: string;
 }
 
 const ID_CHARS = /[^A-Za-z0-9._-]/g;
@@ -163,9 +173,12 @@ const entries = (m: string | undefined, max: number): string | undefined =>
     .map((x) => x.slice(0, max))
     .join(',');
 const HEADER_TOKEN = /^[A-Za-z0-9._:-]{1,80}$/;
+const MEDIA_TYPE = /^[a-z0-9][a-z0-9.+-]{0,60}\/[a-z0-9][a-z0-9.+-]{0,60}$/;
+// `Microsoft-HTTPAPI/2.0` style; spaces, `;`, parentheses and control chars are not admitted.
+const SERVER_TOKEN = /^[A-Za-z0-9._:/-]{1,60}$/;
 
 /** Extract an ARM error code and identifier-only diagnostics; never returns free text. */
-export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?: Headers): { code: string; diag: ArmDiagnostics } {
+export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?: Headers, bodyText?: string): { code: string; diag: ArmDiagnostics } {
   const diag: ArmDiagnostics = {};
   // ARM's usual shape is { error: { code, message, details } }; some RPs and the gateway answer
   // with a capitalised { Code, Message } or a bare top-level { code, message }.
@@ -208,6 +221,20 @@ export function armDiagnostics(json: Json | undefined, parsed: boolean, headers?
             .slice(0, 5)
             .map((k) => k.replace(ID_CHARS, '').slice(0, 30))
             .join(',')}`;
+    // Identifiers only: the body text itself is never kept, just what kind of thing it was.
+    const ct = headers?.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+    if (ct && MEDIA_TYPE.test(ct)) diag.contentType = ct;
+    const cl = headers?.get('content-length')?.trim();
+    if (cl && /^\d{1,12}$/.test(cl)) diag.contentLength = Number(cl);
+    else if (bodyText !== undefined) diag.contentLength = Buffer.byteLength(bodyText, 'utf8');
+    const server = headers?.get('server');
+    if (server && SERVER_TOKEN.test(server)) diag.server = server;
+    const rid = headers?.get('x-ms-request-id');
+    if (rid && HEADER_TOKEN.test(rid)) diag.requestId = rid;
+    if (bodyText !== undefined) {
+      const c = bodyText.trimStart()[0];
+      diag.firstByte = c === undefined ? 'empty' : c === '<' || c === '{' || c === '[' ? c : 'other';
+    }
   }
   return { code: code ?? 'Unknown', diag };
 }
@@ -220,6 +247,11 @@ export function describeDiagnostics(d: ArmDiagnostics | undefined): string {
   else if (d.scope) parts.push(`scope ${d.scope}`);
   if (d.details?.length) parts.push(`details ${d.details.join(',')}`);
   if (d.bodyShape) parts.push(`body ${d.bodyShape}`);
+  if (d.contentType) parts.push(`type ${d.contentType}`);
+  if (d.contentLength !== undefined) parts.push(`len ${d.contentLength}`);
+  if (d.server) parts.push(`server ${d.server}`);
+  if (d.requestId) parts.push(`request ${d.requestId}`);
+  if (d.firstByte) parts.push(`first ${d.firstByte}`);
   if (d.failureCause) parts.push(`cause ${d.failureCause}`);
   if (d.correlationId) parts.push(`correlation ${d.correlationId}`);
   return parts.length ? ` [${parts.join('; ')}]` : '';
@@ -318,15 +350,22 @@ export class RestTenantArm implements TenantArm {
     });
     let json: Json | undefined;
     let parsed = true;
+    // Read once as text so a non-JSON body can still be classified; JSON.parse keeps the old semantics.
+    let text: string | undefined;
     try {
-      const v = (await res.json()) as unknown;
+      text = await res.text();
+    } catch {
+      text = undefined;
+    }
+    try {
+      const v = JSON.parse(text ?? '') as unknown;
       json = v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : undefined;
     } catch {
       json = undefined;
       parsed = false;
     }
     if (res.status >= 400 && res.status !== 404) {
-      const { code, diag } = armDiagnostics(json, parsed, res.headers);
+      const { code, diag } = armDiagnostics(json, parsed, res.headers, text);
       throw new ArmError(res.status, code, op, diag);
     }
     return { status: res.status, ...(json ? { json } : {}) };
