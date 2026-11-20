@@ -24,7 +24,7 @@ import { parseQuotas } from '../_lib/quotas';
 import { apiError, apiOk } from '@/lib/api/respond';
 import { apiHonestGateError, buildGateEnvelope, GATE_HTTP_STATUS } from '@/lib/api/gate-envelope';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
-import { ensureHealthTenant, readBinding, realDeps } from '@/lib/install/provisioners/health-tenant';
+import { ensureHealthTenant, livePhase, readBinding, realDeps } from '@/lib/install/provisioners/health-tenant';
 import { cp, CpError, CpNotConfiguredError, type CpJob, type CpTenant } from '../_lib/cp-client';
 
 export const runtime = 'nodejs';
@@ -59,7 +59,8 @@ export const GET = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async
     // The recorded binding is still true as a RECORD; say plainly that the live read failed.
     liveError = { code: e.code, message: e.message };
   }
-  return apiOk({ phase: binding.status, binding, tenant, job, liveError });
+  // `phase` is the live truth when the create job has already failed (#5388); `binding` stays the record.
+  return apiOk({ phase: livePhase(binding.status, job?.state), binding, tenant, job, liveError });
 });
 
 export const PATCH = withHealthTenantAdmin<{ id: string }>('Contributor', async (req, { session, params }) => {

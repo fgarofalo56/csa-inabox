@@ -26,7 +26,8 @@ const loadOwnedItem = vi.hoisted(() => vi.fn(async (..._a: any[]) => null as any
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: (...a: any[]) => loadOwnedItem(...a) }));
 
 import { getSession } from '@/lib/auth/session';
-import { POST, PATCH } from '../[id]/route';
+import { cp, type CpJob } from '../_lib/cp-client';
+import { GET, POST, PATCH } from '../[id]/route';
 
 const SESSION = { claims: { oid: 'oid-1', tid: 'tid-1', upn: 'a@b.c', groups: [] } };
 const req = (body?: unknown) =>
@@ -44,6 +45,34 @@ beforeEach(() => {
   vi.stubEnv('LOOM_TENANT_ADMIN_GROUP_ID', '');
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+describe('GET /api/health/tenants/[id] phase (#5388)', () => {
+  const binding = { tenantId: 'mercy-general', sourceName: 'Mercy General', tenantIdSanitized: false, stampId: 'dev01', createJobId: 'job-1', status: 'provisioning', resources: [] };
+  const job = (state: CpJob['state']): CpJob => ({ id: 'job-1', kind: 'tenant.create', subjectId: 'mercy-general', state, receipts: [], updatedAt: '2026-11-20T00:00:00Z', ...(state === 'failed' ? { error: { code: 'permission', message: 'read stamp deployment failed: HTTP 403 Unknown' } } : {}) });
+  const read = async (state: CpJob['state']) => {
+    loadOwnedItem.mockResolvedValue({ id: 'item-1', workspaceId: 'ws-1', itemType: 'health-tenant', displayName: 'Mercy General', state: { healthTenant: binding } });
+    vi.spyOn(cp, 'getTenant').mockResolvedValue({ id: 'mercy-general', status: 'provisioning' } as any);
+    vi.spyOn(cp, 'getJob').mockResolvedValue(job(state));
+    const res = await GET(req(), ctx);
+    expect(res.status, 'the read itself must succeed (control: the route reached the CP read)').toBe(200);
+    return res.json();
+  };
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('reports failed, with the job code and message, when the recorded provisioning job has failed live', async () => {
+    const j = await read('failed');
+    // Breaks if the route reports binding.status unchanged (`provisioning`): the seam, not just livePhase.
+    expect(j.phase).toBe('failed');
+    expect(j.job.error).toEqual({ code: 'permission', message: 'read stamp deployment failed: HTTP 403 Unknown' });
+    // The record is not rewritten by a read: binding.status stays what the item stores.
+    expect(j.binding.status).toBe('provisioning');
+  });
+
+  it('still reports provisioning while the job runs (positive pair)', async () => {
+    // Breaks if the route reports failed for a live job: a running create would show as failed in G1.
+    expect((await read('running')).phase).toBe('provisioning');
+  });
+});
 
 describe('POST /api/health/tenants/[id]', () => {
   it('is gated on an explicit health.tenant-admin grant: no grant gets the 403 and the item is never loaded', async () => {

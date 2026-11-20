@@ -330,6 +330,18 @@ function failed(
   return { phase: 'failed', binding, job, code, message, steps };
 }
 
+/**
+ * The phase a read reports (#5388). The binding records `provisioning` until an ensure (POST) sees the
+ * create job finish, so a reader that only GETs would be told `provisioning` long after the live job
+ * it just fetched had ended `failed` or `cancelled`. That reader is told `failed`, the phase the next
+ * ensure records (`failed()` above). Read-only: nothing is persisted here. A `bound` record is left
+ * as recorded: its job is a re-verification, and only an ensure may move a bound tenant.
+ */
+export function livePhase(recorded: HealthBinding['status'], jobState: CpJob['state'] | undefined): HealthBinding['status'] {
+  if (recorded === 'provisioning' && (jobState === 'failed' || jobState === 'cancelled')) return 'failed';
+  return recorded;
+}
+
 // ── real dependencies ────────────────────────────────────────────────────────
 
 /** Persist `state.healthTenant` on the Cosmos item (read-modify-replace on id + workspaceId). */
