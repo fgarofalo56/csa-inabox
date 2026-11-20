@@ -586,6 +586,25 @@ guided, welcoming state:
   defect. (The pre-run validation dots of §3.2 still apply — after touch or a
   run/publish attempt, not before.)
 
+### 9.7 Supported width floor: 768px
+
+Loom is desktop-first: 1280px and up is the target, and the left nav collapses
+to an icon rail below 1024px. **768px is the supported floor.** Below it
+(tablet portrait, phone) `app/globals.css` keeps the page at a 768px layout and
+lets it scroll horizontally. Loom does not reflow to phone width, and there is
+no wide-screen prompt. Operator decision on #5399, 2026-11-20.
+
+- **At 768px and wider, horizontal page overflow is a defect.** Narrow-width
+  passes in a G1 walk measure at 768px, not below it.
+- **Below 768px, overflow of exactly `768 - viewport` is by design.** A spec may
+  measure it as a positive control that the floor is in place (the
+  health-tenant G1 spec does at 420px). It is NOT a check for content wider
+  than the floor: below 768px the body becomes its own scroll container, so the
+  document still reads `768 - viewport`. Only the 768px measurement catches
+  wide content.
+- §9.5 still applies at every width: badges never overlap, even inside the
+  scrolled 768px layout.
+
 ---
 
 ## Related rules

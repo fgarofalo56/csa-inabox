@@ -275,7 +275,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     const shots: [string, () => Promise<void>][] = [
       ['editor-light', async () => { await page.emulateMedia({ colorScheme: 'light' }); }],
       ['editor-dark', async () => { await page.emulateMedia({ colorScheme: 'dark' }); }],
-      ['editor-narrow-420', async () => { await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 420, height: 900 }); }],
+      ['editor-narrow-768', async () => { await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 768, height: 900 }); }],
     ];
     for (const [name, setup] of shots) {
       await setup();
@@ -285,10 +285,25 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
       expect(body.length, `${name} screenshot size`).toBeGreaterThan(5_000);
       await testInfo.attach(name, { body, contentType: 'image/png' });
     }
-    // Narrow pass: no horizontal page overflow. Breaks if scrollWidth exceeds the 420px viewport.
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    await testInfo.attach('narrow-horizontal-overflow-px', { body: String(overflow), contentType: 'text/plain' });
-    expect(overflow, 'horizontal overflow in px at 420px wide').toBeLessThanOrEqual(1);
+    const overflowPx = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    // Narrow pass at the supported floor. Loom is desktop-first with a 768px layout floor
+    // (app/globals.css, operator decision on #5399, ux-standards.md section 9.7), so the
+    // narrowest width that must not overflow is 768. Breaks if any element is wider than 768px
+    // at that viewport (e.g. a fixed-width ribbon or a breadcrumb with no truncation).
+    const atFloor = await overflowPx();
+    await testInfo.attach('narrow-horizontal-overflow-px-768', { body: String(atFloor), contentType: 'text/plain' });
+    expect(atFloor, 'horizontal overflow in px at the 768px floor').toBeLessThanOrEqual(1);
+    // Positive control: the instrument must SEE overflow where it exists. Below the floor the page
+    // lays out at 768px by design, so at 420px the overflow is exactly 768 - 420 = 348.
+    // Breaks if the floor is removed or changed (measured: 0 with no floor). It does NOT catch
+    // content wider than 768px: below the floor overflow-x on both html and body makes the body
+    // its own scroll container, so a 900px child still reads 348 here (measured). The 768 check
+    // above is what catches wide content (measured: 132 for a 900px child).
+    await page.setViewportSize({ width: 420, height: 900 });
+    await page.waitForTimeout(800);
+    const belowFloor = await overflowPx();
+    await testInfo.attach('narrow-horizontal-overflow-px-420', { body: String(belowFloor), contentType: 'text/plain' });
+    expect(Math.abs(belowFloor - (768 - 420)), `overflow at 420px is ${belowFloor}; the 768px floor gives 348`).toBeLessThanOrEqual(1);
     await page.setViewportSize({ width: 1600, height: 1000 });
   });
 
