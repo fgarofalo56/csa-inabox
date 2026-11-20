@@ -287,7 +287,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     }
     // Narrow pass (#5399, ux-standards.md section 9.7). The AppShell root is capped at 100vw with
     // overflow hidden and its <main> scrolls its own overflow, so a wide editor shows up as
-    // <main> overflow, never as page overflow. Both are measured. Page overflow is the old
+    // <main> overflow (in-flow content), not page overflow. Both are measured. Page overflow is the old
     // html/body min-width gutter (348px at 420px), deleted on #5399.
     const MAIN = 'main.loom-app-grid-bg';
     const measure = () => page.evaluate((sel) => {
@@ -315,7 +315,7 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
     const ctlBody = await probe('body');
     // Breaks if the selector no longer finds <main> (-1) or if <main> stops scrolling its overflow.
     expect(ctlMain.main, 'positive control: a 2000px child must overflow <main>').toBeGreaterThan(500);
-    // Breaks if page overflow became unmeasurable (e.g. html/body overflow clipped).
+    // Breaks if page overflow became unmeasurable (e.g. html/body `overflow-x: clip`).
     expect(ctlBody.doc, 'positive control: a 2000px body child must overflow the page').toBeGreaterThan(500);
     for (const width of [768, 420]) {
       await page.setViewportSize({ width, height: 900 });

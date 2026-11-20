@@ -597,10 +597,12 @@ no page-level min-width and no wide-screen prompt. Operator decision on #5399,
 How the layout behaves, which decides what a narrow-width check must measure:
 
 - The `AppShell` root is capped at `100vw` with `overflow: hidden`, and its
-  `<main>` scrolls its own overflow. So a too-wide editor shows up as
-  **`<main>` overflow** (`scrollWidth - clientWidth` on `main`), never as page
+  `<main>` scrolls its own overflow. So too-wide in-flow editor content shows up
+  as **`<main>` overflow** (`scrollWidth - clientWidth` on `main`), not as page
   overflow. A check that reads only `document.documentElement.scrollWidth` is
-  blind to editor content.
+  blind to it. Absolutely positioned content escapes to the page, because
+  neither `main` nor the shell root is positioned. The page-overflow check
+  catches that case.
 - **Page overflow is a defect at every width.** An html/body
   `min-width: 768px` rule used to add a blank horizontal scroll gutter below
   768px (348px at 420px). It was deleted on #5399.
