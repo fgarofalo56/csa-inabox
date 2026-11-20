@@ -37,9 +37,8 @@ name: lhds ARM path probe
 # `loom-aca` fleet exists only in the Commercial DMLZ subscription
 # (cloud-parity.md: disclosed gap; the Gov path of #5380 is not covered).
 #
-# NOTE: the brief asked for azure/login OIDC; the seed-automation-grant job it
-# is copied from actually uses the client-secret `creds:` form, so this does the
-# same. `id-token: write` is granted per the brief but unused today.
+# NOTE: login uses the client-secret `creds:` form, copied from the
+# seed-automation-grant job. No OIDC is used, so no `id-token` permission is granted.
 
 on:
   workflow_dispatch:
@@ -62,7 +61,6 @@ on:
         default: '6'
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -156,16 +154,18 @@ jobs:
           login_rc=$?
           set -e
           if [ "$login_rc" -ne 0 ]; then
-            {
-              echo "## ARM 2 - runner managed identity: NOT MEASURED"
-              echo "az login --identity failed rc=$login_rc; this arm was skipped explicitly. First 300 bytes of stderr:"
-              echo '```'
-              head -c 300 "$RUNNER_TEMP/az-mi.err"
-              echo
-              echo '```'
-            } | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "::warning::ARM 2 skipped: managed-identity login is not possible on this runner (rc=$login_rc)"
-            exit 0
+            # Public repo: the raw stderr can carry client/tenant ids, so only a
+            # coarse class is printed. The job FAILS: an arm that measured nothing
+            # must not read green (deploy-integrity R6/R7). ARM 1's result is
+            # already in the summary above.
+            cls=other
+            if grep -qiE 'no managed identity|identity not found|ManagedIdentityCredential' "$RUNNER_TEMP/az-mi.err"; then cls=no-identity
+            elif grep -qiE 'IMDS|169\.254\.169\.254|IDENTITY_ENDPOINT|connection' "$RUNNER_TEMP/az-mi.err"; then cls=endpoint-unreachable
+            elif grep -qiE 'multiple|client[_ -]?id' "$RUNNER_TEMP/az-mi.err"; then cls=ambiguous-identity
+            fi
+            echo "## ARM 2 - runner managed identity: NOT MEASURED (az login --identity rc=$login_rc, class=$cls)" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::ARM 2 not measured: managed-identity login failed on this runner (rc=$login_rc, class=$cls)"
+            exit 1
           fi
           TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | tr -d '\r\n')"
           if [ -z "$TOKEN" ]; then echo "::error::empty access token after a successful identity login"; exit 1; fi
