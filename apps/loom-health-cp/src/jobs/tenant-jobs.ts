@@ -34,7 +34,24 @@ export interface TenantJobDeps {
   tenants: Collection<TenantDoc>;
   registry: Registry;
   arm: TenantArm;
+  /** Injectable for tests; production waits for real. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Shred read-back: reads per key, and the wait between rounds (#5392). Defaults SHRED_READS / SHRED_POLL_MS. */
+  shredReads?: number;
+  shredPollMs?: number;
 }
+
+/**
+ * Key Vault soft-delete is a long-running operation: right after DELETE keys/{name}, both
+ * GET keys/{name} and GET deletedkeys/{name} can 404 until the deleted-key record appears (the
+ * SDK's beginDeleteKey poller treats exactly that 404 as "still in progress"). So the read-back
+ * polls. Budget: the keys are read together, one sleep per ROUND, so the total wait is
+ * (SHRED_READS - 1) * SHRED_POLL_MS = 5 * 5 s = 25 s regardless of key count. The destroy may
+ * already have spent TENANT_DEPLOY_SETTLE_MS (8 min) of the 10 min LEASE_MS waiting for an
+ * in-flight create, so this must stay well inside the remaining 2 min.
+ */
+export const SHRED_READS = 6;
+export const SHRED_POLL_MS = 5000;
 
 export function tenantHandlers(deps: TenantJobDeps): JobHandler[] {
   return [tenantCreateHandler(deps), tenantDestroyHandler(deps)];
@@ -350,24 +367,47 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         }
       }
       const auditKey = names.keyNames[KEY_SUFFIXES.indexOf('st-audit')];
-      let auditKeyState: KeyReadback | undefined;
-      const unshredded: string[] = [];
-      for (const name of names.keyNames) {
-        let k: KeyReadback;
-        try {
-          k = await deps.arm.readKey(r.vaultUri, name);
-        } catch (e) {
-          throw classifyArm(e);
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
+      // max(1, ...): zero or a negative count would read nothing and report every key unshredded unread.
+      const reads = Math.max(1, Math.floor(deps.shredReads ?? SHRED_READS));
+      const pollMs = Math.max(0, deps.shredPollMs ?? SHRED_POLL_MS);
+      const shredded = (k: KeyReadback): boolean => !k.exists && !!k.deletedDate;
+      // A key still reading LIVE is polled too: its DELETE was already issued above and the live GET
+      // can lag the soft-delete the same way. Either way it fails on exhaustion, never passes.
+      const last = new Map<string, KeyReadback>();
+      const readCount = new Map<string, number>();
+      let pending = [...names.keyNames];
+      for (let round = 1; round <= reads && pending.length > 0; round++) {
+        if (round > 1) await sleep(pollMs);
+        for (const name of pending) {
+          try {
+            last.set(name, await deps.arm.readKey(r.vaultUri, name));
+          } catch (e) {
+            throw classifyArm(e);
+          }
+          readCount.set(name, round);
         }
+        pending = pending.filter((name) => !shredded(last.get(name) as KeyReadback));
+      }
+      // One receipt per key, carrying the FINAL read and how many reads it took.
+      for (const name of names.keyNames) {
+        const k = last.get(name) as KeyReadback;
         await ctx.receipt(
           'key.shredded',
-          `key=${name} live=${k.exists} deletedDate=${k.deletedDate ?? 'none'} scheduledPurgeDate=${k.scheduledPurgeDate ?? 'none'}`,
+          `key=${name} live=${k.exists} deletedDate=${k.deletedDate ?? 'none'} scheduledPurgeDate=${k.scheduledPurgeDate ?? 'none'} reads=${readCount.get(name) ?? 0}`,
         );
-        if (k.exists || !k.deletedDate) unshredded.push(name);
-        if (name === auditKey) auditKeyState = k;
       }
-      if (unshredded.length > 0) {
-        throw new JobFailure('shred_unverified', `key state did not read back as deleted for: ${unshredded.join(', ')}`);
+      const auditKeyState: KeyReadback | undefined = auditKey ? last.get(auditKey) : undefined;
+      if (pending.length > 0) {
+        const waitedS = Math.round(((reads - 1) * pollMs) / 1000);
+        const lastRead = pending.map((name) => {
+          const k = last.get(name) as KeyReadback;
+          return `${name} (last read: ${k.exists ? 'live' : 'not live'}, deletedDate ${k.deletedDate ?? 'none'})`;
+        });
+        throw new JobFailure(
+          'shred_unverified',
+          `key state did not read back as deleted after ${reads} read(s) over ${waitedS}s for: ${lastRead.join('; ')}`,
+        );
       }
 
       // 4. The retained audit account is part of a SUCCESSFUL destroy: recorded, with its key's

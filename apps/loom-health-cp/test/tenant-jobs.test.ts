@@ -129,8 +129,24 @@ class FakeArm implements TenantArm {
     if (err) throw err;
     if (!this.stickyIds.has(rid)) this.resources.delete(rid);
   }
+  /** Reads of a DELETED key that still return 404/404 ({exists:false}, no deletedDate) before the soft-delete record appears. */
+  softDeleteLagReads = 0;
+  /** Never produce the deleted-key record: every read after delete is 404/404. */
+  softDeleteNeverAppears = false;
+  readKeyCalls = new Map<string, number>();
+  private lagLeft = new Map<string, number>();
   async readKey(_v: string, name: string): Promise<KeyReadback> {
-    return this.keys.get(name) ?? { name, exists: false };
+    this.readKeyCalls.set(name, (this.readKeyCalls.get(name) ?? 0) + 1);
+    const k = this.keys.get(name);
+    if (k && !k.exists && k.deletedDate) {
+      if (this.softDeleteNeverAppears) return { name, exists: false };
+      const left = this.lagLeft.get(name) ?? 0;
+      if (left > 0) {
+        this.lagLeft.set(name, left - 1);
+        return { name, exists: false };
+      }
+    }
+    return k ?? { name, exists: false };
   }
   async disableKey(_v: string, name: string) {
     this.keyOps.push(`disable:${name}`);
@@ -142,6 +158,8 @@ class FakeArm implements TenantArm {
     if (this.keyDeleteIsNoop) return;
     for (const rid of [...this.resources.keys()]) if (rid.endsWith(`/keys/${name}`)) this.resources.delete(rid);
     this.keys.set(name, { name, exists: false, deletedDate: '2026-10-26T00:00:00.000Z', scheduledPurgeDate: '2027-01-24T00:00:00.000Z' });
+    this.lagLeft.set(name, this.softDeleteLagReads);
+    this.readKeyCalls.set(name, 0); // count only the post-delete read-back
   }
 }
 
@@ -161,13 +179,18 @@ function setup(stampStatus: StampDoc['status'] = 'healthy', tenantStatus: Tenant
   const arm = new FakeArm();
   const registry = new Registry(stamps, tenants);
   const runner = new JobRunner(jobsStore, async (_t, i) => i === SLUG, () => {});
-  for (const h of tenantHandlers({ stamps, tenants, registry, arm })) runner.register(h);
+  // A recording sleep: no test waits for real, and the shred poll's waits are observable.
+  const sleeps: number[] = [];
+  const sleep = async (ms: number) => {
+    sleeps.push(ms);
+  };
+  for (const h of tenantHandlers({ stamps, tenants, registry, arm, sleep, shredReads: 6, shredPollMs: 5000 })) runner.register(h);
   const run = async (kind: 'tenant.create' | 'tenant.destroy', key: string, input: Record<string, unknown> = {}) => {
     const { job } = await runner.submit({ kind, subjectType: 'tenant', subjectId: SLUG, idempotencyKey: key, input, requestedBy: 't' });
     await runner.idle();
     return runner.get(job.id);
   };
-  return { arm, tenants, run };
+  return { arm, tenants, run, sleeps };
 }
 
 describe('names agree with tenant.bicep', () => {
@@ -498,5 +521,57 @@ describe('tenant.destroy', () => {
     const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
     expect(job.error?.code).toBe('shred_unverified');
     expect(job.error?.message).toContain(`t-${SLUG}-st-pixel`);
+    // A live key is polled to exhaustion too, and the failure names it as live.
+    expect(job.error?.message).toContain(`t-${SLUG}-st-pixel (last read: live, deletedDate none)`);
+  });
+
+  describe('shred read-back polls the asynchronous soft-delete (#5392)', () => {
+    it('a deleted-key record that appears only on the 3rd read still succeeds, with one receipt per key', async () => {
+      const { arm, run, sleeps } = await created();
+      // Mutation that turns this red: reverting the read-back to a single readKey per key
+      // (the 2026-11-20 code) reads {exists:false} with no deletedDate and fails shred_unverified.
+      arm.softDeleteLagReads = 2;
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+      const keys = tenantNames(STAMP, SLUG).keyNames;
+      // Exactly 3 post-delete reads per key: 2 lagging + the one that saw deletedDate (a loop that kept reading would make it more).
+      for (const k of keys) expect(arm.readKeyCalls.get(k)).toBe(3);
+      // One sleep per ROUND, not per key: 2 rounds waited, at the configured interval.
+      expect(sleeps).toEqual([5000, 5000]);
+      const shred = job.receipts.filter((r) => r.step === 'key.shredded');
+      // Once per key with the FINAL read: a receipt per poll would make this 12.
+      expect(shred).toHaveLength(keys.length);
+      for (const r of shred) expect(r.detail).toMatch(/live=false deletedDate=2026-10-26T00:00:00\.000Z scheduledPurgeDate=2027-01-24T00:00:00\.000Z reads=3$/);
+    });
+
+    it('a deleted-key record that never appears fails shred_unverified after exactly the bounded reads, naming the last read', async () => {
+      const { arm, run, sleeps } = await created();
+      arm.softDeleteNeverAppears = true;
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.error?.code).toBe('shred_unverified');
+      const keys = tenantNames(STAMP, SLUG).keyNames;
+      // 6 distinguishes a single read (1) and an unbounded loop (never terminates / >6).
+      for (const k of keys) expect(arm.readKeyCalls.get(k)).toBe(6);
+      expect(sleeps).toEqual([5000, 5000, 5000, 5000, 5000]); // reads - 1 waits, at the configured interval
+      expect(job.error?.message).toContain('after 6 read(s) over 25s');
+      for (const k of keys) expect(job.error?.message).toContain(`${k} (last read: not live, deletedDate none)`);
+      // The keys WERE deleted (positive pairing): the failure is the read-back, not a skipped delete.
+      for (const k of keys) expect(arm.keyOps).toContain(`delete:${k}`);
+      const shred = job.receipts.filter((r) => r.step === 'key.shredded');
+      expect(shred).toHaveLength(keys.length);
+      for (const r of shred) expect(r.detail).toMatch(/live=false deletedDate=none scheduledPurgeDate=none reads=6$/);
+      // The retained receipt is withheld on a failed shred, and its absence is not from a missing audit account.
+      expect(job.receipts.some((r) => r.step === 'storage.audit.retained')).toBe(false);
+      expect(arm.resources.has(AUDIT_ID)).toBe(true);
+    });
+
+    it('the first read that shows deletedDate ends the poll without sleeping', async () => {
+      const { arm, run, sleeps } = await created();
+      const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+      expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+      // Input that breaks it: a poll that always sleeps once, or reads twice, before checking.
+      expect(sleeps).toEqual([]);
+      for (const k of tenantNames(STAMP, SLUG).keyNames) expect(arm.readKeyCalls.get(k)).toBe(1);
+    });
   });
 });
