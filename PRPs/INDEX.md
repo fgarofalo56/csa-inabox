@@ -8,7 +8,7 @@
 |---|---|---|---|---|---|
 | [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | n/a | no Execution state table | sonnet / sonnet | required |
 | [W01-control-plane-identity-stamp](active/loom-health-data-services/W01-control-plane-identity-stamp.md) | P1 | 9/9 (100%) | merged 9 | sonnet / sonnet | required |
-| [W01b-close-deploy-receipts](active/loom-health-data-services/W01b-close-deploy-receipts.md) | P1 | 1/5 (20%) | todo 2, in-progress 1, verifying 1, merged 1 | sonnet / sonnet | required |
+| [W01b-close-deploy-receipts](active/loom-health-data-services/W01b-close-deploy-receipts.md) | P1 | 2/5 (40%) | todo 2, in-progress 1, merged 2 | sonnet / sonnet | required |
 | [W02a-fhir-core-build](active/loom-health-data-services/W02a-fhir-core-build.md) | P1 | 3/4 (75%) | in-progress 1, merged 3 | sonnet / sonnet | required |
 | [W03a-dicom-core-a](active/loom-health-data-services/W03a-dicom-core-a.md) | P1 | 2/3 (66%) | todo 1, merged 2 | sonnet / sonnet | required |
 | [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 2/11 (18%) | todo 9, merged 2 | sonnet / sonnet | none |
