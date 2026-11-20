@@ -211,7 +211,9 @@ const TITLE_CHARS = /[^A-Za-z0-9 .,:_()-]+/g;
  * removed, anything outside `[A-Za-z0-9 .,:_()-]` becomes a space, whitespace collapses, and the
  * result is cut to TITLE_MAX. A word that is token-shaped (longer than 24 chars) or id-shaped (6+
  * digits: an MRN, SSN, phone or account number) is dropped whole, so a title cannot carry a bearer
- * token, a key or a patient identifier into the job message. Returns undefined when nothing is left.
+ * token, a key or a long numeric identifier into the job message. Short words survive (a name, a
+ * 5-digit number), so this bounds the leak, it does not make PHI impossible; it relies on an
+ * intermediary's error page not carrying patient data. Returns undefined when nothing is left.
  */
 export function htmlTitle(body: string | undefined): string | undefined {
   if (!body) return undefined;
@@ -346,10 +348,15 @@ export function classifyArm(e: unknown): unknown {
   const said = describeDiagnostics(e.diag);
   if (e.status === 403 && e.nonArm) {
     // R7: what is established is the ABSENCE of ARM's markers, not who refused, so no role is named.
-    const html = e.diag?.contentType === 'text/html' || e.diag?.firstByte === '<' ? 'HTML ' : '';
+    const html = e.diag?.contentType === 'text/html' || e.diag?.firstByte === '<' ? 'an HTML 403' : 'a 403';
+    const d = e.diag;
+    const clues = d?.title || d?.azureRef || d?.msedgeRef || d?.cache || d?.via || d?.server;
+    const who = clues
+      ? 'the title, server and edge headers above are the only clues to who answered.'
+      : 'nothing in the response identifies who answered.';
     return new JobFailure(
       'permission',
-      `${e.op}: refused by a non-ARM ${html}403 (origin unidentified; no ARM error code, no x-ms-request-id) on all ${e.attempts} attempt(s) (HTTP ${e.status} ${e.code})${said}. No ARM authorization error was returned, so no missing role is established; the type, title and edge headers above identify the intermediary that answered.`,
+      `${e.op}: refused by ${html} without ARM's markers (origin unidentified; no ARM error code, no x-ms-request-id) on all ${e.attempts} attempt(s) (HTTP ${e.status} ${e.code})${said}. No ARM authorization error was returned, so no missing role is established; ${who}`,
     );
   }
   if (e.status === 401 || e.status === 403) {
@@ -455,7 +462,9 @@ export class RestTenantArm implements TenantArm {
    *
    * Retry safety per verb: GET is read-only. The tenant deployment PUT is idempotent: same
    * deterministic deployment name, same template and parameters, Incremental mode, so a repeat
-   * converges on the same resources and cannot duplicate one. PATCH (key enabled:false) and DELETE
+   * converges on the same resources and cannot duplicate one (if ARM had in fact accepted the first
+   * PUT and the deployment is still running, the repeat gets a 409 Conflict, not a duplicate; that
+   * surfaces as a normal ArmError). PATCH (key enabled:false) and DELETE
    * are idempotent too, and a DELETE whose target is already gone answers 404, which call() accepts.
    */
   private async call(method: string, url: string, scope: string, op: string, body?: Json): Promise<{ status: number; json?: Json }> {

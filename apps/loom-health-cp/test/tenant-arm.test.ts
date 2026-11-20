@@ -340,7 +340,9 @@ describe('non-ARM HTML 403: fingerprint and bounded retry (#5380)', () => {
         fields: { op: 'read stamp deployment', method: 'GET', attempt: 1, of: 3, outcome: 'retrying', status: 403, code: 'Unknown', bodyShape: 'empty-or-non-json', contentType: 'text/html', contentLength: Buffer.byteLength(PAGE), firstByte: '<', title: '403 Forbidden', azureRef: REF },
       },
     ]);
-    expect(JSON.stringify(logs)).not.toContain('tok:'); // breaks if the bearer token reaches the log
+    // REGRESSION GUARD, not coverage (assertion-design rule 5): fingerprint() never reads the token
+    // today, so no current input fails this; it exists to catch a future change that logs it.
+    expect(JSON.stringify(logs)).not.toContain('tok:');
   });
 
   it('HTML 403 x3 on the PUT: fails closed as permission after exactly 3 attempts, naming type, title and edge ref', async () => {
@@ -352,11 +354,23 @@ describe('non-ARM HTML 403: fingerprint and bounded retry (#5380)', () => {
     expect(logs.map((l) => l.fields.outcome)).toEqual(['retrying', 'retrying', 'exhausted']); // breaks if any refused attempt goes unlogged
     const f = classifyArm(e) as JobFailure;
     expect(f.code).toBe('permission'); // breaks if exhaustion is classified transient (would invite an unbounded outer retry)
-    expect(f.message).toContain('non-ARM HTML 403 (origin unidentified');
+    expect(f.message).toContain("refused by an HTML 403 without ARM's markers (origin unidentified"); // breaks if the message asserts the 403 was not from ARM
+    // Breaks if the clue clause stops being conditional on captured clues (this response HAS a title and x-azure-ref).
+    expect(f.message).toContain('the title, server and edge headers above are the only clues to who answered.');
     expect(f.message).toContain('on all 3 attempt(s)');
     expect(f.message).toContain(`type text/html; len ${Buffer.byteLength(PAGE)}; first <; title 403 Forbidden; x-azure-ref ${REF}`);
     // R7: breaks if the message claims the CP identity was denied, which nothing established.
     expect(f.message).not.toContain('not authorised');
+  });
+
+  it('an empty codeless 403 with no edge headers: the message says nothing identifies the answerer (R7)', async () => {
+    const { arm, calls } = rig([{ status: 403, text: '', nonJson: true }]);
+    const f = classifyArm(await deploy(arm).catch((x: unknown) => x)) as JobFailure;
+    expect(calls).toHaveLength(3); // positive: still the non-ARM retry path
+    expect(f.message).toContain("refused by a 403 without ARM's markers"); // breaks if a non-HTML body is labelled HTML
+    // Breaks if the clue clause is unconditional: no title or edge header was captured, so claiming them is false.
+    expect(f.message).toContain('nothing in the response identifies who answered.');
+    expect(f.message).not.toContain('only clues');
   });
 
   it('a genuine ARM JSON 403 (error.code, even without x-ms-request-id) is NOT retried: exactly one fetch', async () => {
