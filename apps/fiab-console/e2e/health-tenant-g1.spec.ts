@@ -190,8 +190,18 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
         r = await getJson(page, `/api/health/tenants/${itemId}`);
       }
       last = r.body; lastStatus = r.status;
-      if (r.status === 200 && last?.phase === 'failed') {
-        throw new Error(`tenant create failed: binding.lastError=${JSON.stringify(last?.binding?.lastError)} liveError=${JSON.stringify(last?.liveError)} job.error=${JSON.stringify(last?.job?.error)}`);
+      // FAIL FAST on the live create job, not only on the recorded phase (#5388): a console older than the
+      // GET's livePhase() still reports `provisioning` after the job has failed, and run 44661794270 then
+      // waited the full 12 min with the job's code and message unread. Breaks on job.state 'failed' or
+      // 'cancelled' while phase is still 'provisioning': throws naming the job's own code and message.
+      const jobState = last?.job?.state;
+      if (r.status === 200 && (last?.phase === 'failed' || jobState === 'failed' || jobState === 'cancelled')) {
+        await attachJson(testInfo, 'create-job-failed', { phase: last?.phase, job: last?.job, binding: last?.binding, liveError: last?.liveError });
+        throw new Error(
+          `tenant create failed: phase=${last?.phase} job=${last?.job?.id ?? '(none)'} state=${jobState ?? '(none)'} ` +
+          `code=${last?.job?.error?.code ?? '(none)'} message=${JSON.stringify(last?.job?.error?.message ?? null)} ` +
+          `binding.lastError=${JSON.stringify(last?.binding?.lastError)} liveError=${JSON.stringify(last?.liveError)}`,
+        );
       }
       if (r.status === 200 && last?.phase === 'bound' && last?.tenant?.status === 'active') break;
       await page.waitForTimeout(POLL_MS);

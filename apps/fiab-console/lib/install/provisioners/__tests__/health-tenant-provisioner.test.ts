@@ -22,6 +22,7 @@ import {
   healthTenantCollisionSlug,
   healthTenantSlugFor,
   HEALTH_TENANT_SLUG_MAX,
+  livePhase,
   pickStamp,
   resourcesFromReceipts,
   toProvisionResult,
@@ -185,6 +186,25 @@ describe('pickStamp', () => {
   it('picks the lexically first HEALTHY stamp when none is preferred, skipping an earlier unhealthy one', () => {
     const r = pickStamp([{ ...STAMP, id: 'a-stamp', status: 'draining' }, { ...STAMP, id: 'c-stamp' }, { ...STAMP, id: 'b-stamp' }], undefined);
     expect('stamp' in r && r.stamp.id).toBe('b-stamp');
+  });
+});
+
+describe('livePhase (#5388)', () => {
+  it('a provisioning record whose create job failed or was cancelled reads as failed', () => {
+    // Breaks if livePhase returns the record unchanged (the #5388 defect: G1 saw `provisioning` for 12 min).
+    expect(livePhase('provisioning', 'failed')).toBe('failed');
+    expect(livePhase('provisioning', 'cancelled')).toBe('failed');
+  });
+
+  it('a provisioning record whose job is still live, succeeded, or unread stays provisioning', () => {
+    // Positive pair: breaks if livePhase flips on ANY job state, or on a job the live read could not fetch.
+    for (const s of ['queued', 'running', 'succeeded', undefined] as const) expect(livePhase('provisioning', s)).toBe('provisioning');
+  });
+
+  it('a bound record is never moved by a read, even when its re-verification job failed', () => {
+    // Breaks if the override ignores the recorded status: only an ensure may move a bound tenant.
+    expect(livePhase('bound', 'failed')).toBe('bound');
+    expect(livePhase('failed', 'succeeded')).toBe('failed');
   });
 });
 
