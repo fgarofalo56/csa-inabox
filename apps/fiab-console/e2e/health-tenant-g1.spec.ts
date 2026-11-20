@@ -285,25 +285,50 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
       expect(body.length, `${name} screenshot size`).toBeGreaterThan(5_000);
       await testInfo.attach(name, { body, contentType: 'image/png' });
     }
-    const overflowPx = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    // Narrow pass at the supported floor. Loom is desktop-first with a 768px layout floor
-    // (app/globals.css, operator decision on #5399, ux-standards.md section 9.7), so the
-    // narrowest width that must not overflow is 768. Breaks if any element is wider than 768px
-    // at that viewport (e.g. a fixed-width ribbon or a breadcrumb with no truncation).
-    const atFloor = await overflowPx();
-    await testInfo.attach('narrow-horizontal-overflow-px-768', { body: String(atFloor), contentType: 'text/plain' });
-    expect(atFloor, 'horizontal overflow in px at the 768px floor').toBeLessThanOrEqual(1);
-    // Positive control: the instrument must SEE overflow where it exists. Below the floor the page
-    // lays out at 768px by design, so at 420px the overflow is exactly 768 - 420 = 348.
-    // Breaks if the floor is removed or changed (measured: 0 with no floor). It does NOT catch
-    // content wider than 768px: below the floor overflow-x on both html and body makes the body
-    // its own scroll container, so a 900px child still reads 348 here (measured). The 768 check
-    // above is what catches wide content (measured: 132 for a 900px child).
-    await page.setViewportSize({ width: 420, height: 900 });
-    await page.waitForTimeout(800);
-    const belowFloor = await overflowPx();
-    await testInfo.attach('narrow-horizontal-overflow-px-420', { body: String(belowFloor), contentType: 'text/plain' });
-    expect(Math.abs(belowFloor - (768 - 420)), `overflow at 420px is ${belowFloor}; the 768px floor gives 348`).toBeLessThanOrEqual(1);
+    // Narrow pass (#5399, ux-standards.md section 9.7). The AppShell root is capped at 100vw with
+    // overflow hidden and its <main> scrolls its own overflow, so a wide editor shows up as
+    // <main> overflow, never as page overflow. Both are measured. Page overflow is the old
+    // html/body min-width gutter (348px at 420px), deleted on #5399.
+    const MAIN = 'main.loom-app-grid-bg';
+    const measure = () => page.evaluate((sel) => {
+      const m = document.querySelector(sel);
+      return {
+        doc: document.documentElement.scrollWidth - window.innerWidth,
+        main: m ? m.scrollWidth - m.clientWidth : -1,
+      };
+    }, MAIN);
+    // Positive controls on the REAL shell, so the instrument is shown to see overflow where it
+    // exists: a 2000px child inside <main> must read as <main> overflow, and one appended to
+    // <body> must read as page overflow. Each is removed before the real measurement.
+    const probe = (target: 'main' | 'body') => page.evaluate(([sel, t]) => {
+      const host = t === 'main' ? document.querySelector(sel) : document.body;
+      if (!host) return { doc: -1, main: -1 };
+      const d = document.createElement('div');
+      d.style.cssText = t === 'main' ? 'width:2000px;height:1px' : 'position:absolute;top:0;left:0;width:2000px;height:1px';
+      host.appendChild(d);
+      const m = document.querySelector(sel);
+      const r = { doc: document.documentElement.scrollWidth - window.innerWidth, main: m ? m.scrollWidth - m.clientWidth : -1 };
+      d.remove();
+      return r;
+    }, [MAIN, target] as const);
+    const ctlMain = await probe('main');
+    const ctlBody = await probe('body');
+    // Breaks if the selector no longer finds <main> (-1) or if <main> stops scrolling its overflow.
+    expect(ctlMain.main, 'positive control: a 2000px child must overflow <main>').toBeGreaterThan(500);
+    // Breaks if page overflow became unmeasurable (e.g. html/body overflow clipped).
+    expect(ctlBody.doc, 'positive control: a 2000px body child must overflow the page').toBeGreaterThan(500);
+    for (const width of [768, 420]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(800);
+      const o = await measure();
+      await testInfo.attach(`narrow-overflow-${width}`, { body: JSON.stringify(o), contentType: 'application/json' });
+      // Breaks if the html/body min-width gutter comes back (348 at 420) or anything is
+      // positioned past the viewport at body level.
+      expect(o.doc, `page overflow in px at ${width}px wide`).toBeLessThanOrEqual(1);
+      // 768 is the smallest supported width: breaks if editor content is wider than <main>
+      // there (a fixed-width ribbon, an untruncated breadcrumb). Below 768 it is reported only.
+      if (width === 768) expect(o.main, '<main> overflow in px at the 768px supported floor').toBeLessThanOrEqual(1);
+    }
     await page.setViewportSize({ width: 1600, height: 1000 });
   });
 

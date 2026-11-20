@@ -39,10 +39,11 @@ works.
    should never feel they changed apps. Honor `ui-parity.md` for feature parity.
 5. **Responsive + bounded.** `minmax(0,1fr)` grids, `minWidth:0`, height-bounded
    canvases, `flexWrap` — no horizontal overflow, no smushed/overlapping content
-   at any supported width. The supported floor is **768px**: below it the page
-   deliberately keeps a 768px layout and scrolls horizontally
-   (`app/globals.css`; operator decision on #5399, 2026-11-20;
-   `docs/fiab/ux-standards.md` §9.7). Overflow at or above 768px is a defect.
+   at any supported width. The smallest supported width is **768px**; below
+   it the app reflows best-effort (operator decision on #5399, 2026-11-20).
+   Page overflow is a defect at every width. Editor overflow inside the
+   shell's `<main>` is a defect at 768px and wider. Measure `<main>`, not just
+   the document: `docs/fiab/ux-standards.md` §9.7.
 6. **Polished states.** Every empty / loading / error / honest-gate state is
    designed (per `no-vaporware.md` the gate is a styled Fluent MessageBar naming
    the exact remediation), not an afterthought.
