@@ -372,12 +372,43 @@ jobs:
             fi
             CAE=$(jq -r '.[0]' temp/cae.json)
           fi
+          # ISSUER VIA FRONT DOOR (#5410). The control plane is in the INTERNAL hub environment and the
+          # stamp Application Gateway has no path to it, so the authorization-server issuer is served by the
+          # EXISTING Front Door Premium profile in the hub resource group (route /auth/* only). Resolve it
+          # here and hand it to health.bicep as controlPlaneConfig.frontDoor. Exactly one profile is used;
+          # several are ambiguous and fail (never guess); none is a LOUD warning, never silent.
+          FD_JSON='{}'
+          FD_NAME=""
+          if [ "$PLATFORM" = "containerApps" ]; then
+            az afd profile list -g "$HUB_RG" --query '[].name' -o json > temp/fd.json 2> temp/fd.err || fail temp/fd.err "the Front Door profiles"
+            K=$(jq 'length' temp/fd.json)
+            if [ "$K" = "1" ]; then
+              FD_NAME=$(jq -r '.[0]' temp/fd.json)
+              az afd security-policy list -g "$HUB_RG" --profile-name "$FD_NAME" --query "[?name=='console-waf-policy'].parameters.wafPolicy.id" -o json > temp/fdwaf.json 2> temp/fdwaf.err || fail temp/fdwaf.err "the Front Door security policies of $FD_NAME"
+              FD_WAF=$(jq -r '.[0] // ""' temp/fdwaf.json)
+              if [ -z "$FD_WAF" ]; then
+                echo "::warning::Front Door profile $FD_NAME has no security policy named console-waf-policy, so the issuer endpoint is created WITHOUT a WAF policy."
+              fi
+              FD_JSON=$(jq -n --arg p "$FD_NAME" --arg rg "$HUB_RG" --arg w "$FD_WAF" '{ profileName: $p, resourceGroup: $rg, wafPolicyId: $w }')
+              echo "::notice::Issuer will be served through Front Door profile $FD_NAME in $HUB_RG (route /auth/* only)."
+            elif [ "$K" = "0" ]; then
+              echo "::warning::issuer unreachable: no Front Door on this boundary (no Microsoft.Cdn profile in $HUB_RG). The issuer URL falls back to the stamp ingress URL, which has no path to the control plane; the issuer route is supported-in-code only here, follow-up (an App Gateway path, #5410). Nothing in this run makes the issuer reachable."
+            else
+              echo "::error::Expected at most 1 Front Door profile in $HUB_RG, found $K ($(jq -r 'join(", ")' temp/fd.json)). This lane will not guess which one serves the issuer; set controlPlaneConfig.frontDoor.profileName by hand."
+              exit 1
+            fi
+          fi
           jq -n --arg aud "$AUDIENCES" --arg platform "$PLATFORM" --arg acr "$ACR" --arg rg "$HUB_RG" \
-               --arg login "$LOGIN" --arg env "$CAE" \
+               --arg login "$LOGIN" --arg env "$CAE" --argjson fd "$FD_JSON" \
                '{ audiences: ($aud | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
-                  controlPlane: $platform, acrName: $acr, acrResourceGroup: $rg, acrLoginServer: $login, environmentId: $env }' > temp/cp.json
-          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
-          echo "hub_rg=$HUB_RG" >> "$GITHUB_OUTPUT"
+                  controlPlane: $platform, acrName: $acr, acrResourceGroup: $rg, acrLoginServer: $login, environmentId: $env }
+                + (if ($fd | length) > 0 then { frontDoor: $fd } else {} end)' > temp/cp.json
+          {
+            echo "acr=$ACR"
+            echo "cae_id=$CAE"
+            echo "fd_profile=$FD_NAME"
+            echo "hub_rg=$HUB_RG"
+          } >> "$GITHUB_OUTPUT"
           echo "::notice::Hub: registry $ACR, resource group $HUB_RG, control plane audiences $(jq '.audiences | length' temp/cp.json)."
 
       # W1b-1 (#5151): the authorization-server Entra app client id has no ARM source (it is an Entra
@@ -535,6 +566,64 @@ jobs:
             fi
             exit 1
           fi
+
+      # ISSUER VIA FRONT DOOR (#5410). Front Door raises a Private Link connection on the hub environment
+      # for the new origin; it is Pending until approved, and ARM does not approve it. Same script the
+      # console path uses (scripts/csa-loom/approve-cae-private-endpoints.sh): idempotent, every az exit
+      # classified, an unreadable list is an UNKNOWN that exits non-zero (never "nothing pending").
+      # --require-one: Front Door is known to be in play, so zero connections is a defect, not a no-op.
+      - name: Approve the Front Door private-endpoint connection on the hub environment
+        id: fdapprove
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.hub.outputs.fd_profile != '' }}
+        env:
+          CAE_ID: ${{ steps.hub.outputs.cae_id }}
+        run: |
+          set -uo pipefail
+          if [ "$(jq -r '.healthIssuerState.value.viaFrontDoor' temp/outputs.json)" != "true" ]; then
+            echo "::error::A Front Door profile was resolved but the deployment reports the issuer is NOT served through it: $(jq -c '.healthIssuerState.value' temp/outputs.json | head -c 600)"
+            exit 1
+          fi
+          bash scripts/csa-loom/approve-cae-private-endpoints.sh --cae-id "$CAE_ID" --require-one
+          # The script exits 0 only when no connection remains Pending (it re-reads the list).
+          echo "::notice::Front Door private-endpoint connection(s) on the hub environment approved; none pending."
+
+      # Prove the issuer answers through Front Door (the receipt for #5410), with a negative control:
+      # the route is /auth/* only, so /api/health/* must NOT be served on the same host. Bounded wait (Front
+      # Door applies a new route and a newly approved Private Link asynchronously); fails closed.
+      - name: Verify the issuer through Front Door
+        id: fdverify
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.hub.outputs.fd_profile != '' }}
+        run: |
+          set -uo pipefail
+          set +e
+          HOST=$(jq -r '.healthIssuerState.value.frontDoorEndpointHost // ""' temp/outputs.json)
+          ISSUER=$(jq -r '.healthIssuerState.value.issuerUrl // ""' temp/outputs.json)
+          if [ -z "$HOST" ] || [ -z "$ISSUER" ]; then
+            echo "::error::The deploy outputs carry no Front Door issuer host (host='$HOST', issuer='$ISSUER'), so the issuer cannot be verified."
+            exit 1
+          fi
+          CODE=000
+          for i in $(seq 1 "${VERIFY_ATTEMPTS:-40}"); do
+            CODE=$(curl -sS -o temp/oidc.json -w '%{http_code}' --max-time 20 "https://$HOST/auth/.well-known/openid-configuration" 2> temp/oidc.err)
+            [ "$CODE" = "200" ] && break
+            echo "attempt $i: HTTP $CODE (Front Door and the Private Link apply asynchronously)"
+            sleep 15
+          done
+          if [ "$CODE" != "200" ]; then
+            echo "::error::https://$HOST/auth/.well-known/openid-configuration answered HTTP $CODE after ${VERIFY_ATTEMPTS:-40} attempts 15s apart (curl: $(head -c 200 temp/oidc.err)). The deployment succeeded; the issuer is NOT verified reachable. Check the origin health in Front Door and the connection state on the hub environment."
+            exit 1
+          fi
+          GOT=$(jq -r '.issuer // ""' temp/oidc.json)
+          if [ "$GOT" != "$ISSUER" ]; then
+            echo "::error::The issuer metadata is served but its issuer is '$GOT', not the configured '$ISSUER'."
+            exit 1
+          fi
+          NEG=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$HOST/api/health/tenants" 2> temp/neg.err)
+          if [ "$NEG" = "200" ] || [ "$NEG" = "401" ] || [ "$NEG" = "403" ]; then
+            echo "::error::NEGATIVE CONTROL FAILED: https://$HOST/api/health/tenants answered HTTP $NEG, so the control plane API is reachable on the issuer endpoint. The route must match /auth/* only."
+            exit 1
+          fi
+          echo "::notice::Issuer verified through Front Door: https://$HOST/auth/.well-known/openid-configuration returned 200 with issuer $GOT; /api/health/tenants answered HTTP $NEG (not served)."
 
       # INGRESS TLS, two phases (#5345). Phase 1 (the step above) deployed the stamp WITHOUT a TLS
       # listener and the control plane, which issues the ingress certificate in the stamp vault (a

@@ -482,9 +482,12 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = if (!onAks) {
     environmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      // Internal only: reached by the Console and the stamps over the environment network.
+      // external:true in an INTERNAL environment (public network access Disabled) is still VNet / Private
+      // Link only: it lets Front Door reach the authorization server through the environment Private Link
+      // connection (#5410). The FQDN loses its .internal. label; the Console reads it from the deploy
+      // output. The Front Door route matches /auth/* only, so /api/health/* is not published through it.
       ingress: {
-        external: false
+        external: true
         targetPort: servicePort
         transport: 'auto'
       }
@@ -715,7 +718,7 @@ resource applyManifest 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (
 @description('Hosting path actually deployed.')
 output platform string = platform
 
-@description('Internal FQDN of the control plane (containerApps path). Empty on aks: the Deployment is exposed as a ClusterIP Service only, with no route from outside the cluster until the stamp ingress (W1-6) publishes one.')
+@description('Ingress FQDN of the control plane (containerApps path; reachable only inside the environment VNet or through its Private Link). Empty on aks: the Deployment is exposed as a ClusterIP Service only, with no route from outside the cluster until the stamp ingress (W1-6) publishes one.')
 output fqdn string = onAks ? '' : app!.properties.configuration.ingress.fqdn
 
 @description('Control-plane identity client id (workload identity / managed identity).')
