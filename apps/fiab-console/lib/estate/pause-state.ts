@@ -521,13 +521,17 @@ export interface ResumeHold {
  * RUNNING. The name now means what it says:
  *
  *   `confirmed-running`         ARM reports Online AND that is what was
- *                               expected. Safe to render as "running".
+ *                               expected, OR it was paused before the pause and
+ *                               was started outside Loom since (Loom did not
+ *                               start it). Safe to render as "running".
  *   `confirmed-restored-paused` The resource was ALREADY paused before Loom
  *                               touched it and is paused again. A correct
  *                               resume outcome, but it is NOT running — never
  *                               render it as such.
  *   `confirmed-mismatch`        ARM established a state that does not match the
- *                               pre-pause condition. A real failure.
+ *                               pre-pause condition (running before, stopped now;
+ *                               paused before, mid-transition now). A real
+ *                               failure. Paused before + RUNNING now is NOT this.
  *   `unknown`                   Nothing was established. Not an error state and
  *                               not a success state; grouped with failure for
  *                               the estate verdict and reported by its own name.
@@ -630,6 +634,23 @@ export function confirmResume(
   // POSITIVELY; `!isRunningState(...)` is not the same predicate, because the
   // transitional and Unknown states satisfy it too.
   if (isPausedState(expected.prePausePowerState)) {
+    // Paused before, RUNNING now: someone started it OUTSIDE Loom since the pause
+    // (e.g. a VM deleted and rebuilt by a remediation, #5330, left running). Resume's
+    // own rule is "never start what was stopped" and Loom did not start it, so this
+    // is not a failure of the resume. Scoped to RUNNING only: Starting/Stopping/
+    // Unknown readings still fall to confirmed-mismatch below. The probe in
+    // pollResume still gates it, so an up-but-unservable resource is not confirmed.
+    if (isRunningState(reading.powerState)) {
+      return {
+        resourceId: expected.resourceId,
+        confirmation: 'confirmed-running',
+        observedState: reading.powerState,
+        reason:
+          `${expected.name} was ${expected.prePausePowerState} before the pause and ARM now reports `
+          + `${reading.powerState}: it was started outside Loom since the pause. `
+          + 'Loom did not start it and did not stop it.',
+      };
+    }
     return isPausedState(reading.powerState)
       ? {
           resourceId: expected.resourceId,
