@@ -25,6 +25,8 @@ export interface ComposeInput {
   sloAvailabilityTarget: number;
   log: Logger;
   bundles?: BundleSource;
+  /** PEM of the bundle signing key's public half (GET .../verification-key). Absent = 503. */
+  bundleKey?: () => Promise<string>;
   now?: () => Date;
   postgresRestart?: Pick<StampPowerDeps, 'power' | 'getStampManifest'>;
   /** Registers tenant.create / tenant.destroy. */
@@ -59,7 +61,7 @@ export function compose(input: ComposeInput) {
   if (input.tenantArm) {
     for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm })) jobs.register(h);
   }
-  const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, log });
+  const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, bundleKey: input.bundleKey, log });
   // W1-4: the Authorization Server answers its own paths and hands everything else to the control-plane app.
   const authServer = input.authServer
     ? createAuthServer({ ...input.authServer, authenticate, tenants: stores.tenants, log, now: input.now })

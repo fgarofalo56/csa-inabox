@@ -33,6 +33,8 @@ export interface Config {
    * deploys). Written into tenant engine config, never called from here. Empty = no PDP: engines then answer 503.
    */
   pdpUrl: string;
+  /** Versioned Key Vault key id of the PDP bundle signing key (LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID). Empty = signing off. */
+  pdpSigningKeyId: string;
 }
 
 /** Empty is allowed (PDP not deployed); anything else must be a bare http(s) URL. */
@@ -114,5 +116,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sloAvailabilityTarget: target,
     pdpBundleDir: (env.LOOM_HEALTH_CP_PDP_BUNDLE_DIR ?? '').trim(),
     pdpUrl: parsePdpUrl(env.LOOM_HEALTH_CP_PDP_URL),
+    pdpSigningKeyId: (env.LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID ?? '').trim(),
   };
 }

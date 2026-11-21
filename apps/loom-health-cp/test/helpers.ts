@@ -103,7 +103,7 @@ export interface Harness {
 }
 
 export async function startHarness(
-  over: { allowedCallerAppIds?: string[]; now?: () => Date; stores?: ReturnType<typeof memoryStores>; bundles?: BundleSource } = {},
+  over: { allowedCallerAppIds?: string[]; now?: () => Date; stores?: ReturnType<typeof memoryStores>; bundles?: BundleSource; bundleKey?: () => Promise<string> } = {},
 ): Promise<Harness> {
   const stores = over.stores ?? memoryStores();
   const logs: string[] = [];
@@ -120,6 +120,7 @@ export async function startHarness(
     log: (event, fields) => logs.push(JSON.stringify({ event, ...fields })),
     now: over.now,
     bundles: over.bundles,
+    bundleKey: over.bundleKey,
   });
   const server: Server = createServer((req, res) => void app.handler(req, res));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

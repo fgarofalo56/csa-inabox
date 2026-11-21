@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { JobRunner } from '../jobs/runner.js';
 import { SUBJECT_TYPES } from '../jobs/types.js';
 import type { Authenticator, Caller, Permission } from '../middleware/auth.js';
+import { BUNDLE_KEY_ID } from '../pdp/bundle-sign.js';
 import { bundleEtag, isGzip, type BundleSource } from '../pdp/bundles.js';
 import type { Registry } from '../registry/registry.js';
 import type { RoutingPublisher } from '../routing/publisher.js';
@@ -26,6 +27,8 @@ export interface AppDeps {
   slo: SloService;
   /** Absent = bundle serving not configured (503 on the bundle route). */
   bundles?: BundleSource;
+  /** PEM (SPKI) of the key the control plane signs PDP bundles with. Absent = signing not configured (503). */
+  bundleKey?: () => Promise<string>;
   log: (event: string, fields: Record<string, string | number>) => void;
 }
 
@@ -135,6 +138,20 @@ export function buildRoutes(d: AppDeps): Route[] {
       const headers = { etag, 'content-type': 'application/gzip' };
       if (c.ifNoneMatch === etag) return { status: 304, data: undefined, raw: { body: undefined, headers } };
       return { status: 200, data: undefined, raw: { body: bytes, headers } };
+    }),
+
+    // The PUBLIC key a stamp's PDP verifies bundles with (pdpBundleVerificationPublicKeyPem). deploy-health reads it
+    // through Front Door as the deploy principal, so no key is ever typed in or stored outside Key Vault (#5422).
+    r('GET', `/api/health/pdp/stamps/${ID}/verification-key`, 'read', async (c) => {
+      if (!d.bundleKey) throw new HttpError(503, 'bundle_key_unconfigured', 'PDP bundle signing is not configured (LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID)');
+      await d.registry.getStamp(c.params[0] ?? ''); // 404 for an unregistered stamp
+      let publicKeyPem: string;
+      try {
+        publicKeyPem = await d.bundleKey();
+      } catch {
+        throw new HttpError(503, 'bundle_key_unavailable', 'the control plane could not read the bundle signing key from Key Vault (role, network path or key state not established)');
+      }
+      return ok({ alg: 'ES256', keyId: BUNDLE_KEY_ID, publicKeyPem });
     }),
 
     r(
