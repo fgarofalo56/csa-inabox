@@ -523,6 +523,36 @@ describe('R-CAP-4 — an unconfirmed resume is RESUME_FAILED, NEVER RUNNING', ()
     expect(bad?.reason).toMatch(/2-3 minutes before it can serve/);
   });
 
+  it('a paused-before VM observed Online whose probe says NOT servable is not counted resumed', async () => {
+    // Breaks if `expectation` stays 'stopped' for a paused-before resource now
+    // Online: the probe is skipped, servable stays undefined, and (with the
+    // confirmResume fix) it would be called confirmed without ever being probed.
+    const snap = await pausedSnapshot();
+    const target = snap.resources[0]!;
+    const rewound: EstatePauseSnapshot = {
+      ...snap,
+      resources: snap.resources.map((r) =>
+        r.resourceId === target.resourceId ? { ...r, prePausePowerState: 'Deallocated' as const } : r,
+      ),
+    };
+    const started = await startResume(rewound, recorder().actuator, { now: '2026-08-23T00:10:00.000Z' });
+    const rec = recorder({ power: () => 'Online', servable: (id) => id !== target.resourceId });
+    const poll = await pollResume(started.snapshot, rec.actuator, { now: '2026-08-23T01:00:00.000Z' });
+
+    const row = poll.progress.find((p) => p.resourceId === target.resourceId);
+    expect(row?.expectation).toBe('running');
+    expect(row?.servable).toBe(false);
+    expect(row?.atExpectedState).toBe(false);
+    expect(poll.state).toBe('RESUME_FAILED');
+    expect(poll.unconfirmed.find((u) => u.resourceId === target.resourceId)?.confirmation).toBe('unknown');
+
+    // Positive control: the same VM, agent Ready -> counted resumed.
+    const ok = await pollResume(started.snapshot, recorder({ power: () => 'Online', servable: () => true }).actuator, {
+      now: '2026-08-23T01:00:00.000Z',
+    });
+    expect(ok.state).toBe('RUNNING');
+  });
+
   it('a FAILED power read after resume -> unknown -> RESUME_FAILED', async () => {
     const snap = await pausedSnapshot();
     const started = await startResume(snap, recorder().actuator, { now: '2026-08-23T00:10:00.000Z' });

@@ -326,8 +326,11 @@ export async function pollResume(
 
     // Where this resource is SUPPOSED to end up. Resume restores the estate to
     // what it WAS, so something already stopped before the pause is expected to
-    // be stopped now.
-    const expectation: 'running' | 'stopped' = isRunningState(entry.prePausePowerState)
+    // be stopped now. EXCEPT a resource paused before that ARM now reads RUNNING
+    // (started outside Loom): it is up, so it must pass the servability probe; a
+    // VM that is up with a not-Ready agent is not confirmed.
+    const expectation: 'running' | 'stopped' =
+      isRunningState(entry.prePausePowerState) || isRunningState(observed)
       ? 'running'
       : 'stopped';
 
