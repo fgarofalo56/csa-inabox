@@ -1,0 +1,195 @@
+name: lhds edge probe
+
+# Dispatch-only, in-VNet (#5410, LHDS W1b-2 lane L2). NOT yet exercised live: the first
+# dispatch is the receipt.
+#
+# WHAT IT DOES (scripts/measure/health/lhds-edge-probe-run.mjs):
+#   1. create   two SYNTHETIC tenants ep-a-<yyyymmddhhmm> / ep-b-<...> (<= 20 chars) on stamp
+#               dev01 and wait (bounded) for both tenant.create jobs; a failed job fails the run.
+#   2. probe    mint one access token per tenant (scripts/measure/health/mint-tenant-token.mjs:
+#               ES384 key in memory, backend client registered via the admin API, private_key_jwt
+#               assertion, issuer DISCOVERED from the control plane, never hardcoded) and check the
+#               claims (tenant, iss, exp, scope). mode=probe then runs edge-probe.mjs IN THE SAME
+#               PROCESS against edge_base_url. Tokens and keys are never printed, written, or put
+#               in GITHUB_ENV / outputs / step summary; only a redacted verdict is.
+#   3. cleanup  (always) disable the minted clients, then destroy both tenants via
+#               scripts/csa-loom/health-tenant-destroy.mjs. The control plane has PATCH but NO
+#               DELETE for clients, so a client is disabled, not removed (follow-up filed).
+#
+# mode=mint-only needs no edge: it proves tokens are mintable. mode=probe needs the APIM edge
+# (lane L3) and edge_base_url.
+#
+# SCOPE: Commercial dev01 only (the in-VNet `loom-aca` fleet exists only there; Gov has no
+# equivalent runner, a disclosed gap per cloud-parity.md). Caller: the deploy SP (HealthCP.Admin +
+# control plane allowlist), as in lhds-tenant-destroy.yml. Control plane URL, audience and stamp are
+# read from the deployed estate, never typed in.
+#
+# WHY NO `push:` AND NO HOSTED FALLBACK: same reasons as lhds-tenant-destroy.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: mint-only proves tokens can be minted; probe also runs the edge probe (needs the APIM edge)
+        type: choice
+        options:
+          - mint-only
+          - probe
+        default: mint-only
+      edge_base_url:
+        description: https://<gateway> of the APIM edge (required for mode=probe)
+        type: string
+        default: ''
+      quota_rpm:
+        description: Per-tenant requests/min quota to register (1-600). The probe sends quota+5% requests.
+        type: string
+        default: '30'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lhds-edge-probe
+  cancel-in-progress: false
+
+jobs:
+  edge-probe:
+    name: Mint per-tenant tokens (and probe the edge) in-VNet, Commercial dev01
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 120
+    env:
+      STAMP_ID: dev01
+      REGION: centralus
+      MODE: ${{ inputs.mode }}
+      EDGE_BASE_URL: ${{ inputs.edge_base_url }}
+      QUOTA_RPM: ${{ inputs.quota_rpm }}
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate inputs and name the synthetic tenants
+        run: |
+          set -euo pipefail
+          [[ "$MODE" =~ ^(mint-only|probe)$ ]] || { echo "::error::mode must be mint-only or probe"; exit 1; }
+          [[ "$QUOTA_RPM" =~ ^[0-9]{1,3}$ ]] && [ "$QUOTA_RPM" -ge 1 ] && [ "$QUOTA_RPM" -le 600 ] || { echo "::error::quota_rpm must be 1-600"; exit 1; }
+          if [ "$MODE" = "probe" ] && ! [[ "$EDGE_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "::error::edge_base_url must be a bare https://<host> origin for mode=probe"; exit 1
+          fi
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+          STAMP_TS="$(date -u +%Y%m%d%H%M)"
+          {
+            echo "TENANT_A=ep-a-${STAMP_TS}"
+            echo "TENANT_B=ep-b-${STAMP_TS}"
+            echo "OWNED_FILE=${RUNNER_TEMP}/lhds-edge-probe-owned.txt"
+          } >> "$GITHUB_ENV"
+          echo "synthetic tenants: ep-a-${STAMP_TS} ep-b-${STAMP_TS}"
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Locate the stamp resource group (subscription of record)
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-health-${STAMP_ID}-${REGION}"
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            exists="$(az group exists --subscription "$s" -n "$RG" | tr -d '\r')"
+            if [ "$exists" = "true" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::resource group $RG is not visible to the deploy SP in any of its subscriptions"
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          echo "STAMP_SUB=$FOUND" >> "$GITHUB_ENV"
+          echo "stamp RG $RG found (subscription id withheld from output)"
+
+      - name: Pre-install the containerapp CLI extension
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors -o none
+          echo "containerapp extension version: $(az extension show --name containerapp --query version -o tsv | tr -d '\r')"
+
+      - name: Resolve the control plane URL and audience from the deployed estate
+        id: binding
+        env:
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$STAMP_SUB"
+
+      - name: Require a resolved binding on stamp dev01
+        id: require
+        env:
+          BINDING: ${{ steps.binding.outputs.health_binding }}
+          BINDING_REASON: ${{ steps.binding.outputs.health_binding_reason }}
+        run: |
+          set -euo pipefail
+          if [ "$BINDING" != "resolved" ]; then
+            echo "::error::the control plane binding is '$BINDING', not 'resolved' ($BINDING_REASON). Nothing was created."
+            exit 1
+          fi
+          if [ "${LOOM_HEALTH_DEFAULT_STAMP_ID:-}" != "$STAMP_ID" ]; then
+            echo "::error::the control plane in this subscription serves stamp '${LOOM_HEALTH_DEFAULT_STAMP_ID:-}', not '$STAMP_ID'. Nothing was created."
+            exit 1
+          fi
+          case "${LOOM_HEALTH_CP_URL:-}" in https://*) ;; *) echo "::error::resolved control plane URL is not https. Nothing was created."; exit 1;; esac
+          echo "control plane resolved for stamp $STAMP_ID"
+
+      - name: Create the two synthetic tenants and wait for tenant.create
+        run: |
+          set -euo pipefail
+          # LOOM_HEALTH_CP_* come from resolve-health-console-binding.sh via $GITHUB_ENV; the step above refuses to continue unless they resolved.
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase create --owned-file "$OWNED_FILE" \
+            --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
+            --quota-rpm "$QUOTA_RPM" --timeout-s 1500
+
+      - name: Mint tokens, verify claims, and (mode=probe) probe the edge in-process
+        run: |
+          set -euo pipefail
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          {
+            echo "## lhds edge probe ($MODE): $TENANT_A / $TENANT_B"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase probe --mode "$MODE" \
+            --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
+            --edge-base-url "$EDGE_BASE_URL" --quota-rpm "$QUOTA_RPM" | tee -a "$GITHUB_STEP_SUMMARY"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "exit code: $rc (0 = pass, 1 = defect/failed, 2 = UNMEASURED: nothing here is a claim the edge is broken)"
+          exit "$rc"
+
+      - name: Cleanup - disable clients, destroy both tenants
+        if: always() && steps.require.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token; the tenants $TENANT_A and $TENANT_B were NOT destroyed"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase cleanup --owned-file "$OWNED_FILE" \
+            --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
+            --timeout-s 1800

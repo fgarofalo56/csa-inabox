@@ -24,7 +24,7 @@ function gateway(opts = {}) {
     const tok = (req.headers.authorization || '').replace('Bearer ', '');
     const tokenTenant = tok === 'tA' ? 'acme' : tok === 'tB' ? 'zeta' : '';
     if (opts.mismatchAllowed !== true && tokenTenant !== tenant) { res.statusCode = 403; return res.end('{}'); }
-    if (opts.noPositive) { res.statusCode = 401; return res.end('{}'); }
+    if (opts.noPositive) { res.statusCode = opts.noPositive === 403 ? 403 : 401; return res.end('{}'); }
     const key = opts.sharedCounter ? 'acme' : tenant;
     counts.set(key, (counts.get(key) ?? 0) + 1);
     if (!opts.noLimit && counts.get(key) > QUOTA) {
@@ -32,7 +32,7 @@ function gateway(opts = {}) {
       if (opts.retryAfter !== null) res.setHeader('Retry-After', opts.retryAfter ?? '30');
       return res.end('{}');
     }
-    res.statusCode = 200;
+    res.statusCode = opts.backendStatus ?? 200;
     res.end('{}');
   });
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
@@ -111,4 +111,45 @@ test('config: plain-http non-loopback, equal tenants, missing token, zero quota 
   assert.equal(readConfig({ ...ok, LHDS_TENANT_B: 'a' }).problems.length, 1);
   assert.equal(readConfig({ ...ok, LHDS_TOKEN_B: '' }).problems.length, 1);
   assert.equal(readConfig({ ...ok, LHDS_QUOTA_RPM: '0' }).problems.length, 1);
+});
+
+test('positive control 404 (token passed auth, backend not serving) is PASS with a note and the later checks RUN, exit 0 (breaks if a non-2xx/3xx is treated as unmeasured)', async () => {
+  const r = await probe({ backendStatus: 404 });
+  assert.equal(r.by['positive-control'], 'PASS');
+  assert.match(r.results.find((x) => x.name === 'positive-control').detail, /answered 404: passed auth; backend not serving/);
+  assert.equal(r.by['cross-tenant-403'], 'PASS'); // proves the checks after the control were reached
+  assert.equal(r.by['quota-isolation'], 'PASS');
+  assert.equal(r.exit, 0, JSON.stringify(r.results));
+});
+
+test('positive control 502 and 503 are also passed-auth (breaks if only 404 is tolerated)', async () => {
+  for (const backendStatus of [502, 503]) {
+    const r = await probe({ backendStatus });
+    assert.equal(r.by['positive-control'], 'PASS', String(backendStatus));
+    assert.equal(r.exit, 0, String(backendStatus));
+  }
+});
+
+test('positive control 2xx carries no backend-not-serving note (breaks if the note is always attached)', async () => {
+  const r = await probe({});
+  assert.equal(/backend not serving/.test(r.results[0].detail), false);
+  assert.match(r.results[0].detail, /answered 200/);
+});
+
+test('positive control 403 is UNMEASURED exit 2 and 403/429 checks are not run (breaks if 403 counts as passed auth)', async () => {
+  const r = await probe({ noPositive: 403 });
+  assert.equal(r.by['positive-control'], 'UNMEASURED');
+  assert.match(r.results[0].detail, /answered 403/);
+  assert.equal(r.by['cross-tenant-403'], undefined);
+  assert.equal(r.exit, 2);
+});
+
+test('--help prints usage and exits 0 without needing any config (breaks if --help falls through to the config check, exit 2)', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('../../measure/health/edge-probe.mjs', import.meta.url));
+  const r = spawnSync(process.execPath, [script, '--help'], { env: { PATH: process.env.PATH }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Positive control/);
+  assert.match(r.stdout, /LHDS_EDGE_BASE_URL/);
 });

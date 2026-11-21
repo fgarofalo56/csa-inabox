@@ -1,0 +1,110 @@
+name: gov-vanity-domain-repair
+
+# Diagnose (default) or repair the Gov console's vanity domain on Front Door.
+#
+# WHY. On 2026-11-21 csaloom-gov.limitlessdata.ai answered TLS with the Front Door
+# fallback certificate (subject CN=*.azureedge.us), so every browser refused it with
+# ERR_CERT_COMMON_NAME_INVALID. Commercial hit the same signature three times in
+# 2026-08 (front-door.bicep `fdRoute`, scripts/ci/check-vanity-edge-health.sh): the
+# custom domain stays Approved, but the ROUTE stops listing it, so no route serves the
+# vanity host. deploy-fiab-commercial.yml adopts the live vanity domain before every
+# apply; deploy-fiab-gcch.yml never did. This workflow measures which of the two
+# failure shapes Gov is in, and fixes the one the platform can fix.
+#
+# mode=diagnose: read-only. Prints each custom domain's validation, deployment and TLS
+#   state and, for every route, the custom domains it serves. Exits 1 if any read fails
+#   (UNREADABLE is never "nothing found", deploy-integrity.md R7) or if the vanity host
+#   is unbound or not Approved.
+# mode=repair: everything diagnose does, then, ONLY when the custom domain is Approved
+#   and no route serves it, PATCHes the console route's customDomains to add it
+#   (existing entries kept), reads the route back, and checks the certificate the edge
+#   now presents for the vanity host. A domain that is not Approved is NOT something
+#   this workflow can fix (it needs the DNS _dnsauth TXT record); it says so and fails.
+#
+# The domain validation token is never printed (public repo).
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: diagnose (read-only) or repair (re-attach an Approved, unbound vanity domain to the console route)
+        type: choice
+        options:
+          - diagnose
+          - repair
+        default: diagnose
+      vanity_host:
+        description: Vanity host name of the Gov console
+        type: string
+        default: csaloom-gov.limitlessdata.ai
+      resource_group:
+        description: Admin-plane resource group that holds the Front Door profile
+        type: string
+        default: rg-csa-loom-admin-usgovvirginia
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gov-vanity-domain-repair
+  cancel-in-progress: false
+
+jobs:
+  vanity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODE: ${{ inputs.mode }}
+      VANITY_HOST: ${{ inputs.vanity_host }}
+      RG: ${{ inputs.resource_group }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          [[ "$MODE" =~ ^(diagnose|repair)$ ]] || { echo "::error::mode must be diagnose or repair"; exit 1; }
+          [[ "$VANITY_HOST" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]] || { echo "::error::vanity_host is not a host name"; exit 1; }
+          [[ "$RG" =~ ^[A-Za-z0-9._()-]{1,90}$ ]] || { echo "::error::resource_group is not a resource group name"; exit 1; }
+
+      - name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Diagnose, then repair if asked
+        run: bash scripts/csa-loom/gov-vanity-domain-repair.sh
+
+      - name: Certificate the edge presents for the vanity host
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p temp
+          echo | timeout 20 openssl s_client -connect "$VANITY_HOST:443" -servername "$VANITY_HOST" > temp/vanity-sclient.txt 2> temp/vanity-sclient.err
+          RC=$?
+          if [ "$RC" -ne 0 ] && ! grep -q "BEGIN CERTIFICATE" temp/vanity-sclient.txt; then
+            echo "::error::TLS handshake to $VANITY_HOST failed (rc=$RC): $(head -c 300 temp/vanity-sclient.err)"
+            exit 1
+          fi
+          SUBJ=$(openssl x509 -noout -subject < temp/vanity-sclient.txt 2> temp/vanity-x509.err) || { echo "::error::could not parse the presented certificate: $(head -c 300 temp/vanity-x509.err)"; exit 1; }
+          SAN=$(openssl x509 -noout -ext subjectAltName < temp/vanity-sclient.txt 2>> temp/vanity-x509.err | tr -d '\n' | tr -s ' ')
+          echo "presented: $SUBJ | $SAN"
+          if printf '%s %s' "$SUBJ" "$SAN" | grep -qiF "$VANITY_HOST"; then
+            echo "::notice::$VANITY_HOST presents a certificate that names it."
+          else
+            echo "::error::$VANITY_HOST presents a certificate that does NOT name it ($SUBJ). Browsers refuse this with ERR_CERT_COMMON_NAME_INVALID. After a repair, Front Door can take several minutes to propagate; re-run mode=diagnose before concluding."
+            exit 1
+          fi
