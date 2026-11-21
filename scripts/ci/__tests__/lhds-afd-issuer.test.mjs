@@ -82,14 +82,33 @@ test('the console endpoint and route are NOT touched: a dedicated endpoint, the 
   assert.doesNotMatch(JSON.stringify(issuer), /console-route|console-waf-policy|loom-console-/, 'module references a console resource');
 });
 
-test('WAF: a NEW security policy attaches the supplied policy to the issuer endpoint only, and only when one is supplied', () => {
+test('WAF: a NEW security policy attaches a WAF policy DECLARED IN THIS MODULE to the issuer endpoint only', () => {
   const [sp] = ofType(issuer, 'Microsoft.Cdn/profiles/securityPolicies');
   assert.ok(sp, 'no security policy resource');
-  // Breaks if the policy is named like the console one (would overwrite its domain list) or conditions drop.
+  // Breaks if the policy is named like the console one (would overwrite its domain list).
   assert.match(String(sp.name), /lhds-auth-waf-policy/);
-  assert.equal(sp.properties.parameters.wafPolicy.id, "[parameters('wafPolicyId')]");
+  const [waf] = ofType(issuer, 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies');
+  assert.ok(waf, 'the module must declare its own WAF policy');
+  // Breaks if wafPolicy.id points at an input (the console policy id again: Front Door rejects a second security
+  // policy for the same WAF with "Web Application Firewall Policy is already attached to AFDX profile").
+  assert.match(String(sp.properties.parameters.wafPolicy.id), /^\[resourceId\('Microsoft\.Network\/FrontDoorWebApplicationFirewallPolicies', format\('waflhdsauth/);
+  assert.doesNotMatch(JSON.stringify(sp), /parameters\('wafPolicyId'\)/);
+  assert.equal(Object.hasOwn(issuer.parameters, 'wafPolicyId'), false, 'a wafPolicyId input would let the console policy back in');
   assert.equal(sp.properties.parameters.associations.length, 1);
-  assert.match(String(sp.condition), /empty\(parameters\('wafPolicyId'\)\)/);
+  assert.match(String(waf.name), /^\[format\('waflhdsauth\{0\}'/, 'WAF policy names are alphanumeric: the waflhdsauth prefix + uniqueString');
+  assert.equal(waf.sku.name, 'Premium_AzureFrontDoor');
+});
+
+test('WAF policy: Prevention mode, DefaultRuleSet 2.1, and NO Bot Manager rule set (machine clients)', () => {
+  const [waf] = ofType(issuer, 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies');
+  // Breaks on Detection (the policy would log and block nothing).
+  assert.equal(waf.properties.policySettings.mode, 'Prevention');
+  assert.equal(waf.properties.policySettings.enabledState, 'Enabled');
+  const sets = waf.properties.managedRules.managedRuleSets;
+  // Positive control: the policy still carries the DRS rule set (a deleted managedRules block would otherwise pass the Bot check).
+  assert.ok(sets.some((s) => s.ruleSetType === 'Microsoft_DefaultRuleSet' && s.ruleSetVersion === '2.1'), 'DefaultRuleSet 2.1 missing');
+  // Breaks if Microsoft_BotManagerRuleSet is added: SMART backend services and APIM validate-jwt would be blocked as bots.
+  assert.equal(sets.some((s) => /BotManager/i.test(s.ruleSetType)), false, 'Bot Manager must not be on the issuer policy');
 });
 
 test('control plane ingress is external:true on the containerApps path (breaks on external:false: Front Door cannot reach it)', () => {
@@ -171,27 +190,25 @@ function run(step, { az = 'exit 0', curl = null, env = {}, files = {} } = {}) {
 
 const HUB = 'Discover the hub (registry and Container Apps environment)';
 const CAE = '/subscriptions/00000000-0000-4000-8000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.App/managedEnvironments/cae-csa-loom-centralus';
-const WAF = '/subscriptions/00000000-0000-4000-8000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/frontdoorwebapplicationfirewallpolicies/wafloom';
-const hubAz = ({ profiles, security = `echo '["${WAF}"]'` }) => `
+const hubAz = ({ profiles }) => `
 case "$*" in
   "group exists"*) echo true ;;
   *"registries"*) echo '["acrloom"]' ;;
   "acr show"*) echo acrloom.azurecr.io ;;
   *"managedEnvironments"*) echo '["${CAE}"]' ;;
   "afd profile list"*) ${profiles} ;;
-  "afd security-policy list"*) ${security} ;;
   *) echo "unexpected az call: $*" >&2; exit 9 ;;
 esac`;
 const hubEnv = { HUB_LOCATION: 'centralus', PLATFORM: 'containerApps', AUDIENCES: 'api://x' };
 
-test('hub step, exactly one Front Door profile: cp.json carries frontDoor.profileName + the WAF id; no warning', () => {
+test('hub step, exactly one Front Door profile: cp.json carries frontDoor.profileName and NO wafPolicyId; no warning', () => {
   const r = run(HUB, { az: hubAz({ profiles: `echo '["fd-loom-abc"]'` }), env: hubEnv });
   assert.equal(r.status, 0, r.out);
   const cpj = JSON.parse(r.cpJson);
   // Breaks if the profile is not resolved, or the WAF id is not carried (the issuer endpoint would be unprotected).
   assert.equal(cpj.frontDoor.profileName, 'fd-loom-abc');
   assert.equal(cpj.frontDoor.resourceGroup, 'rg-csa-loom-admin-centralus');
-  assert.equal(cpj.frontDoor.wafPolicyId, WAF);
+  assert.equal("wafPolicyId" in cpj.frontDoor, false);
   assert.ok(r.outputs.split('\n').includes('fd_profile=fd-loom-abc'));
   assert.doesNotMatch(r.out, /issuer unreachable/);
 });
