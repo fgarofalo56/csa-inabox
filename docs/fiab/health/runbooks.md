@@ -54,6 +54,14 @@
     the `storage.audit.retained` and `storage.audit.retention` receipts.
   - Crypto-shred is evidenced by key state: every key reads back
     `live=false` with a deleted date.
+  - **A leaked tenant whose item is gone** (#5405): dispatch
+    `.github/workflows/lhds-tenant-destroy.yml` with `tenant_id`. It runs on
+    the in-VNet `loom-aca` runner as the deploy SP, reads the control plane URL
+    and audience from the estate, refuses a tenant that is not registered or
+    not on stamp `dev01`, submits `tenant.destroy`, and prints every receipt
+    (GUIDs redacted). Green only when the job succeeded. A non-G1 tenant id
+    needs `allow_non_synthetic`. Commercial dev01 only; Gov has no in-VNet
+    runner for it yet.
 - Both kinds are registered when the control plane has a tenant ARM config
   (`compose.ts`). The control-plane identity needs Key Vault Crypto Officer on
   the stamp vault (`control-plane.bicep`) to shred keys.

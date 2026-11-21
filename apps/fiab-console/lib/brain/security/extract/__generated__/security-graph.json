@@ -44079,6 +44079,29 @@
           }
         },
         {
+          "id": "sec:publication:scripts/csa-loom/health-tenant-destroy.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/csa-loom/health-tenant-destroy.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/csa-loom/health-tenant-destroy.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:123",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/csa-loom/lint-eval-sets.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -53199,6 +53222,11 @@
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
+          "nodeId": "sec:publication:scripts/csa-loom/health-tenant-destroy.mjs#module",
+          "codeModuleId": "code:scripts/csa-loom/health-tenant-destroy.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
           "nodeId": "sec:publication:scripts/csa-loom/lint-eval-sets.mjs#module",
           "codeModuleId": "code:scripts/csa-loom/lint-eval-sets.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -54475,6 +54503,10 @@
         {
           "subject": "scripts/csa-loom/gen-apps-catalog-fixture.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 4). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/csa-loom/health-tenant-destroy.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/csa-loom/lint-eval-sets.mjs",

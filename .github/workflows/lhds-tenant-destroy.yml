@@ -1,0 +1,182 @@
+name: lhds tenant destroy
+
+# DESTROYS a leaked LHDS health tenant (#5405). Dispatch-only.
+#
+# The console item-DELETE path (destroyHealthTenantForItem in
+# apps/fiab-console/lib/install/provisioners/health-tenant.ts) is the only other
+# caller of `tenant.destroy`, and it needs the `health-tenant` item. A tenant
+# whose item is gone (a destroy that failed before the #5392 fixes, then the item
+# was removed) has no way back to it, and its Event Hub, storage, identity and
+# Key Vault keys keep billing. This submits the same control-plane job for it.
+#
+# WHAT IT DOES (scripts/csa-loom/health-tenant-destroy.mjs):
+#   1. GET /api/health/tenants/<id>: the tenant must be registered AND on stamp
+#      dev01; otherwise nothing is submitted.
+#   2. POST /api/health/jobs  {kind: tenant.destroy, input.confirmTenantId}.
+#      The control plane's own handler does the work: waits out an in-flight
+#      create, deletes the PEs, pixel storage, Event Hub, alert and identity,
+#      reads each back as gone, retains the immutable audit account and
+#      crypto-shreds every key (operator decision 2026-11-20 on #5392).
+#   3. Polls the job with a bound and prints every receipt (GUIDs redacted:
+#      this repo is public). Green ONLY when the job SUCCEEDED.
+#
+# SCOPE, deliberately narrow (operator pre-authorization 2026-11-15: create and
+# destroy SYNTHETIC tenants on the Commercial dev01 stamp only):
+#   * stamp is fixed to dev01, not an input;
+#   * the tenant id must be a G1 synthetic (^g1-[0-9]{12}$) unless
+#     allow_non_synthetic is ticked, which is an explicit operator act;
+#   * Commercial only: the in-VNet `loom-aca` fleet exists only in the
+#     Commercial DMLZ subscription. Gov has no equivalent runner; a Gov leak
+#     needs its own path (cloud-parity.md: disclosed gap, tracked on #5405).
+#
+# CALLER: the deploy SP (client-secret `creds:` login, as the in-VNet
+# seed-automation-grant job of csa-loom-post-deploy-bootstrap.yml). It holds
+# HealthCP.Admin and is on the control plane caller allowlist (#5320, via the
+# post-deploy bootstrap). The control plane URL and token audience are read from
+# the DEPLOYED ESTATE by scripts/csa-loom/resolve-health-console-binding.sh, the
+# same resolver the deploy lanes use (#5346) - never typed in.
+#
+# WHY NO `push:` AND NO HOSTED FALLBACK: same reasons as lhds-arm-path-probe.yml.
+# The control plane is reachable only in-VNet, and a push trigger with the fleet
+# scaled to zero queues for 24h and reports CANCELLED. Run it deliberately.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Tenant id to destroy (a G1 synthetic, g1-<12 digits>, unless allow_non_synthetic)
+        type: string
+        required: true
+      allow_non_synthetic:
+        description: Allow a tenant id that is NOT a G1 synthetic (irreversible; an explicit operator act)
+        type: boolean
+        default: false
+      allow_missing_storage:
+        description: Pass allowMissingStorage=true (only after confirming the tenant's storage accounts no longer exist)
+        type: boolean
+        default: false
+      timeout_s:
+        description: Seconds to wait for the job to finish (the job keeps running after this)
+        type: string
+        default: '1800'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lhds-tenant-destroy
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Destroy one health tenant via the control plane (in-VNet, Commercial dev01)
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 45
+    env:
+      STAMP_ID: dev01
+      REGION: centralus
+      TENANT_ID: ${{ inputs.tenant_id }}
+      ALLOW_NON_SYNTHETIC: ${{ inputs.allow_non_synthetic }}
+      ALLOW_MISSING_STORAGE: ${{ inputs.allow_missing_storage }}
+      TIMEOUT_S: ${{ inputs.timeout_s }}
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          [[ "$TENANT_ID" =~ ^[a-z0-9][a-z0-9-]{1,19}$ ]] || { echo "::error::tenant_id must match ^[a-z0-9][a-z0-9-]{1,19}$"; exit 1; }
+          if [ "$ALLOW_NON_SYNTHETIC" != "true" ] && ! [[ "$TENANT_ID" =~ ^g1-[0-9]{12}$ ]]; then
+            echo "::error::tenant_id $TENANT_ID is not a G1 synthetic tenant (g1-<12 digits>); tick allow_non_synthetic to destroy it"
+            exit 1
+          fi
+          [[ "$TIMEOUT_S" =~ ^[0-9]{1,4}$ ]] || { echo "::error::timeout_s must be 1-4 digits"; exit 1; }
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Locate the stamp resource group (subscription of record)
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-health-${STAMP_ID}-${REGION}"
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            exists="$(az group exists --subscription "$s" -n "$RG" | tr -d '\r')"
+            if [ "$exists" = "true" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::resource group $RG is not visible to the deploy SP in any of its subscriptions"
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          echo "STAMP_SUB=$FOUND" >> "$GITHUB_ENV"
+          echo "stamp RG $RG found (subscription id withheld from output)"
+
+      # The resolver calls `az containerapp list`; install the extension UP FRONT so a
+      # missing extension is a clear failure here, not an "UNKNOWN" verdict from the resolver.
+      - name: Pre-install the containerapp CLI extension
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors -o none
+          echo "containerapp extension version: $(az extension show --name containerapp --query version -o tsv | tr -d '\r')"
+
+      - name: Resolve the control plane URL and audience from the deployed estate
+        id: binding
+        env:
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$STAMP_SUB"
+
+      - name: Require a resolved binding on stamp dev01
+        env:
+          BINDING: ${{ steps.binding.outputs.health_binding }}
+          BINDING_REASON: ${{ steps.binding.outputs.health_binding_reason }}
+        run: |
+          set -euo pipefail
+          # `preserved` means a lookup was unknown and the console's old values were reused: not good
+          # enough to aim an irreversible job with.
+          if [ "$BINDING" != "resolved" ]; then
+            echo "::error::the control plane binding is '$BINDING', not 'resolved' ($BINDING_REASON). Nothing was submitted."
+            exit 1
+          fi
+          if [ "${LOOM_HEALTH_DEFAULT_STAMP_ID:-}" != "$STAMP_ID" ]; then
+            echo "::error::the control plane in this subscription serves stamp '${LOOM_HEALTH_DEFAULT_STAMP_ID:-}', not '$STAMP_ID'. Nothing was submitted."
+            exit 1
+          fi
+          case "${LOOM_HEALTH_CP_URL:-}" in https://*) ;; *) echo "::error::resolved control plane URL is not https. Nothing was submitted."; exit 1;; esac
+          echo "control plane resolved for stamp $STAMP_ID (audience is an app id URI, not a secret)"
+
+      - name: Submit tenant.destroy and wait for the job
+        run: |
+          set -euo pipefail
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          {
+            echo "## lhds tenant destroy: $TENANT_ID on $STAMP_ID"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          LHDS_CP_TOKEN="$TOKEN" node scripts/csa-loom/health-tenant-destroy.mjs \
+            --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT_ID" --stamp "$STAMP_ID" \
+            --idempotency-key "destroy-wf-${TENANT_ID}-${GITHUB_RUN_ID}" \
+            --allow-non-synthetic "$ALLOW_NON_SYNTHETIC" --allow-missing-storage "$ALLOW_MISSING_STORAGE" \
+            --timeout-s "$TIMEOUT_S" --interval-s 15 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "exit code: $rc (0 = destroy job succeeded, 1 = refused/failed/unverified, 2 = bad input)"
+          exit "$rc"
