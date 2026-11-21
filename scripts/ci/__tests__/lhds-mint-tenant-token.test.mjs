@@ -276,3 +276,61 @@ test('phaseProbe mode=mint-only: mints and verifies both tenants without touchin
     assert.match(r.text, /VERDICT PASS mode=mint-only/);
   } finally { srv.close(); }
 });
+
+// ---- ownership: cleanup destroys ONLY slugs this run created (201) ----
+import { phaseCreate, phaseCleanup, readOwned } from '../../measure/health/lhds-edge-probe-run.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/** fetch spy: tenants POST answers per `post`, GET tenant exists, destroy job succeeds immediately. */
+function cpSpy(post) {
+  const calls = [];
+  const fetchImpl = async (u, init = {}) => {
+    const url = new URL(u);
+    const method = init.method ?? 'GET';
+    calls.push(`${method} ${url.pathname}`);
+    const res = (code, body) => ({ status: code, text: async () => JSON.stringify(body) });
+    if (method === 'POST' && url.pathname === '/api/health/tenants') return res(post[JSON.parse(init.body).id] ?? 201, { ok: true, data: {} });
+    if (method === 'POST' && url.pathname === '/api/health/jobs') {
+      const b = JSON.parse(init.body);
+      return res(202, { ok: true, data: { id: `job-${'a'.repeat(32)}`, state: b.kind === 'tenant.destroy' ? 'succeeded' : 'queued', receipts: [] } });
+    }
+    if (method === 'GET' && url.pathname.startsWith('/api/health/tenants/')) return res(200, { ok: true, data: { stampId: 'dev01', status: 'active' } });
+    if (method === 'GET' && url.pathname === '/api/health/auth/clients') return res(200, { ok: true, data: { clients: [] } });
+    return res(404, { ok: false });
+  };
+  return { fetchImpl, calls };
+}
+const ownCfg = (file) => ({ cpUrl: 'https://cp.example.test', cpToken: CP_TOKEN, stamp: 'dev01', a: 'ep-a-1', b: 'ep-b-1', quota: 30, timeoutS: 5, ownedFile: file });
+const destroyDeps = (spy) => ({ fetchImpl: spy.fetchImpl, sleep: async () => {}, out: () => {} });
+const jobPosts = (calls) => calls.filter((c) => c === 'POST /api/health/jobs').length;
+
+test('a 409 on create for tenant A fails the run, never marks A owned, and cleanup does NOT destroy A (breaks on the old rule: destroy anything whose GET is not 404)', async () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'own-')), 'owned.txt');
+  const spy = cpSpy({ 'ep-a-1': 409 });
+  const cr = await capture(() => phaseCreate(ownCfg(file), { fetchImpl: spy.fetchImpl, sleep: async () => {} }));
+  assert.equal(cr.code, 1);
+  assert.match(cr.text, /COLLISION: tenant ep-a-1 already exists/);
+  assert.equal(readOwned(file).has('ep-a-1'), false);
+  const cl = await capture(() => phaseCleanup(ownCfg(file), { fetchImpl: spy.fetchImpl, sleep: async () => {}, destroyDeps: destroyDeps(spy) }));
+  assert.equal(jobPosts(spy.calls), 0); // no tenant.create (create stopped at A) and no tenant.destroy for A
+  assert.match(cl.text, /tenant ep-a-1 was not created by this run/);
+  assert.equal(cl.code, 0);
+});
+
+test('positive control: a tenant that returned 201 IS owned and cleanup DOES destroy it (breaks if cleanup destroys nothing); the 409 sibling is spared', async () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'own-')), 'owned.txt');
+  const spy = cpSpy({ 'ep-b-1': 409 });
+  const cr = await capture(() => phaseCreate(ownCfg(file), { fetchImpl: spy.fetchImpl, sleep: async () => {} }));
+  assert.equal(cr.code, 1);
+  assert.deepEqual([...readOwned(file)], ['ep-a-1']);
+  const cl = await capture(() => phaseCleanup(ownCfg(file), { fetchImpl: spy.fetchImpl, sleep: async () => {}, destroyDeps: destroyDeps(spy) }));
+  assert.equal(jobPosts(spy.calls), 2); // tenant.create for A + tenant.destroy for A; none for B
+  assert.match(cl.text, /tenant ep-b-1 was not created by this run/);
+});
+
+test('readOwned: a missing file or no path means nothing is owned', () => {
+  assert.equal(readOwned(join(tmpdir(), 'definitely-missing-owned.txt')).size, 0);
+  assert.equal(readOwned('').size, 0);
+});

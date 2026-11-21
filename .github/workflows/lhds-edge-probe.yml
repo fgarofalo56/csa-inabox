@@ -84,6 +84,7 @@ jobs:
           {
             echo "TENANT_A=ep-a-${STAMP_TS}"
             echo "TENANT_B=ep-b-${STAMP_TS}"
+            echo "OWNED_FILE=${RUNNER_TEMP}/lhds-edge-probe-owned.txt"
           } >> "$GITHUB_ENV"
           echo "synthetic tenants: ep-a-${STAMP_TS} ep-b-${STAMP_TS}"
 
@@ -154,7 +155,7 @@ jobs:
           TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
           if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
           echo "::add-mask::$TOKEN"
-          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase create \
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase create --owned-file "$OWNED_FILE" \
             --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
             --quota-rpm "$QUOTA_RPM" --timeout-s 1500
 
@@ -189,6 +190,6 @@ jobs:
           TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
           if [ -z "$TOKEN" ]; then echo "::error::empty access token; the tenants $TENANT_A and $TENANT_B were NOT destroyed"; exit 1; fi
           echo "::add-mask::$TOKEN"
-          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase cleanup \
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase cleanup --owned-file "$OWNED_FILE" \
             --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
             --timeout-s 1800

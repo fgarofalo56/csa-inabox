@@ -16,6 +16,7 @@
  *       [--edge-base-url] [--quota-rpm] [--timeout-s] [--issuer-path]
  * Bearer: env LHDS_CP_TOKEN only. Exit 0 pass, 1 defect/refused/failed, 2 unmeasured.
  */
+import { appendFileSync, readFileSync } from 'node:fs';
 import { cpCall, disableClient, mintTenantToken, MintError, verdictLines, redact, SLUG_RE } from './mint-tenant-token.mjs';
 import { readConfig as readProbeConfig, runProbe } from './edge-probe.mjs';
 import { runDestroy } from '../../csa-loom/health-tenant-destroy.mjs';
@@ -31,7 +32,7 @@ export function parseArgs(argv, env) {
   return {
     phase: pick('phase'), cpUrl: pick('cp-url'), stamp: pick('stamp'), a: pick('tenant-a'), b: pick('tenant-b'),
     mode: pick('mode', 'mint-only'), edge: pick('edge-base-url'), quota: Number.parseInt(pick('quota-rpm', '30'), 10),
-    timeoutS: Number.parseInt(pick('timeout-s', '1500'), 10), issuerPath: pick('issuer-path', '/auth'),
+    timeoutS: Number.parseInt(pick('timeout-s', '1500'), 10), issuerPath: pick('issuer-path', '/auth'), ownedFile: pick('owned-file'),
     cpToken: String(env.LHDS_CP_TOKEN ?? '').replace(/[\r\n]/g, ''),
   };
 }
@@ -43,6 +44,7 @@ export function validate(c) {
   if (!/^[a-z0-9]{1,20}$/.test(c.stamp)) return 'stamp must match ^[a-z0-9]{1,20}$';
   if (!Number.isInteger(c.quota) || c.quota < 1 || c.quota > 600) return 'quota-rpm must be 1-600';
   if (!Number.isInteger(c.timeoutS) || c.timeoutS < 1 || c.timeoutS > 2400) return 'timeout-s must be 1-2400';
+  if (c.phase !== 'probe' && !c.ownedFile) return 'owned-file is required for create and cleanup (the slugs this run created; cleanup destroys only those)';
   if (!['mint-only', 'probe'].includes(c.mode)) return 'mode must be mint-only or probe';
   if (c.phase === 'probe' && c.mode === 'probe' && !/^https:\/\//.test(c.edge)) return 'edge-base-url (https) is required for mode probe';
   return null;
@@ -57,7 +59,10 @@ export async function phaseCreate(c, deps = {}) {
   const jobs = [];
   for (const t of [c.a, c.b]) {
     const r = await api(c, deps, 'POST', '/api/health/tenants', { id: t, displayName: `edge probe ${t}`, stampId: c.stamp, quotas: { maxRequestsPerMinute: c.quota, maxStorageGiB: 1 } });
+    if (r.status === 409) { say(`COLLISION: tenant ${t} already exists (HTTP 409). This run did not create it and will NOT destroy it; nothing was marked as owned for it.`); return 1; }
     if (r.status !== 201) { say(`REFUSED creating tenant ${t}: ${errText(r)}`); return 1; }
+    // Ownership: only a 201 means THIS run created the slug. Recorded (slugs only, non-secret) before anything else can fail.
+    if (c.ownedFile) appendFileSync(c.ownedFile, `${t}\n`);
     const j = await api(c, deps, 'POST', '/api/health/jobs', { kind: 'tenant.create', subjectType: 'tenant', subjectId: t, idempotencyKey: `ep-create-${t}` });
     if ((j.status !== 202 && j.status !== 200) || !JOB_ID_RE.test(String(j.json?.data?.id ?? ''))) { say(`REFUSED submitting tenant.create for ${t}: ${errText(j)}`); return 1; }
     jobs.push({ t, id: j.json.data.id, state: j.json.data.state });
@@ -128,17 +133,25 @@ export async function phaseProbe(c, deps = {}) {
   return code;
 }
 
+/** Slugs this run created (one per line). A missing/unreadable file means nothing is owned. */
+export function readOwned(file) {
+  if (!file) return new Set();
+  try { return new Set(readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)); } catch { return new Set(); }
+}
+
 export async function phaseCleanup(c, deps = {}) {
   let rc = 0;
+  const owned = readOwned(c.ownedFile);
   const list = await api(c, deps, 'GET', '/api/health/auth/clients');
   if (list.status === 200 && Array.isArray(list.json?.data?.clients)) {
-    for (const cl of list.json.data.clients.filter((x) => [c.a, c.b].includes(x.tenant) && String(x.clientId).startsWith('ep-') && x.status !== 'disabled')) {
+    for (const cl of list.json.data.clients.filter((x) => owned.has(x.tenant) && String(x.clientId).startsWith('ep-') && x.status !== 'disabled')) {
       const ok = await disableClient({ ...deps, cpUrl: c.cpUrl, cpToken: c.cpToken }, cl.clientId).catch(() => false);
       say(`cleanup client ${cl.clientId} disabled=${ok}`);
       if (!ok) rc = 1;
     }
   } else { say(`COULD NOT LIST clients to disable leftovers: ${errText(list)}`); rc = 1; }
   for (const t of [c.a, c.b]) {
+    if (!owned.has(t)) { say(`tenant ${t} was not created by this run (no ownership record): NOT destroying it`); continue; }
     const g = await api(c, deps, 'GET', `/api/health/tenants/${encodeURIComponent(t)}`);
     if (g.status === 404) { say(`tenant ${t} was never registered (HTTP 404): nothing to destroy`); continue; }
     const r = await runDestroy({
