@@ -384,12 +384,7 @@ jobs:
             K=$(jq 'length' temp/fd.json)
             if [ "$K" = "1" ]; then
               FD_NAME=$(jq -r '.[0]' temp/fd.json)
-              az afd security-policy list -g "$HUB_RG" --profile-name "$FD_NAME" --query "[?name=='console-waf-policy'].parameters.wafPolicy.id" -o json > temp/fdwaf.json 2> temp/fdwaf.err || fail temp/fdwaf.err "the Front Door security policies of $FD_NAME"
-              FD_WAF=$(jq -r '.[0] // ""' temp/fdwaf.json)
-              if [ -z "$FD_WAF" ]; then
-                echo "::warning::Front Door profile $FD_NAME has no security policy named console-waf-policy, so the issuer endpoint is created WITHOUT a WAF policy."
-              fi
-              FD_JSON=$(jq -n --arg p "$FD_NAME" --arg rg "$HUB_RG" --arg w "$FD_WAF" '{ profileName: $p, resourceGroup: $rg, wafPolicyId: $w }')
+              FD_JSON=$(jq -n --arg p "$FD_NAME" --arg rg "$HUB_RG" '{ profileName: $p, resourceGroup: $rg }')
               echo "::notice::Issuer will be served through Front Door profile $FD_NAME in $HUB_RG (route /auth/* only)."
             elif [ "$K" = "0" ]; then
               echo "::warning::issuer unreachable: no Front Door on this boundary (no Microsoft.Cdn profile in $HUB_RG). The issuer URL falls back to the stamp ingress URL, which has no path to the control plane; the issuer route is supported-in-code only here, follow-up (an App Gateway path, #5410). Nothing in this run makes the issuer reachable."

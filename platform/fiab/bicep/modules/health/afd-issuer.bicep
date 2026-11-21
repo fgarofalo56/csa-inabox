@@ -9,9 +9,13 @@
 //
 // WHAT. A DEDICATED endpoint (the console endpoint and its route are untouched), an origin group that
 // probes the issuer metadata document, one origin = the control plane FQDN with a Private Link
-// connection to the environment, a route whose patternsToMatch is exactly ['/auth/*'], and, when the
-// caller supplies the console WAF policy id, a NEW security policy attaching that WAF to the new
-// endpoint only (the console's securityPolicy and its domain list are not rewritten).
+// connection to the environment, a route whose patternsToMatch is exactly ['/auth/*'], a DEDICATED WAF
+// policy, and a NEW security policy attaching that WAF to the new endpoint only (the console's
+// securityPolicy, its WAF policy and its domain list are not touched).
+//
+// OWN WAF POLICY. Front Door allows a WAF policy in ONE security policy per profile. The first cut
+// referenced the console's policy and failed live: "BadRequest: Web Application Firewall Policy is
+// already attached to AFDX profile." (deploy-health run 44937726049, 2026-11-21).
 //
 // TWO INVOCATIONS, ONE FILE. The control plane needs the issuer URL as an environment variable at
 // creation, and the origin needs the control plane FQDN, so one deployment would be a cycle. health.bicep
@@ -41,9 +45,6 @@ param caeId string
 
 @description('Region of the Container Apps environment (Private Link location).')
 param caeLocation string
-
-@description('OPTIONAL. Resource id of the WAF policy the console security policy uses. Empty = no WAF attached to the issuer endpoint.')
-param wafPolicyId string = ''
 
 @description('Tags.')
 param tags object = {}
@@ -125,13 +126,44 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = if (rou
   dependsOn: [origin]
 }
 
-resource securityPolicy 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' = if (routeDeploy && !empty(wafPolicyId)) {
+// Dedicated WAF policy for the issuer (alphanumeric name, deterministic per resource group + stamp).
+// Mirrors the console policy in admin-plane/front-door.bicep (Premium_AzureFrontDoor, Prevention,
+// Microsoft_DefaultRuleSet 2.1; that module already deploys in Commercial and GCC-High) with two
+// deliberate differences: NO Bot Manager rule set, because the issuer's clients are machines (SMART
+// backend services, APIM validate-jwt fetching openid-configuration) that Bot Manager would classify
+// as bots; and no console-specific custom rules or cookie exclusions. Request-body inspection is off
+// as on the console: the token endpoint receives form-encoded JWT client assertions, which DRS 2.1
+// body rules are prone to block; URL, header and cookie inspection stay active.
+resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = if (routeDeploy) {
+  name: 'waflhdsauth${uniqueString(resourceGroup().id, stampName)}'
+  location: 'global'
+  tags: tags
+  sku: { name: 'Premium_AzureFrontDoor' }
+  properties: {
+    policySettings: {
+      enabledState: 'Enabled'
+      mode: 'Prevention'
+      requestBodyCheck: 'Disabled'
+    }
+    managedRules: {
+      managedRuleSets: [
+        {
+          ruleSetType: 'Microsoft_DefaultRuleSet'
+          ruleSetVersion: '2.1'
+          ruleSetAction: 'Block'
+        }
+      ]
+    }
+  }
+}
+
+resource securityPolicy 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' = if (routeDeploy) {
   parent: profile
   name: 'lhds-auth-waf-policy'
   properties: {
     parameters: {
       type: 'WebApplicationFirewall'
-      wafPolicy: { id: wafPolicyId }
+      wafPolicy: { id: wafPolicy.id }
       associations: [
         {
           domains: [ { id: endpoint.id } ]
@@ -153,4 +185,4 @@ output issuerUrl string = 'https://${endpoint.properties.hostName}/auth'
 output routeDeployed bool = routeDeploy
 
 @description('Whether a WAF security policy was attached to the issuer endpoint.')
-output wafAttached bool = routeDeploy && !empty(wafPolicyId)
+output wafAttached bool = routeDeploy

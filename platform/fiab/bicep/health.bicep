@@ -45,7 +45,7 @@
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
 //     required on aks), pdpReplicas (default 2),
-//   frontDoor ({profileName, resourceGroup?, subscriptionId?, wafPolicyId?}; the EXISTING Front Door Premium
+//   frontDoor ({profileName, resourceGroup?, subscriptionId?}; the EXISTING Front Door Premium
 //     profile that serves the issuer on a /auth/*-only route, #5410; deploy-health.yml resolves it from the hub
 //     resource group. Absent = no Front Door on this boundary: the issuer default stays the stamp ingress URL,
 //     which has no path to the control plane, and healthIssuerState says so),
@@ -317,7 +317,6 @@ module healthAuthRoute 'modules/health/afd-issuer.bicep' = if (fdIssuerDeploy) {
     cpFqdn: healthControlPlane!.outputs.fqdn
     caeId: cpEnvironmentId
     caeLocation: location
-    wafPolicyId: string(fdCfg.?wafPolicyId ?? '')
     tags: tags
   }
 }
