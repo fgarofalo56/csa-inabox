@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { HttpError, StoreConflictError, badRequest, conflict, notFound } from '../http/errors.js';
 import type { Authenticator } from '../middleware/auth.js';
 import { SLUG, type TenantDoc } from '../registry/types.js';
-import { authoredMessage } from '../safe-error.js';
+import { authoredMessage, classifyError } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backend-auth.js';
 import { computeGrant } from './grant.js';
@@ -525,6 +525,28 @@ export function createAuthServer(deps: AuthServerDeps) {
     }
   }
 
+  /** A non-protocol failure inside a named step of the token path; surfaces as a 500, with the step in the log. */
+  class StepFailure extends Error {
+    constructor(readonly step: string, readonly origin: unknown) {
+      super(`step ${step} failed`);
+    }
+  }
+  async function inStep<T>(step: string, fn: () => T | Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof OAuthError || e instanceof HttpError || e instanceof StepFailure) throw e;
+      throw new StepFailure(step, e);
+    }
+  }
+  /** The signer with each seam labelled, so a Key Vault failure names kid vs sign. */
+  const stepSigner: Signer = {
+    alg: deps.signer.alg,
+    kid: () => inStep('kid', () => deps.signer.kid()),
+    sign: (b) => inStep('sign', () => deps.signer.sign(b)),
+    publicJwk: () => deps.signer.publicJwk(),
+  };
+
   async function token(tenantSlug: string, p: URLSearchParams): Promise<Record<string, unknown>> {
     await activeTenant(tenantSlug);
     const tokenUrl = `${issuer}/${tenantSlug}/token`;
@@ -544,17 +566,18 @@ export function createAuthServer(deps: AuthServerDeps) {
         throw new OAuthError('invalid_client', 'client authentication failed');
       }
       await authenticateClient(client, p, tokenUrl);
-      const g = computeGrant({
+      const g = await inStep('grant', () => computeGrant({
         grant: 'client_credentials',
         request: parseRequest(p.get('scope') ?? '', { v1: false }),
         roleIds: client.roleIds,
         clientAllowed: client.allowedScopes,
         fhirUserResolved: false,
-      });
+      }));
       if (g.scope.length === 0) throw new OAuthError('invalid_scope', 'no requested scope could be granted');
-      const at = await mintAccessToken(deps.signer, {
+      const audience = await inStep('fhir_base', () => deps.fhirBaseFor(tenantSlug));
+      const at = await inStep('mint', () => mintAccessToken(stepSigner, {
         issuer,
-        audience: deps.fhirBaseFor(tenantSlug),
+        audience,
         tenant: tenantSlug,
         subType: 'system',
         sub: client.clientId,
@@ -563,7 +586,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         roles: client.roleIds,
         pou: [client.pou],
         now: now(),
-      });
+      }));
       // No refresh token for Backend Services (spec "SHOULD NOT").
       return { access_token: at, token_type: 'bearer', expires_in: ACCESS_TOKEN_TTL_S, scope: g.scope.join(' ') };
     }
@@ -884,7 +907,11 @@ export function createAuthServer(deps: AuthServerDeps) {
         sendJson(res, status, { ok: false, error: { code: e.code, message: authoredMessage(e) } }, status === 401 ? { 'www-authenticate': 'Bearer' } : {});
       } else {
         status = 500;
-        deps.log('auth.internal_error', { error: e instanceof Error ? e.name : 'unknown' });
+        // Step + sanitised message + SDK status/code: enough to diagnose a 500 from the log alone
+        // (#5410). Never the token, assertion, key material or a request body; the response stays generic.
+        const step = e instanceof StepFailure ? e.step : 'request';
+        const origin = e instanceof StepFailure ? e.origin : e;
+        deps.log('auth.internal_error', { error: origin instanceof Error ? origin.name : 'unknown', step, ...classifyError(origin) });
         sendJson(res, 500, { error: 'server_error', error_description: 'internal error' });
       }
       return true;

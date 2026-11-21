@@ -207,14 +207,27 @@ export async function mintTenantToken(c) {
     throw new MintError(classifyStatus(reg.status), `client registration for tenant ${c.tenant} refused: ${errText(reg)}.${hint}`);
   }
 
-  const now = Math.floor((c.nowMs ?? Date.now()) / 1000);
   const aud = `${disc.issuer}/${c.tenant}/token`; // the AS compares against ITS issuer: the discovered one
-  const assertion = km.signAssertion({ iss: clientId, sub: clientId, aud, jti: randomUUID(), iat: now, exp: now + ASSERTION_TTL_S });
-  const tok = await withRetry(c, 'token request', () => cpCall(c, 'POST', `${disc.tokenBase}/${c.tenant}/token`, {
-    form: { grant_type: 'client_credentials', client_assertion_type: ASSERTION_TYPE, client_assertion: assertion, scope: 'system/*.rs' },
-  })).catch(async (e) => { await disableClient(c, clientId).catch(() => false); throw e; });
+  // The AS records an assertion's jti on the first attempt that passes client auth and refuses it
+  // afterwards (backend-auth.ts replay store), even when a LATER step of that attempt returned 5xx.
+  // So every attempt signs a NEW assertion (new jti, fresh iat/exp); re-sending one would turn a 5xx
+  // into a 401 replay refusal that hides the real failure (#5410, live run 44931355951).
+  const attempts = [];
+  const tok = await withRetry(c, 'token request', () => {
+    const now = Math.floor((c.nowMs ?? Date.now()) / 1000);
+    const assertion = km.signAssertion({ iss: clientId, sub: clientId, aud, jti: randomUUID(), iat: now, exp: now + ASSERTION_TTL_S });
+    return cpCall(c, 'POST', `${disc.tokenBase}/${c.tenant}/token`, {
+      form: { grant_type: 'client_credentials', client_assertion_type: ASSERTION_TYPE, client_assertion: assertion, scope: 'system/*.rs' },
+    }).then((r) => { attempts.push(r); return r; });
+  }).catch(async (e) => { await disableClient(c, clientId).catch(() => false); throw e; });
   if (tok.status !== 200 || typeof tok.json?.access_token !== 'string') {
     await disableClient(c, clientId).catch(() => false);
+    const firstFail = attempts.find((r) => TRANSIENT.has(r.status));
+    if (firstFail && attempts.length > 1 && tok !== firstFail) {
+      // R7: report the FIRST failure as the cause; the later answer is a consequence, not a finding.
+      throw new MintError('defect',
+        `token request for tenant ${c.tenant}: the FIRST attempt failed with ${errText(firstFail)}; the later answer (${errText(tok)}) came from a fresh assertion after that failure and is not the cause. Diagnose the first failure`);
+    }
     const notAvail = tok.json?.error === 'invalid_request' && /tenant is not available/.test(String(tok.json?.error_description));
     throw new MintError(notAvail ? 'config' : 'defect',
       `token endpoint refused a client it had just accepted for tenant ${c.tenant}: ${errText(tok)}${notAvail ? ' (the tenant is not active yet)' : ''}`);

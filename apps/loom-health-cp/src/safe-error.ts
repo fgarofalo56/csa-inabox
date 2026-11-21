@@ -38,3 +38,33 @@ export function publicErrorMessage(err: unknown, publicMessage = 'internal error
 export function authoredMessage(err: Error): string {
   return err.message;
 }
+
+const JWT_SHAPE = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g;
+const BEARER_SHAPE = /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+
+export interface ClassifiedError {
+  name: string;
+  /** Sanitised message: JWT/Bearer-shaped strings masked, control chars flattened, capped at 200. */
+  message: string;
+  /** Azure SDK / HTTP status carried by the error (RestError.statusCode), when an integer. */
+  statusCode?: number;
+  /** Azure SDK error code (RestError.code / Node errno string), when a short token. */
+  code?: string;
+}
+
+/**
+ * Operator-diagnostic classification of a caught value for a SERVER-SIDE LOG line (never for a
+ * response body). This is the sanitizer-module home for reading `err.message`, so the rest of
+ * the service stays free of raw exception text (bff-errors RULE 3).
+ */
+export function classifyError(err: unknown): ClassifiedError {
+  if (!(err instanceof Error)) return { name: 'unknown', message: '' };
+  const raw = err as Error & { statusCode?: unknown; code?: unknown };
+  const message = logSafe(String(err.message).replace(JWT_SHAPE, '<jwt>').replace(BEARER_SHAPE, 'Bearer <redacted>'), 200);
+  return {
+    name: logSafe(err.name, 60),
+    message,
+    ...(typeof raw.statusCode === 'number' && Number.isInteger(raw.statusCode) ? { statusCode: raw.statusCode } : {}),
+    ...(typeof raw.code === 'string' && /^[A-Za-z0-9_.-]{1,60}$/.test(raw.code) ? { code: raw.code } : {}),
+  };
+}

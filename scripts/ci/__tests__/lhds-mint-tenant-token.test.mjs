@@ -28,7 +28,7 @@ const SCRIPT = fileURLToPath(new URL('../../measure/health/mint-tenant-token.mjs
 const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 
 function stub(opts = {}) {
-  const st = { regCalls: 0, tokenCalls: 0, clients: new Map(), assertions: [], tokens: [], auds: [], edgeSeen: [] };
+  const st = { seenJti: new Set(), tokenFailures: 0, regCalls: 0, tokenCalls: 0, clients: new Map(), assertions: [], tokens: [], auds: [], edgeSeen: [] };
   const srv = createServer((req, res) => {
     let raw = '';
     req.on('data', (d) => { raw += d; });
@@ -74,6 +74,16 @@ function stub(opts = {}) {
           // aud must be the DISCOVERED issuer's token URL, exactly as the real AS compares it.
           if (!ok || claims.sub !== claims.iss || claims.aud !== `${ISSUER}/${tm[1]}/token` || !claims.jti || claims.exp <= nowS || claims.exp - nowS > 300) return refuse();
           if (opts.tokenDefect) return refuse();
+          // Replay store, as backend-auth.ts step 6: create-if-absent on `clientId|jti`, recorded at the
+          // moment client auth passes. A second presentation of the same jti is the SAME 401 invalid_client.
+          const key = `${claims.iss}|${claims.jti}`;
+          if (st.seenJti.has(key)) { st.replays = (st.replays ?? 0) + 1; return refuse(); }
+          st.seenJti.add(key);
+          // A step AFTER client auth fails (the live defect): the jti is already consumed.
+          if (opts.tokenFailAfterAuth && st.tokenFailures < opts.tokenFailAfterAuth) {
+            st.tokenFailures += 1;
+            return send(500, { error: 'server_error', error_description: 'internal error' });
+          }
         } catch { return refuse(); }
         const payload = { iss: ISSUER, tenant: opts.wrongTenantClaim ? 'someone-else' : tm[1], exp: Math.floor(Date.now() / 1000) + 300, scope: 'system/*.rs' };
         const token = `${b64u({ alg: 'ES384', typ: 'at+jwt' })}.${b64u(payload)}.${ACCESS_SIG}`;
@@ -338,4 +348,40 @@ test('readOwned: a missing file or no path means nothing is owned', () => {
     rmSync(dir, { recursive: true, force: true });
   }
   assert.equal(readOwned('').size, 0);
+});
+
+test('retry signs a NEW assertion: attempt 1 -> 500 (jti consumed), attempt 2 mints ONLY if its jti differs (breaks if the same assertion is re-sent: the mock replies 401 replay)', async () => {
+  const { srv, st, url } = await stub({ tokenFailAfterAuth: 1 });
+  try {
+    const m = await mintTenantToken(cfg(url));
+    assert.equal(st.tokenCalls, 2);
+    assert.equal(st.assertions.length, 2);
+    const jtis = st.assertions.map((a) => JSON.parse(Buffer.from(a.split('.')[1], 'base64url').toString()).jti);
+    assert.notEqual(jtis[0], jtis[1]);
+    assert.equal(st.replays ?? 0, 0);
+    assert.equal(m.claims.tenantOk, true);
+  } finally { srv.close(); }
+});
+
+test('R7: a persistent post-auth 500 is reported as the 500 (first failure), never as "refused a client it had just accepted" (breaks on the old message / a 401 masking the 500)', async () => {
+  const { srv, st, url } = await stub({ tokenFailAfterAuth: 1 });
+  try {
+    // Simulate the old behaviour's visible shape too: a later 401 after a 5xx must still name the 5xx.
+    const real = globalThis.fetch;
+    let n = 0;
+    const fetchImpl = async (u, init) => {
+      if (String(u).endsWith('/token') && init?.method === 'POST') {
+        n += 1;
+        if (n === 2) return new Response(JSON.stringify({ error: 'invalid_client', error_description: 'client authentication failed' }), { status: 401 });
+      }
+      return real(u, init);
+    };
+    await assert.rejects(mintTenantToken(cfg(url, { fetchImpl })), (e) => {
+      assert.match(e.message, /FIRST attempt failed with HTTP 500 server_error/);
+      assert.doesNotMatch(e.message, /refused a client it had just accepted/);
+      assert.equal(e.exit, 1);
+      return true;
+    });
+    assert.equal([...st.clients.values()][0].status, 'disabled');
+  } finally { srv.close(); }
 });

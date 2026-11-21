@@ -77,7 +77,7 @@ afterEach(async () => {
   while (open.length) await open.pop()!.close();
 });
 
-async function boot(): Promise<Ctx> {
+async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Record<string, string | number>) => void } = {}): Promise<Ctx> {
   const tenants = new MemoryCollection<TenantDoc>();
   const base = { stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' };
   await tenants.create({ id: 'visn-01', displayName: 'V1', status: 'active', ...base });
@@ -90,7 +90,7 @@ async function boot(): Promise<Ctx> {
   } as unknown as Ctx['stores'];
   const fed = new FakeFed();
   const graph = new FakeGraph();
-  const signer = new LocalSigner();
+  const signer = over.signer ?? new LocalSigner();
   const jwksFetched: string[] = [];
   const jwksByUrl = new Map<string, JWK[]>();
   const authSrv = createAuthServer({
@@ -111,7 +111,7 @@ async function boot(): Promise<Ctx> {
       return { keys, maxAgeS: 0 };
     },
     graphConsentUrl: 'https://login.microsoftonline.us/consent',
-    log: () => undefined,
+    log: over.log ?? (() => undefined),
   });
   const server: Server = createServer((req, res) => void authSrv.handle(req, res).then((h) => { if (!h) { res.writeHead(404); res.end(); } }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -656,5 +656,47 @@ describe('client registry, bindings and gate (admin API)', () => {
     await c.bind({ [G_READER]: 'fhir-data-reader' });
     c.graph.consent = true;
     expect((await flow(c, 'user/*.rs')).redirect.searchParams.get('error')).toBe('server_error');
+  });
+});
+
+describe('token endpoint 500 is diagnosable from the log (#5410)', () => {
+  // Mimics @azure/core-rest-pipeline RestError: statusCode + code on an Error subclass.
+  class FakeRestError extends Error {
+    constructor(message: string, readonly statusCode: number, readonly code: string) {
+      super(message);
+      this.name = 'RestError';
+    }
+  }
+  const SECRET_MSG = 'Forbidden: caller lacks sign permission on vault kv-secret-name';
+
+  class ThrowingSigner extends LocalSigner {
+    override async sign(): Promise<Buffer> {
+      throw new FakeRestError(SECRET_MSG, 403, 'Forbidden');
+    }
+  }
+
+  it('a signer whose sign() throws RestError(403) logs step=sign + statusCode=403 + code, and the response stays generic (breaks on the old name-only log, or if the message reaches the body)', async () => {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await boot({ signer: new ThrowingSigner(), log: (event, f) => logs.push({ event, f }) });
+    const { publicKey, privateKey } = await generateKeyPair('ES384');
+    const pub = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'ES384' } as JWK;
+    const reg = await c.admin('POST', '/api/health/auth/clients', {
+      clientId: 'svc-500', tenant: 'visn-01', clientType: 'backend', displayName: 'svc-500',
+      allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwks: { keys: [pub] },
+    });
+    expect(reg.status).toBe(201);
+    const assertion = await new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' })
+      .setIssuer('svc-500').setSubject('svc-500').setAudience(`${ISSUER}/visn-01/token`)
+      .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+    const res = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: assertion } });
+    // positive: the 500 is the generic one and the log names the step and the SDK status
+    expect(res.status).toBe(500);
+    expect(res.json).toEqual({ error: 'server_error', error_description: 'internal error' });
+    const entry = logs.find((l) => l.event === 'auth.internal_error');
+    expect(entry?.f).toMatchObject({ error: 'RestError', step: 'sign', statusCode: 403, code: 'Forbidden' });
+    expect(String(entry?.f.message)).toContain('Forbidden');
+    // absence: the message is not in the response, and the assertion is never logged
+    expect(JSON.stringify(res.json)).not.toContain('Forbidden');
+    expect(JSON.stringify(logs)).not.toContain(assertion);
   });
 });
