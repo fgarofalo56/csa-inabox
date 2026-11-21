@@ -5,8 +5,9 @@
  * per-tenant quota with 429 + Retry-After. Until this has been run against a deployed
  * gateway, both behaviours are MODELLED only (apps/loom-health-cp/test/routing-edge.test.ts).
  *
- * Operator-run, read-only against the gateway (GET only). Tokens come from the
- * environment and are never printed or written.
+ * Read-only against the gateway (GET only). Tokens come from the environment, or are handed
+ * in process by a caller (readConfig accepts any env-like object; lhds-edge-probe-run.mjs mints
+ * them with mint-tenant-token.mjs and never lets them leave the process). Never printed or written.
  *
  *   LHDS_EDGE_BASE_URL   https://<gateway> (http only for loopback)
  *   LHDS_TENANT_A / LHDS_TENANT_B     tenant slugs (distinct)
@@ -14,13 +15,36 @@
  *   LHDS_QUOTA_RPM       the effective requests-per-minute of tenant A (registry quota or the fragment default)
  *   LHDS_PATH_SUFFIX     default /fhir/metadata
  *
+ * Positive control (#5410): tenant A's token on tenant A's path must answer something other
+ * than 401/403. A 2xx is a full pass; a 404/502/503 is a pass with the note "passed auth;
+ * backend not serving" (the FHIR backend is not deployed yet): the token got through the edge,
+ * which is all the 403/429 observations need.
+ *
  * Exit codes (R6/R7: a result that was not established is not a pass):
  *   0 every check PASSED
  *   1 a check FAILED: the gateway answered and the answer is wrong (a defect)
- *   2 UNMEASURED: bad config, no response, or the positive control failed, so the
+ *   2 UNMEASURED: bad config, no response, or the positive control was refused (401/403), so the
  *     403/429 observations cannot be interpreted. This is NOT a claim the edge is broken.
  */
 const out = (o) => console.log(JSON.stringify(o));
+
+export const HELP = `edge-probe.mjs - LHDS APIM edge probe (#5149): cross-tenant 403 + per-tenant quota 429.
+
+Usage:
+  LHDS_EDGE_BASE_URL=https://<gateway> LHDS_TENANT_A=<a> LHDS_TENANT_B=<b> \\
+  LHDS_TOKEN_A=<token, tenant claim a> LHDS_TOKEN_B=<token, tenant claim b> \\
+  LHDS_QUOTA_RPM=<tenant A requests per minute> node scripts/measure/health/edge-probe.mjs [--help]
+
+Optional: LHDS_PATH_SUFFIX (default /fhir/metadata).
+Tokens are minted by scripts/measure/health/mint-tenant-token.mjs; the lhds-edge-probe
+workflow mints and probes in one process so they never reach a log, file or output.
+
+Positive control: tenant A token on tenant A path must answer something other than 401/403.
+  2xx             full PASS
+  404/502/503...  PASS with note "passed auth; backend not serving"
+  401/403         UNMEASURED (exit 2); the 403/429 checks are not run
+Exit: 0 all checks passed, 1 a check failed (a defect), 2 unmeasured (config, no response, control refused).
+`;
 
 export function readConfig(e = process.env) {
   const g = (k, d) => (e[k] ?? d ?? '').trim();
@@ -51,11 +75,16 @@ export async function runProbe(cfg) {
   const rec = (name, verdict, detail) => { results.push({ name, verdict, detail }); };
   try {
     const pos = await get(cfg, cfg.a, cfg.tokA);
-    if (pos.status < 200 || pos.status >= 400) {
-      rec('positive-control', 'UNMEASURED', `tenant A token on tenant A path answered ${pos.status}, not 2xx/3xx: token or route unusable, so the 403/429 checks below were not run`);
+    if (pos.status === 401 || pos.status === 403) {
+      rec('positive-control', 'UNMEASURED', `tenant A token on tenant A path answered ${pos.status}: the edge refused a token that should be valid, so the 403/429 checks below were not run`);
       return { exit: 2, results };
     }
-    rec('positive-control', 'PASS', `tenant A token on tenant A path answered ${pos.status}`);
+    // Anything else means the token passed the edge's auth. 2xx/3xx is a full pass; 404/502/503 is the
+    // gateway authenticating the call with nothing serving behind it, which is enough to interpret the
+    // 403/429 observations but is said out loud.
+    rec('positive-control', 'PASS', pos.status >= 200 && pos.status < 400
+      ? `tenant A token on tenant A path answered ${pos.status}`
+      : `tenant A token on tenant A path answered ${pos.status}: passed auth; backend not serving`);
 
     const mm = await get(cfg, cfg.a, cfg.tokB);
     rec('cross-tenant-403', mm.status === 403 ? 'PASS' : 'FAIL', `tenant A path with tenant B token answered ${mm.status}, expected 403`);
@@ -76,7 +105,7 @@ export async function runProbe(cfg) {
       rec('retry-after', bad.length === 0 ? 'PASS' : 'FAIL', bad.length === 0 ? `every 429 carried a positive integer Retry-After (e.g. ${limited[0].retryAfter})` : `${bad.length} of ${limited.length} 429 responses had a missing or non-positive Retry-After (e.g. ${JSON.stringify(bad[0].retryAfter)})`);
       const other = await get(cfg, cfg.b, cfg.tokB);
       if (other.status === 429) rec('quota-isolation', 'FAIL', `tenant B own token was 429 while only tenant A exceeded its quota: the counter is shared across tenants`);
-      else if (other.status < 200 || other.status >= 400) rec('quota-isolation', 'UNMEASURED', `tenant B own token on its own path answered ${other.status}: cannot tell whether B shares A's counter`);
+      else if (other.status === 401 || other.status === 403) rec('quota-isolation', 'UNMEASURED', `tenant B own token on its own path answered ${other.status}: cannot tell whether B shares A's counter`);
       else rec('quota-isolation', 'PASS', `tenant B answered ${other.status} while tenant A was being limited`);
     }
   } catch (e) {
@@ -88,6 +117,10 @@ export async function runProbe(cfg) {
 }
 
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop());
+if (isMain && process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  process.stdout.write(HELP);
+  process.exit(0);
+}
 if (isMain) {
   const { cfg, problems } = readConfig();
   if (problems.length) { out({ verdict: 'UNMEASURED', problems }); process.exit(2); }
