@@ -211,13 +211,56 @@ describe('confirmResume', () => {
     expect(ok.observedState).toBe('Paused');
     expect(ok.reason).toMatch(/It is NOT running/);
 
-    // ...and starting it would be WRONG, so Online is a mismatch, not a success.
-    const wrong = confirmResume(
+    // DELIBERATELY CHANGED (resume-started-out-of-band): this used to assert that
+    // Paused-before + Online-now is `confirmed-mismatch`. That was the defect: a VM
+    // deleted+rebuilt and left running wedged RESUME_FAILED forever. Online now means
+    // it was started outside Loom; Loom did not start it. A transitional reading is
+    // still a mismatch (see the dedicated tests below).
+    const started = confirmResume(
       alreadyPaused,
       armPowerReading({ resourceId: POOL_ID, powerState: 'Online', armApiVersion: '2021-06-01' }),
     );
-    expect(wrong.confirmation).toBe('confirmed-mismatch');
-    expect(isResumeSuccess(wrong.confirmation)).toBe(false);
+    expect(started.confirmation).toBe('confirmed-running');
+    expect(isResumeSuccess(started.confirmation)).toBe(true);
+  });
+
+  it('paused-before (Deallocated) + ARM reads Online -> success class, reason says it was started outside Loom', () => {
+    // Breaks on the old predicate: Deallocated-before + Online-now returned
+    // confirmed-mismatch and the reason lacked "outside Loom".
+    const vm: PausedResourceSnapshot = { ...poolSnapshot(), prePausePowerState: 'Deallocated' };
+    const o = confirmResume(
+      vm,
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Online', armApiVersion: '2021-06-01' }),
+    );
+    expect(o.confirmation).toBe('confirmed-running');
+    expect(isResumeSuccess(o.confirmation)).toBe(true);
+    expect(o.observedState).toBe('Online');
+    expect(o.reason).toContain('outside Loom');
+    expect(o.reason).toContain('Loom did not start it and did not stop it');
+    expect(o.reason).toContain('Deallocated');
+  });
+
+  it('paused-before (Deallocated) + ARM reads Starting (transitional) is still NOT a success', () => {
+    // Breaks if the fix widens from RUNNING to "anything not paused".
+    const vm: PausedResourceSnapshot = { ...poolSnapshot(), prePausePowerState: 'Deallocated' };
+    for (const transitional of ['Starting', 'Resuming', 'Scaling'] as const) {
+      const o = confirmResume(
+        vm,
+        armPowerReading({ resourceId: POOL_ID, powerState: transitional, armApiVersion: '2021-06-01' }),
+      );
+      expect(o.confirmation, transitional).toBe('confirmed-mismatch');
+      expect(isResumeSuccess(o.confirmation), transitional).toBe(false);
+    }
+  });
+
+  it('Online-before + ARM reads Deallocated is still a mismatch (the opposite direction is untouched)', () => {
+    // Breaks if the fix is made symmetric (stopped-now accepted for running-before).
+    const o = confirmResume(
+      poolSnapshot(),
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Deallocated', armApiVersion: '2021-06-01' }),
+    );
+    expect(o.confirmation).toBe('confirmed-mismatch');
+    expect(isResumeSuccess(o.confirmation)).toBe(false);
   });
 
   it('every non-unknown confirmation that is a success carries a non-Online observedState only for restored-paused', () => {
