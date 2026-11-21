@@ -279,7 +279,7 @@ test('phaseProbe mode=mint-only: mints and verifies both tenants without touchin
 
 // ---- ownership: cleanup destroys ONLY slugs this run created (201) ----
 import { phaseCreate, phaseCleanup, readOwned } from '../../measure/health/lhds-edge-probe-run.mjs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -331,6 +331,11 @@ test('positive control: a tenant that returned 201 IS owned and cleanup DOES des
 });
 
 test('readOwned: a missing file or no path means nothing is owned', () => {
-  assert.equal(readOwned(join(tmpdir(), 'definitely-missing-owned.txt')).size, 0);
+  const dir = mkdtempSync(join(tmpdir(), 'lhds-owned-'));
+  try {
+    assert.equal(readOwned(join(dir, 'missing-owned.txt')).size, 0); // the dir exists, the file does not
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
   assert.equal(readOwned('').size, 0);
 });
