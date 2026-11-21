@@ -85,11 +85,24 @@ export class KeyVaultSigner implements Signer {
     return (await res.json()) as Record<string, unknown>;
   }
   publicJwk(): Promise<JWK> {
-    this.pub ??= this.call('', { method: 'GET' }).then((r) => {
-      const k = r.key as JWK | undefined;
-      if (!k || k.kty !== 'EC' || k.crv !== 'P-384' || !k.x || !k.y) throw new Error('key is not an EC P-384 key');
-      return withKid({ kty: k.kty, crv: k.crv, x: k.x, y: k.y });
-    });
+    // Key Vault reports an HSM-backed key (the operator-mandated non-exportable key, A10) as
+    // kty "EC-HSM", not "EC". Refusing it made kid() throw on EVERY token request on the
+    // live dev01 stamp (2026-11-21: auth.internal_error, 500). The published JWK is the
+    // standard RFC 7517 "EC" either way; the HSM suffix is a Key Vault storage detail.
+    // A REJECTED read is never cached: `??=` on a rejected promise kept one transient Key
+    // Vault failure (timeout, 429, 5xx) failing every later request until a restart.
+    this.pub ??= this.call('', { method: 'GET' })
+      .then((r) => {
+        const k = r.key as JWK | undefined;
+        if (!k || (k.kty !== 'EC' && k.kty !== 'EC-HSM') || k.crv !== 'P-384' || !k.x || !k.y) {
+          throw new Error('key is not an EC P-384 key');
+        }
+        return withKid({ kty: 'EC', crv: k.crv, x: k.x, y: k.y });
+      })
+      .catch((e: unknown) => {
+        this.pub = undefined;
+        throw e;
+      });
     return this.pub;
   }
   async kid(): Promise<string> {
