@@ -66,6 +66,10 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed Gov hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: deploy-fiab-commercial.yml has had this since audit-t157; the Gov lanes did not, so once a Gov hub existed this workflow could never succeed again.)'
         type: boolean
         default: false
+      vanity_domain:
+        description: 'Optional vanity URL for the console (e.g. csaloom-gov.contoso.ai). Leave BLANK on an estate that already has one: the deploy discovers the live Front Door custom domain and re-applies it, because passing nothing would unbind it and the edge would answer with the fallback certificate.'
+        type: string
+        required: false
       override_estate_pause:
         description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED a run_mode=full dispatch STANDS DOWN (nothing deployed, no approval requested) because the apply would start ADX and rewrite the paused Container Apps (#5111). true = you accept that.'
         type: boolean
@@ -170,6 +174,7 @@ env:
   CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: F8
   CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
+  CSA_LOOM_VANITY_DOMAIN: ${{ inputs.vanity_domain }}
 
 jobs:
   precheck:
@@ -975,7 +980,7 @@ jobs:
             fi
             echo ""
             echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
-            echo "(#4253), the console health binding read (#5346), the what-if, the deploy-verification evidence receipt and its"
+            echo "(#4253), the console health binding read (#5346), the live vanity domain read, the what-if, the deploy-verification evidence receipt and its"
             echo "artifact upload, BOTH image preflights — the adoption preflight"
             echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
             echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the retired-image VM replacement,"
@@ -1088,6 +1093,87 @@ jobs:
           fi
           bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
 
+      # ADOPT THE LIVE VANITY DOMAIN, never pass '' over one that exists.
+      # Port of deploy-fiab-commercial.yml's step of the same name (cloud-parity).
+      # front-door.bicep renders `customDomains: empty(vanityDomain) ? [] : [...]`,
+      # so an apply with no loomVanityDomain UNBINDS a live vanity host and the
+      # edge answers SNI with the Front Door fallback certificate
+      # (ERR_CERT_COMMON_NAME_INVALID on csaloom-gov.limitlessdata.ai).
+      # `vanity_domain` is optional with no default and a schedule carries no
+      # inputs, so the live value must be READ from the estate.
+      #
+      # The host AND the customDomains RESOURCE NAME are read (#3287): Front Door
+      # refuses a second custom domain for a host it already claimed, so the host
+      # alone turns the unbind into a Conflict.
+      #
+      # Reads go through `az rest` at api-version 2021-06-01, NOT `az afd`: that
+      # pulls a preview `cdn` extension whose api-version Gov lacks
+      # (gov-apps-diagnose.yml header). Fails CLOSED: an unreadable profile is
+      # UNKNOWN, and passing '' on an unknown is the move that caused the outage.
+      # Skipped on dlz-attach (no admin plane, no Front Door).
+      - name: Adopt the live vanity domain (never unbind it)
+        id: vanity_domain
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane and no Front Door; there is no vanity domain to adopt."
+            exit 0
+          fi
+          VD_DOMAIN="${CSA_LOOM_VANITY_DOMAIN:-}"
+          VD_NAME=""
+          if [ -z "$VD_DOMAIN" ]; then
+            VD_ERR="$(mktemp)"
+            ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+            RM="$(az cloud show --query endpoints.resourceManager -o tsv | tr -d '[:space:]')"
+            RM="${RM%/}"
+            BASE="$RM/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$ADMIN_RG/providers/Microsoft.Cdn/profiles"
+            API="api-version=2021-06-01"
+            if ! RG_EXISTS="$(az group exists --subscription "$AZURE_SUBSCRIPTION_ID" -n "$ADMIN_RG" 2>"$VD_ERR")"; then
+              echo "::error::Could not check whether $ADMIN_RG exists, so whether a vanity domain is bound is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing. az said: $(head -c 400 "$VD_ERR")"
+              exit 1
+            fi
+            if [ "$(printf '%s' "$RG_EXISTS" | tr -d '[:space:]')" != "true" ]; then
+              echo "::notice::$ADMIN_RG does not exist - a greenfield estate has no vanity domain to preserve."
+            else
+              if ! FD_PROFILE="$(az rest --method get --url "$BASE?$API" --query "value[0].name || ''" -o tsv 2>"$VD_ERR" | tr -d '\r')"; then
+                echo "::error::Could not read the Front Door profiles in $ADMIN_RG to find out whether a vanity domain is bound: $(head -c 400 "$VD_ERR"). That is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing."
+                exit 1
+              fi
+              if [ -n "$FD_PROFILE" ]; then
+                CD_URL="$BASE/$FD_PROFILE/customDomains?$API"
+                if ! VD_DOMAIN="$(az rest --method get --url "$CD_URL" --query "value[0].properties.hostName || ''" -o tsv 2>"$VD_ERR" | tr -d '\r')"; then
+                  echo "::error::Could not read the custom domains of Front Door profile '$FD_PROFILE': $(head -c 400 "$VD_ERR"). That is UNKNOWN, and passing an empty loomVanityDomain over a bound domain UNBINDS it. Refusing."
+                  exit 1
+                fi
+                if ! VD_NAME="$(az rest --method get --url "$CD_URL" --query "value[0].name || ''" -o tsv 2>"$VD_ERR" | tr -d '\r')"; then
+                  echo "::error::Could not read the custom domain resource name of Front Door profile '$FD_PROFILE': $(head -c 400 "$VD_ERR"). Refusing."
+                  exit 1
+                fi
+                if [ -n "$VD_DOMAIN" ]; then
+                  echo "::notice::Adopted the live vanity domain '$VD_DOMAIN' (no vanity_domain input was supplied). Passing '' here would have unbound it and left the console on the Front Door fallback certificate."
+                else
+                  echo "::notice::Front Door profile '$FD_PROFILE' carries no custom domain - this estate has no vanity URL to preserve."
+                fi
+              else
+                echo "::notice::$ADMIN_RG has no Front Door profile - no vanity URL to preserve."
+              fi
+            fi
+            rm -f "$VD_ERR"
+          fi
+          # Both values go into GITHUB_ENV, so refuse anything that is not a plain
+          # DNS name / resource name (a newline would inject a second variable).
+          if ! printf '%s%s' "$VD_DOMAIN" "$VD_NAME" | grep -Eq '^[A-Za-z0-9.-]*$'; then
+            echo "::error::The vanity domain or custom-domain name contains characters that are not valid in a DNS name. Refusing."
+            exit 1
+          fi
+          {
+            echo "LOOM_VANITY_DOMAIN=$VD_DOMAIN"
+            echo "LOOM_VANITY_CUSTOM_DOMAIN_NAME=$VD_NAME"
+          } >> "$GITHUB_ENV"
+
       - name: Bicep what-if
         # STAND DOWN on a DECLARED-paused estate. ARM what-if cannot enumerate
         # Microsoft.Kusto/clusters/principalAssignments against a stopped engine
@@ -1112,6 +1198,8 @@ jobs:
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
+            ${LOOM_VANITY_DOMAIN:+--parameters loomVanityDomain="$LOOM_VANITY_DOMAIN"} \
+            ${LOOM_VANITY_CUSTOM_DOMAIN_NAME:+--parameters loomVanityCustomDomainName="$LOOM_VANITY_CUSTOM_DOMAIN_NAME"} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${LOOM_DNS_INBOUND_STATIC_IP:+--parameters dnsResolverInboundStaticIp="$LOOM_DNS_INBOUND_STATIC_IP"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
@@ -1659,6 +1747,8 @@ jobs:
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
             ${LOOM_INTERNAL_TOKEN:+--parameters loomInternalTokenValue="$LOOM_INTERNAL_TOKEN"} \
+            ${LOOM_VANITY_DOMAIN:+--parameters loomVanityDomain="$LOOM_VANITY_DOMAIN"} \
+            ${LOOM_VANITY_CUSTOM_DOMAIN_NAME:+--parameters loomVanityCustomDomainName="$LOOM_VANITY_CUSTOM_DOMAIN_NAME"} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${LOOM_DNS_INBOUND_STATIC_IP:+--parameters dnsResolverInboundStaticIp="$LOOM_DNS_INBOUND_STATIC_IP"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
