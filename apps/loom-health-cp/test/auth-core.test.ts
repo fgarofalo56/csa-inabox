@@ -198,6 +198,46 @@ describe('signers', () => {
     expect((await s.publicJwk()).kid).toBeTruthy();
     expect(() => new KeyVaultSigner({ cloud: 'commercial', keyId, getToken: async () => 't', fetchImpl })).toThrow('key id must be');
   });
+
+  // Live 2026-11-21 (dev01): the signing key is HSM-backed and Key Vault returns kty "EC-HSM".
+  // Breaks if publicJwk() accepts only "EC" (every token request then 500s at kid()), or if
+  // the published JWK keeps the non-standard "EC-HSM" kty (relying parties reject it).
+  it('KeyVaultSigner accepts an HSM-backed key (kty EC-HSM) and publishes a standard EC JWK', async () => {
+    const local = new LocalSigner();
+    const j = await local.publicJwk();
+    const keyId = `https://kv-test.vault.azure.net/keys/lhds-as/${'b'.repeat(32)}`;
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ key: { kty: 'EC-HSM', crv: j.crv, x: j.x, y: j.y } }), { status: 200 })) as unknown as typeof fetch;
+    const s = new KeyVaultSigner({ cloud: 'commercial', keyId, getToken: async () => 't', fetchImpl });
+    const pub = await s.publicJwk();
+    expect(pub.kty).toBe('EC');
+    expect(pub.crv).toBe('P-384');
+    expect(await s.kid()).toBe(pub.kid);
+    // Same key material => same RFC 7638 thumbprint as the in-process key, so the kid is not
+    // derived from the HSM label.
+    expect(pub.kid).toBe(j.kid);
+  });
+
+  // Breaks if a rejected read is cached (`this.pub ??= promise` without clearing on failure):
+  // the second call would re-throw the first failure instead of re-reading Key Vault.
+  it('KeyVaultSigner does not cache a failed key read: the next call reads Key Vault again', async () => {
+    const local = new LocalSigner();
+    const j = await local.publicJwk();
+    const keyId = `https://kv-test.vault.azure.net/keys/lhds-as/${'c'.repeat(32)}`;
+    let gets = 0;
+    const fetchImpl = (async () => {
+      gets += 1;
+      if (gets === 1) return new Response('busy', { status: 503 });
+      return new Response(JSON.stringify({ key: { kty: 'EC', crv: j.crv, x: j.x, y: j.y } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const s = new KeyVaultSigner({ cloud: 'commercial', keyId, getToken: async () => 't', fetchImpl });
+    await expect(s.kid()).rejects.toThrow('key vault returned 503');
+    expect(await s.kid()).toBe(j.kid);
+    expect(gets).toBe(2);
+    // and a success IS cached: no third read
+    await s.kid();
+    expect(gets).toBe(2);
+  });
 });
 
 describe('Entra federation exchange', () => {
