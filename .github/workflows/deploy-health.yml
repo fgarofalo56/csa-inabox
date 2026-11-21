@@ -403,10 +403,12 @@ jobs:
                '{ audiences: ($aud | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
                   controlPlane: $platform, acrName: $acr, acrResourceGroup: $rg, acrLoginServer: $login, environmentId: $env }
                 + (if ($fd | length) > 0 then { frontDoor: $fd } else {} end)' > temp/cp.json
-          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
-          echo "cae_id=$CAE" >> "$GITHUB_OUTPUT"
-          echo "fd_profile=$FD_NAME" >> "$GITHUB_OUTPUT"
-          echo "hub_rg=$HUB_RG" >> "$GITHUB_OUTPUT"
+          {
+            echo "acr=$ACR"
+            echo "cae_id=$CAE"
+            echo "fd_profile=$FD_NAME"
+            echo "hub_rg=$HUB_RG"
+          } >> "$GITHUB_OUTPUT"
           echo "::notice::Hub: registry $ACR, resource group $HUB_RG, control plane audiences $(jq '.audiences | length' temp/cp.json)."
 
       # W1b-1 (#5151): the authorization-server Entra app client id has no ARM source (it is an Entra
