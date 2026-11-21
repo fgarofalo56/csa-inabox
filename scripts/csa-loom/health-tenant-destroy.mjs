@@ -39,7 +39,7 @@ export const SYNTHETIC_RE = /^g1-[0-9]{12}$/;
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,19}$/;
 const STAMP_RE = /^[a-z0-9]{1,20}$/;
 const KEY_RE = /^[A-Za-z0-9._:-]{1,80}$/;
-const JOB_ID_RE = /^[A-Za-z0-9._:-]{1,200}$/;
+const JOB_ID_RE = /^job-[0-9a-f]{32}$/; // jobIdFor() in apps/loom-health-cp/src/jobs/runner.ts
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const MAX_READ_FAILURES = 5;
 
@@ -154,7 +154,7 @@ export async function runDestroy(c, deps = {}) {
     kind: 'tenant.destroy', subjectType: 'tenant', subjectId: c.tenant, idempotencyKey: c.idempotencyKey, input,
   });
   if (s.status === 'network-error') {
-    say(`SUBMIT OUTCOME UNKNOWN (${errText(s)}): the job may or may not exist. Re-run with idempotency key ${c.idempotencyKey} to read it back without submitting a second one.`);
+    say(`SUBMIT OUTCOME UNKNOWN (${errText(s)}): the job may or may not exist. Dispatch again with idempotency_key=${c.idempotencyKey} (or use Re-run on this run) to read it back without submitting a second one.`);
     return { code: 1 };
   }
   if ((s.status !== 202 && s.status !== 200) || s.json?.ok !== true || !JOB_ID_RE.test(String(s.json?.data?.id ?? ''))) {
@@ -178,7 +178,7 @@ export async function runDestroy(c, deps = {}) {
   printNew();
   while (!TERMINAL.has(job.state)) {
     if (d.now() >= deadline) {
-      say(`TIMEOUT: job ${redact(job.id, 200)} is still '${redact(job.state, 20)}' after ${c.timeoutS}s. It keeps running in the control plane; re-run with idempotency key ${c.idempotencyKey} to read it back. Outcome NOT verified.`);
+      say(`TIMEOUT: job ${redact(job.id, 200)} is still '${redact(job.state, 20)}' after ${c.timeoutS}s. It keeps running in the control plane; dispatch again with idempotency_key=${c.idempotencyKey} (or use Re-run on this run) to read it back. Outcome NOT verified.`);
       return { code: 1, job };
     }
     if (c.intervalS > 0) await d.sleep(c.intervalS * 1000);

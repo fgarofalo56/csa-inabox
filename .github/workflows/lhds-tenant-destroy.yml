@@ -56,9 +56,13 @@ on:
         type: boolean
         default: false
       timeout_s:
-        description: Seconds to wait for the job to finish (the job keeps running after this)
+        description: Seconds to wait for the job to finish, 1-2400 (the job keeps running after this)
         type: string
         default: '1800'
+      idempotency_key:
+        description: Empty = a new job for this run. Set it to the key a previous run printed to READ THAT JOB BACK instead of submitting another.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -79,6 +83,7 @@ jobs:
       ALLOW_NON_SYNTHETIC: ${{ inputs.allow_non_synthetic }}
       ALLOW_MISSING_STORAGE: ${{ inputs.allow_missing_storage }}
       TIMEOUT_S: ${{ inputs.timeout_s }}
+      IDEMPOTENCY_KEY: ${{ inputs.idempotency_key }}
       SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -95,7 +100,14 @@ jobs:
             echo "::error::tenant_id $TENANT_ID is not a G1 synthetic tenant (g1-<12 digits>); tick allow_non_synthetic to destroy it"
             exit 1
           fi
-          [[ "$TIMEOUT_S" =~ ^[0-9]{1,4}$ ]] || { echo "::error::timeout_s must be 1-4 digits"; exit 1; }
+          # Capped under the job's timeout-minutes (45 min) so the script's own TIMEOUT verdict prints
+          # instead of a GitHub cancel.
+          if ! [[ "$TIMEOUT_S" =~ ^[0-9]{1,4}$ ]] || [ "$TIMEOUT_S" -lt 1 ] || [ "$TIMEOUT_S" -gt 2400 ]; then
+            echo "::error::timeout_s must be 1-2400"; exit 1
+          fi
+          if [ -n "$IDEMPOTENCY_KEY" ] && ! [[ "$IDEMPOTENCY_KEY" =~ ^[A-Za-z0-9._:-]{1,80}$ ]]; then
+            echo "::error::idempotency_key must be 1-80 chars of A-Za-z0-9._:-"; exit 1
+          fi
           if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
 
       - name: Azure login (Commercial - limitlessdata_deploy SP)
@@ -172,7 +184,7 @@ jobs:
           set +e
           LHDS_CP_TOKEN="$TOKEN" node scripts/csa-loom/health-tenant-destroy.mjs \
             --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT_ID" --stamp "$STAMP_ID" \
-            --idempotency-key "destroy-wf-${TENANT_ID}-${GITHUB_RUN_ID}" \
+            --idempotency-key "${IDEMPOTENCY_KEY:-destroy-wf-${TENANT_ID}-${GITHUB_RUN_ID}}" \
             --allow-non-synthetic "$ALLOW_NON_SYNTHETIC" --allow-missing-storage "$ALLOW_MISSING_STORAGE" \
             --timeout-s "$TIMEOUT_S" --interval-s 15 | tee -a "$GITHUB_STEP_SUMMARY"
           rc="${PIPESTATUS[0]}"

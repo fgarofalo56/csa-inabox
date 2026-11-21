@@ -15,7 +15,7 @@ const cfg = (o = {}) => ({ cpUrl: 'https://cp.internal.example', tenant: 'g1-202
   timeoutS: 60, intervalS: 0, token: TOKEN, ...o });
 const json = (status, body) => ({ status, text: async () => JSON.stringify(body) });
 const tenantOk = (stampId = 'dev01', status = 'destroying') => json(200, { ok: true, data: { id: 'g1-202611200813', stampId, status } });
-const job = (state, receipts = [], extra = {}) => ({ id: 'job-tenant.destroy-abc', state, receipts, ...extra });
+const job = (state, receipts = [], extra = {}) => ({ id: 'job-0123456789abcdef0123456789abcdef', state, receipts, ...extra });
 
 /** routes: { 'GET /api/health/tenants/<t>': [resp, resp...], ... } - each route pops in order, last repeats. */
 function fakeCp(routes) {
@@ -47,7 +47,7 @@ test('happy path: submits the exact destroy body, prints each receipt once, exit
   const { r, calls, text, out } = await run(cfg(), {
     [`GET ${T}`]: [tenantOk(), json(200, { ok: true, data: { status: 'destroying' } })],
     'POST /api/health/jobs': [json(202, { ok: true, data: job('queued') })],
-    'GET /api/health/jobs/job-tenant.destroy-abc': [json(200, { ok: true, data: job('running', [r1]) }), json(200, { ok: true, data: job('succeeded', [r1, r2]) })],
+    'GET /api/health/jobs/job-0123456789abcdef0123456789abcdef': [json(200, { ok: true, data: job('running', [r1]) }), json(200, { ok: true, data: job('succeeded', [r1, r2]) })],
   });
   assert.equal(r.code, 0, 'a succeeded job must exit 0 (breaks if the success state is mis-tested)');
   const post = calls.find((c) => c.key === 'POST /api/health/jobs');
@@ -57,7 +57,7 @@ test('happy path: submits the exact destroy body, prints each receipt once, exit
   assert.equal(post.opts.headers.authorization, `Bearer ${TOKEN}`, 'breaks if the bearer is not sent');
   assert.equal(out.filter((l) => l.includes('tenant.destroying')).length, 1, 'r1 is in two job reads; breaks if receipts are re-printed');
   assert.ok(text.includes('resource.deleted'), 'breaks if the second receipt is never printed');
-  assert.ok(text.includes('RESULT job=job-tenant.destroy-abc state=succeeded receipts=2'), text);
+  assert.ok(text.includes('RESULT job=job-0123456789abcdef0123456789abcdef state=succeeded receipts=2'), text);
   assert.ok(!text.includes(SUB), 'the subscription GUID must be redacted from public output');
   assert.ok(text.includes('/subscriptions/<guid>/'), 'positive control: the redacted id is still printed');
   assert.ok(!text.includes(TOKEN), 'token leaked');
@@ -115,7 +115,7 @@ test('timeout: a job still running at the deadline exits 1, NOT verified', { tim
   const { r, text, calls } = await run(cfg({ timeoutS: 60 }), {
     [`GET ${T}`]: [tenantOk()],
     'POST /api/health/jobs': [json(202, { ok: true, data: job('queued') })],
-    'GET /api/health/jobs/job-tenant.destroy-abc': [json(200, { ok: true, data: job('running') })],
+    'GET /api/health/jobs/job-0123456789abcdef0123456789abcdef': [json(200, { ok: true, data: job('running') })],
   }, now);
   assert.equal(r.code, 1, 'breaks if the poll is unbounded (the test would hang) or a timeout reads green');
   assert.ok(text.includes('TIMEOUT') && text.includes('Outcome NOT verified'), text);
@@ -127,10 +127,10 @@ test('5 consecutive job-read failures stop the poll; a success in between resets
   const okRun = json(200, { ok: true, data: job('running') });
   const done = json(200, { ok: true, data: job('succeeded') });
   const reset = await run(cfg(), { [`GET ${T}`]: [tenantOk()], 'POST /api/health/jobs': [json(202, { ok: true, data: job('queued') })],
-    'GET /api/health/jobs/job-tenant.destroy-abc': [fail, fail, fail, fail, okRun, fail, done] });
+    'GET /api/health/jobs/job-0123456789abcdef0123456789abcdef': [fail, fail, fail, fail, okRun, fail, done] });
   assert.equal(reset.r.code, 0, '4 failures, a good read, 1 failure, then success: breaks if the counter never resets');
   const stop = await run(cfg(), { [`GET ${T}`]: [tenantOk()], 'POST /api/health/jobs': [json(202, { ok: true, data: job('queued') })],
-    'GET /api/health/jobs/job-tenant.destroy-abc': [fail, fail, fail, fail, fail, done] });
+    'GET /api/health/jobs/job-0123456789abcdef0123456789abcdef': [fail, fail, fail, fail, fail, done] });
   assert.equal(stop.r.code, 1, 'the 6th read would succeed: breaks if the cap is above 5');
   assert.ok(stop.text.includes('COULD NOT READ the job after 5'), stop.text);
 });
@@ -176,4 +176,11 @@ test('readConfig: arg beats env; token only from env, CR stripped; booleans stri
   assert.equal(c.allowNonSynthetic, false, 'only the exact string "true" opts in');
   assert.equal(c.intervalS, 5);
   assert.ok(Number.isNaN(readConfig(['--timeout-s', '1e3'], {}).timeoutS), 'non-digit numbers are rejected, not coerced');
+});
+
+test('a submit answer whose job id is not the CP format (job-<32 hex>) is refused, not polled', async () => {
+  const bad = await run(cfg(), { [`GET ${T}`]: [tenantOk()], 'POST /api/health/jobs': [json(202, { ok: true, data: { id: 'job-../x', state: 'queued', receipts: [] } })] });
+  assert.equal(bad.r.code, 1, 'breaks if JOB_ID_RE is loosened to admit path characters');
+  assert.ok(bad.text.includes('REFUSED by the control plane'), bad.text);
+  assert.equal(bad.calls.filter((c) => c.key.startsWith('GET /api/health/jobs/')).length, 0, 'an unvalidated id must never be put in a URL');
 });
