@@ -66,6 +66,26 @@
   (`compose.ts`). The control-plane identity needs Key Vault Crypto Officer on
   the stamp vault (`control-plane.bicep`) to shred keys.
 
+## Edge probe: per-tenant token mint (#5410, not yet exercised live)
+
+- Dispatch `.github/workflows/lhds-edge-probe.yml` (in-VNet `loom-aca`, Commercial
+  dev01). `mode=mint-only` creates two synthetic tenants (`ep-a-<yyyymmddhhmm>`,
+  `ep-b-...`), mints one SMART Backend Services token per tenant, checks the claims
+  (tenant, iss, exp, scope) and prints only a redacted verdict. `mode=probe` also runs
+  `scripts/measure/health/edge-probe.mjs` against `edge_base_url` in the same process,
+  so no token or key reaches a log, file or output. Cleanup runs under `always()`.
+- The issuer is DISCOVERED from the control plane
+  (`/auth/.well-known/openid-configuration`), never typed in; the client assertion
+  `aud` is the discovered issuer's token URL.
+- Exit 0 pass, 1 defect, 2 UNMEASURED (config, permission, or a transient that outlived
+  its 3 attempts). Positive control: tenant A's token on tenant A's path must answer
+  other than 401/403. A 404/502/503 is "passed auth; backend not serving" (the FHIR
+  backend is not deployed yet) and still counts.
+- Minted clients are DISABLED, not deleted: the control plane has PATCH but no DELETE
+  for `/api/health/auth/clients/<id>`. A disabled client cannot mint again, and the
+  tenant destroy makes the tenant's tokens unmintable anyway; the leftover documents
+  are tracked in a follow-up issue.
+
 ## PDP bundle publish
 
 - The control plane serves `GET /api/health/pdp/stamps/<id>/bundle.tar.gz`
