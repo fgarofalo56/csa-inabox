@@ -58,6 +58,11 @@ jobs:
       VANITY_HOST: ${{ inputs.vanity_host }}
       RG: ${{ inputs.resource_group }}
     steps:
+      # The diagnose/repair logic lives in scripts/csa-loom/gov-vanity-domain-repair.sh.
+      # Without a checkout the runner has no repo, and run 44935437486 died with
+      # "No such file or directory" (exit 127) before it read anything.
+      - uses: actions/checkout@v7.0.1
+
       - name: Validate inputs
         run: |
           set -euo pipefail
@@ -93,18 +98,26 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p temp
-          echo | timeout 20 openssl s_client -connect "$VANITY_HOST:443" -servername "$VANITY_HOST" > temp/vanity-sclient.txt 2> temp/vanity-sclient.err
-          RC=$?
-          if [ "$RC" -ne 0 ] && ! grep -q "BEGIN CERTIFICATE" temp/vanity-sclient.txt; then
-            echo "::error::TLS handshake to $VANITY_HOST failed (rc=$RC): $(head -c 300 temp/vanity-sclient.err)"
-            exit 1
-          fi
-          SUBJ=$(openssl x509 -noout -subject < temp/vanity-sclient.txt 2> temp/vanity-x509.err) || { echo "::error::could not parse the presented certificate: $(head -c 300 temp/vanity-x509.err)"; exit 1; }
-          SAN=$(openssl x509 -noout -ext subjectAltName < temp/vanity-sclient.txt 2>> temp/vanity-x509.err | tr -d '\n' | tr -s ' ')
-          echo "presented: $SUBJ | $SAN"
-          if printf '%s %s' "$SUBJ" "$SAN" | grep -qiF "$VANITY_HOST"; then
-            echo "::notice::$VANITY_HOST presents a certificate that names it."
-          else
-            echo "::error::$VANITY_HOST presents a certificate that does NOT name it ($SUBJ). Browsers refuse this with ERR_CERT_COMMON_NAME_INVALID. After a repair, Front Door can take several minutes to propagate; re-run mode=diagnose before concluding."
-            exit 1
-          fi
+          # After a repair the edge needs minutes to propagate: poll (bounded) so the repair
+          # run itself is the receipt. Diagnose reads once.
+          TRIES=1
+          [ "$MODE" = "repair" ] && TRIES=20
+          for i in $(seq 1 "$TRIES"); do
+            echo | timeout 20 openssl s_client -connect "$VANITY_HOST:443" -servername "$VANITY_HOST" > temp/vanity-sclient.txt 2> temp/vanity-sclient.err
+            RC=$?
+            if [ "$RC" -ne 0 ] && ! grep -q "BEGIN CERTIFICATE" temp/vanity-sclient.txt; then
+              echo "attempt $i: TLS handshake to $VANITY_HOST failed (rc=$RC): $(head -c 300 temp/vanity-sclient.err)"
+              SUBJ="(no certificate)"
+            else
+              SUBJ=$(openssl x509 -noout -subject < temp/vanity-sclient.txt 2> temp/vanity-x509.err) || SUBJ="(unparseable: $(head -c 200 temp/vanity-x509.err))"
+              SAN=$(openssl x509 -noout -ext subjectAltName < temp/vanity-sclient.txt 2>> temp/vanity-x509.err | tr -d '\n' | tr -s ' ')
+              echo "attempt $i presented: $SUBJ | $SAN"
+              if printf '%s %s' "$SUBJ" "$SAN" | grep -qiF "$VANITY_HOST"; then
+                echo "::notice::$VANITY_HOST presents a certificate that names it."
+                exit 0
+              fi
+            fi
+            [ "$i" -lt "$TRIES" ] && sleep 30
+          done
+          echo "::error::$VANITY_HOST presents a certificate that does NOT name it ($SUBJ) after $TRIES read(s). Browsers refuse this with ERR_CERT_COMMON_NAME_INVALID."
+          exit 1
