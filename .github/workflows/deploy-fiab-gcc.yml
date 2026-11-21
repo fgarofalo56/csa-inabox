@@ -107,7 +107,8 @@ permissions:
   issues: write
 
 env:
-  AZURE_CLOUD: AzureCloud   # GCC = Azure public + GCC M365 identity
+  # Vanity domain: GCC has no Front Door (frontDoorEnabled defaults false, gcc.bicepparam does not set it), so no custom domain exists to unbind; the deploy-fiab-gcch.yml adoption step is a no-op here. Port it first if GCC enables Front Door.
+  AZURE_CLOUD: AzureCloud  # GCC = Azure public + GCC M365 identity
   AZURE_LOCATION: eastus
   CSA_LOOM_BOUNDARY: GCC
   CSA_LOOM_DEPLOYMENT_MODE: single-sub

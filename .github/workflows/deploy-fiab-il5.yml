@@ -103,6 +103,7 @@ permissions:
   issues: write
 
 env:
+  # Vanity domain: il5.bicepparam sets frontDoorEnabled=false (no Front Door at IL5), so no custom domain exists to unbind; the deploy-fiab-gcch.yml adoption step is a no-op.
   AZURE_CLOUD: AzureUSGovernment
   AZURE_LOCATION: usgovvirginia
   CSA_LOOM_BOUNDARY: IL5

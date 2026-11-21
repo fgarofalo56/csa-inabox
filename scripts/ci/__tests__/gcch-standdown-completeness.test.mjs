@@ -1792,6 +1792,7 @@ const DISPOSITIONS = new Map([
   // deliberate stand-down into a red job. It carries GUARD already.
   ["Resolve the program budget's IMMUTABLE start date (#4253)", { mode: 'guard', summary: 'program budget' }],
   ['Resolve the console health binding (#5346)', { mode: 'guard', summary: 'the console health binding read' }],
+  ['Adopt the live vanity domain (never unbind it)', { mode: 'guard', summary: 'the live vanity domain read' }],
   [
     'Fail the run if the console health binding is UNKNOWN (#5346)',
     {
