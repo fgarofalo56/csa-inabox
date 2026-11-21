@@ -38,6 +38,45 @@ Producing that image is not covered here.
 5. **Register the stamp** with the control plane (`POST /api/health/stamps`),
    then create a `health-tenant` item in the Console.
 
+## Authorization-server issuer: served through Front Door (#5410)
+
+The SMART authorization server runs inside the control plane Container App
+(`loom-health-cp`), which lives in the **internal hub** Container Apps
+environment (public network access Disabled). The stamp Application Gateway is
+in the stamp VNet, which has no peering to the hub, so the old default issuer
+`https://<stamp ingress fqdn>/auth` answered 502 on every path (measured
+2026-11-21, Commercial dev01).
+
+The issuer is therefore served by the **existing** Front Door Premium profile
+(`fd-loom-*`, already Private-Link-connected to the hub environment for the
+console):
+
+- `modules/health/afd-issuer.bicep` creates a **dedicated** endpoint
+  (`lhds-auth-<stamp>`; the console endpoint and route are untouched), an origin
+  group probing `/auth/.well-known/openid-configuration`, an origin that is the
+  control plane FQDN with a Private Link connection to the environment, and a
+  route whose `patternsToMatch` is exactly `/auth/*`. Every other path,
+  including `/api/health/*`, is not served on that host. If the profile has a
+  `console-waf-policy`, a **new** security policy attaches the same WAF policy
+  to the new endpoint.
+- The control plane ingress is `external: true`. In an internal environment with
+  public network access Disabled that is still VNet / Private Link only.
+- The default issuer is `https://<Front Door endpoint host>/auth`.
+  `controlPlaneConfig.authIssuerUrl` still wins.
+- `deploy-health.yml` resolves the profile from the hub resource group
+  (exactly one; several is an error), passes it as `controlPlaneConfig.frontDoor`,
+  **approves** the Pending private-endpoint connection Front Door raises on the
+  environment (`scripts/csa-loom/approve-cae-private-endpoints.sh`, fail closed),
+  then verifies `/auth/.well-known/openid-configuration` returns 200 with the
+  configured issuer and that `/api/health/tenants` is not served on that host.
+
+| Boundary | Issuer path | Status |
+|---|---|---|
+| Commercial | Front Door | Supported-in-code; not yet deployed or verified live (merged, not deployed) |
+| GCC-High | Front Door | Supported-in-code, never exercised for LHDS |
+| IL5, DoD | none (Front Door is disabled) | Supported-in-code with a **known gap**: the issuer falls back to the stamp ingress URL, which has no path to the control plane. The workflow emits `::warning::issuer unreachable: no Front Door on this boundary`. An Application Gateway path is a tracked follow-up |
+| GCC | Front Door | Supported-in-code, never exercised (no GCC tenant) |
+
 ## Ingress TLS: self-signed by default, issued by the control plane
 
 With `healthConfig.tlsCertificateSecretUri` empty (the default on every param

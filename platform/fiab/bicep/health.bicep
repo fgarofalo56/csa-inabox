@@ -45,8 +45,13 @@
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
 //     required on aks), pdpReplicas (default 2),
-//   authIssuerUrl, authFhirBaseUrl (optional overrides: default https://<stamp ingress fqdn>/auth and
-//     https://<stamp ingress fqdn>), authAsClientId (the Entra app loom-health-cp-as; supplied by
+//   frontDoor ({profileName, resourceGroup?, subscriptionId?, wafPolicyId?}; the EXISTING Front Door Premium
+//     profile that serves the issuer on a /auth/*-only route, #5410; deploy-health.yml resolves it from the hub
+//     resource group. Absent = no Front Door on this boundary: the issuer default stays the stamp ingress URL,
+//     which has no path to the control plane, and healthIssuerState says so),
+//   authIssuerUrl, authFhirBaseUrl (optional overrides: authIssuerUrl defaults to https://<Front Door issuer
+//     endpoint host>/auth when frontDoor is set, else https://<stamp ingress fqdn>/auth; authFhirBaseUrl
+//     defaults to https://<stamp ingress fqdn>), authAsClientId (the Entra app loom-health-cp-as; supplied by
 //     deploy-health.yml; reported in healthControlPlaneState.authServerMissing when empty), authGraphConsentUrl
 //     (optional), authSigningKeyId (optional; default = a key created in the stamp vault),
 //   apim (object; publishes the lhds-tenant-routing fragment and grants the APIM identity
@@ -179,7 +184,19 @@ var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed
 // and ingressTlsExpectedIssuedSecretUri.
 var cpIssuesIngressCert = empty(string(healthConfig.?tlsCertificateSecretUri ?? '')) && bool(healthConfig.?selfSignedTls ?? true)
 var cpIngressFqdn = healthDeploy ? string(healthStamp!.outputs.stamp.ingressPublicFqdn) : ''
-var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}/auth'))
+// #5410 issuer via Front Door. The control plane runs in the INTERNAL hub environment, which the stamp
+// Application Gateway cannot reach (0 VNet peerings, measured 2026-11-21), so https://<stamp ingress>/auth
+// answered 502. When controlPlaneConfig.frontDoor names the existing profile, the issuer default is the host of
+// a dedicated Front Door endpoint (route /auth/* only). The endpoint is created by a first invocation of
+// afd-issuer.bicep BEFORE the control plane (which needs the issuer at creation); the origin and route are
+// created by a second invocation AFTER it (they need the control plane FQDN).
+var fdCfg = controlPlaneConfig.?frontDoor ?? {}
+var fdProfileName = string(fdCfg.?profileName ?? '')
+var fdSubscriptionId = string(fdCfg.?subscriptionId ?? hubSubscriptionId)
+var fdResourceGroup = string(fdCfg.?resourceGroup ?? hubResourceGroup)
+var fdIssuerDeploy = cpDeploy && cpPlatform == 'containerApps' && !empty(fdProfileName)
+var cpStampIssuerUrl = empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}/auth'
+var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? (fdIssuerDeploy ? healthAuthEndpoint!.outputs.issuerUrl : cpStampIssuerUrl))
 var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? (empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'))
 var cpAuthAsClientId = string(controlPlaneConfig.?authAsClientId ?? '')
 var cpAuthMissing = concat(
@@ -235,6 +252,19 @@ module healthHubVaultPe 'modules/health/hub-vault-pe.bicep' = if (hubVaultPeDepl
   }
 }
 
+module healthAuthEndpoint 'modules/health/afd-issuer.bicep' = if (fdIssuerDeploy) {
+  name: 'lhds-afd-issuer-endpoint-${healthStampName}'
+  scope: resourceGroup(fdSubscriptionId, fdResourceGroup)
+  params: {
+    profileName: fdProfileName
+    stampName: healthStampName
+    cpFqdn: ''
+    caeId: cpEnvironmentId
+    caeLocation: location
+    tags: tags
+  }
+}
+
 module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   name: 'lhds-control-plane-${healthStampName}'
   scope: healthRg
@@ -275,6 +305,21 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   dependsOn: [
     healthHubVaultPe
   ]
+}
+
+// Second invocation (#5410): the origin group, origin, /auth/* route and WAF, now that the control plane FQDN exists.
+module healthAuthRoute 'modules/health/afd-issuer.bicep' = if (fdIssuerDeploy) {
+  name: 'lhds-afd-issuer-route-${healthStampName}'
+  scope: resourceGroup(fdSubscriptionId, fdResourceGroup)
+  params: {
+    profileName: fdProfileName
+    stampName: healthStampName
+    cpFqdn: healthControlPlane!.outputs.fqdn
+    caeId: cpEnvironmentId
+    caeLocation: location
+    wafPolicyId: string(fdCfg.?wafPolicyId ?? '')
+    tags: tags
+  }
 }
 
 // ── PDP (apps/loom-health-pdp): one OPA per stamp, bundle pulled from the control plane ──
@@ -380,6 +425,20 @@ output healthPdpState object = pdpDeploy ? {
 
 @description('LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false.')
 output healthStamp object = healthDeploy ? healthStamp!.outputs.stamp : {}
+
+@description('Issuer edge state (#5410). viaFrontDoor:true with the issuer URL and the Front Door host, or viaFrontDoor:false with the gap stated. Never reports a reachable issuer it did not deploy.')
+output healthIssuerState object = fdIssuerDeploy ? {
+  viaFrontDoor: true
+  issuerUrl: cpAuthIssuerUrl
+  frontDoorEndpointHost: healthAuthRoute!.outputs.endpointHostName
+  routePatterns: ['/auth/*']
+  wafAttached: healthAuthRoute!.outputs.wafAttached
+  privateLinkApproval: 'not done by ARM: deploy-health.yml approves the Pending connection on the environment'
+} : {
+  viaFrontDoor: false
+  issuerUrl: cpAuthIssuerUrl
+  reason: !cpDeploy ? 'control plane not deployed' : (cpPlatform != 'containerApps' ? 'control plane runs on aks: the issuer is not served through Front Door' : 'controlPlaneConfig.frontDoor.profileName is empty: no Front Door profile on this boundary, so the issuer URL has no path to the control plane (supported-in-code, follow-up)')
+}
 
 @description('Control-plane state. deployed:true with the platform and endpoints, or deployed:false with the specific precondition that was missing. Never reports deployed over a skipped module.')
 output healthControlPlaneState object = cpDeploy ? {
