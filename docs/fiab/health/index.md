@@ -60,6 +60,6 @@ only with a deploy receipt.
 ## Related issues
 
 - [#5140](https://github.com/fgarofalo56/csa-inabox/issues/5140) PDP bundle endpoint serves any stamp bundle to any Reader token
-- [#5141](https://github.com/fgarofalo56/csa-inabox/issues/5141) `engines.bicep` header says not wired into `health.bicep`, but it is
+- [#5141](https://github.com/fgarofalo56/csa-inabox/issues/5141) `engines.bicep` header says not wired into `health.bicep`, but it is (header fixed in #5422)
 - [#5142](https://github.com/fgarofalo56/csa-inabox/issues/5142) `persist:true` on emptyDir survives container restarts only, not pod reschedules
 - [#5143](https://github.com/fgarofalo56/csa-inabox/issues/5143) reconcile `main.json` 4 MiB ARM headroom figures

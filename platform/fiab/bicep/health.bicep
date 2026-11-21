@@ -44,7 +44,8 @@
 //   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
-//     required on aks), pdpReplicas (default 2),
+//     required on aks), pdpReplicas (default 2), pdpApplyPrincipalId (object id of the service principal that
+//     applies the PDP manifest; gets the Kubernetes data role Azure Kubernetes Service RBAC Cluster Admin, #5422),
 //   frontDoor ({profileName, resourceGroup?, subscriptionId?}; the EXISTING Front Door Premium
 //     profile that serves the issuer on a /auth/*-only route, #5410; deploy-health.yml resolves it from the hub
 //     resource group. Absent = no Front Door on this boundary: the issuer default stays the stamp ingress URL,
@@ -298,6 +299,11 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     stampRegion: healthLocation
     stampClass: toUpper(string(healthConfig.?profile ?? 'dev')) == 'DEV' ? 'S' : toUpper(string(healthConfig.?profile ?? 'dev'))
     stampBaseUrl: empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'
+    // #5422: the stamp cluster the control plane drives through ARM runCommand, and the in-cluster PDP address it
+    // writes into tenant engine config. The PDP address is computed from inputs (pdpName/pdpNamespace), not read
+    // from the healthPdp module: that module consumes this one's FQDN, so reading its output would be a cycle.
+    stampAksClusterName: healthStamp!.outputs.stamp.aksClusterName
+    pdpUrl: pdpDeploy ? pdpDecisionEndpoint : ''
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
   }
@@ -327,11 +333,20 @@ var pdpCpBaseUrlOverride = string(controlPlaneConfig.?pdpControlPlaneBaseUrl ?? 
 // The condition may not read module outputs, so the containerApps default is decided on inputs only.
 var pdpUrlKnown = startsWith(pdpCpBaseUrlOverride, 'https://') || cpPlatform == 'containerApps'
 var pdpDeploy = cpDeploy && !empty(pdpPublicKey) && pdpUrlKnown
+var pdpName = 'loom-health-pdp'
+var pdpNamespace = 'loom-health'
+// MUST equal engines.bicep output decisionEndpoint (pinned by scripts/ci/__tests__/lhds-engine-delivery.test.mjs).
+var pdpDecisionEndpoint = 'http://${pdpName}.${pdpNamespace}.svc.cluster.local/v1/data/lhds/authz/decision'
+// Object id of the service principal that runs the apply (deploy-health.yml resolves it); empty = no data-role grant.
+var pdpApplyPrincipalId = string(controlPlaneConfig.?pdpApplyPrincipalId ?? '')
 
 module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
   name: 'lhds-pdp-${healthStampName}'
   scope: healthRg
   params: {
+    name: pdpName
+    aksNamespace: pdpNamespace
+    applyPrincipalId: pdpApplyPrincipalId
     location: healthLocation
     image: '${cpAcrLoginServer}/opa:${string(controlPlaneConfig.?pdpImageTag ?? '1.9.0-static')}'
     acrName: cpAcrName
@@ -417,6 +432,12 @@ output healthPdpState object = pdpDeploy ? {
   deployed: true
   decisionEndpoint: healthPdp!.outputs.decisionEndpoint
   identityPrincipalId: healthPdp!.outputs.identityPrincipalId
+  // Applied by deploy-health.yml through scripts/csa-loom/aks-apply-manifest.sh. No private material.
+  manifest: healthPdp!.outputs.manifest
+  namespace: healthPdp!.outputs.namespace
+  deploymentName: healthPdp!.outputs.deploymentName
+  aksClusterName: healthStamp!.outputs.stamp.aksClusterName
+  resourceGroup: healthRg.name
 } : {
   deployed: false
   reason: !cpDeploy ? 'control plane not deployed' : (empty(pdpPublicKey) ? 'controlPlaneConfig.pdpBundleVerificationPublicKeyPem is empty' : 'controlPlaneConfig.pdpControlPlaneBaseUrl must be an https URL (required on the aks control-plane path)')

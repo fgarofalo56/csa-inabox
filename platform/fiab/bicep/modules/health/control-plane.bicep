@@ -135,6 +135,12 @@ param stampClass string = ''
 @description('Stamp public ingress base URL (https://<ingress fqdn>), recorded as the stamp baseUrl the routing publisher serves. Required with stampId.')
 param stampBaseUrl string = ''
 
+@description('Stamp AKS cluster (same resource group as this module) the control plane drives through ARM managedClusters/runCommand (#5422). Empty = no Kubernetes data-role grant.')
+param stampAksClusterName string = ''
+
+@description('In-cluster decision endpoint of the stamp PDP, emitted as LOOM_HEALTH_CP_PDP_URL for the tenant engine config. Empty = PDP not deployed, no env emitted.')
+param pdpUrl string = ''
+
 @description('Tags.')
 param tags object = {}
 
@@ -301,6 +307,36 @@ resource cpStampRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// ── Stamp AKS: run kubectl through ARM runCommand (#5422) ─────────────────────
+// The private stamp cluster has no network path from the hub, so the control plane reaches it with
+// `managedClusters/runCommand`. ARM half: Microsoft.ContainerService/managedClusters/runcommand/action and
+// .../commandResults/read. No separate grant: Contributor on this resource group (cpStampContributor above)
+// carries both through managedClusters/*, and the only built-in role that names runcommand
+// (Azure Kubernetes Service Cluster Admin Role) lacks commandResults/read.
+// https://learn.microsoft.com/azure/aks/access-private-cluster (RBAC actions row)
+// Kubernetes half (the cluster uses Azure RBAC, local accounts disabled): Azure Kubernetes Service RBAC Writer,
+// a DATA role: read/write of namespaced objects (Deployment, ConfigMap, ServiceAccount, Service, Secret, Pod,
+// Job); it cannot create Namespaces, touch RBAC objects or any other cluster-scoped object. Cluster scope,
+// not namespace scope, because Bicep cannot scope an assignment to a Kubernetes namespace and tenant
+// namespaces are not known at deploy time. Namespace creation belongs to the deploy workflow.
+// https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/containers (RBAC Writer)
+var aksRbacWriterRoleId = 'a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb'
+
+resource stampCluster 'Microsoft.ContainerService/managedClusters@2025-04-01' existing = if (!empty(stampAksClusterName)) {
+  name: stampAksClusterName
+}
+
+resource cpAksRbacWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(stampAksClusterName) && !skipRoleGrants) {
+  scope: stampCluster
+  name: guid(resourceGroup().id, stampAksClusterName, cpIdentity.id, aksRbacWriterRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacWriterRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: apply tenant engine workloads to the stamp cluster through az aks command invoke (Kubernetes data role).'
+  }
+}
+
 // ── Ingress TLS certificate (#5345) ───────────────────────────────────────────
 // The control plane ensures the ingress certificate in the stamp vault (apps/loom-health-cp
 // src/tls/ingress-cert.ts). Key Vault Certificates Officer = certificate create/read/renew on the
@@ -452,7 +488,13 @@ var stampEnv = empty(stampId) ? [] : [
   { name: 'LOOM_HEALTH_CP_STAMP_BASE_URL', value: stampBaseUrl }
 ]
 
-var cpEnv = concat(authEnv, tlsEnv, stampEnv, [
+// #5422: where tenant FHIR engines call the stamp PDP. In-cluster address: the control plane writes it into
+// engine config, it never calls it. Absent when the PDP is not deployed (engines then fail closed, 503).
+var pdpEnv = empty(pdpUrl) ? [] : [
+  { name: 'LOOM_HEALTH_CP_PDP_URL', value: pdpUrl }
+]
+
+var cpEnv = concat(authEnv, tlsEnv, stampEnv, pdpEnv, [
   { name: 'PORT', value: string(servicePort) }
   { name: 'LOOM_HEALTH_CP_CLOUD', value: cloudName }
   { name: 'LOOM_HEALTH_CP_TENANT_ID', value: entraTenantId }

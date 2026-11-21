@@ -28,6 +28,27 @@ export interface Config {
   sloAvailabilityTarget: number;
   /** Directory holding <stamp>.tar.gz signed PDP bundles. Empty = bundle route answers 503. */
   pdpBundleDir: string;
+  /**
+   * In-cluster decision endpoint of the stamp PDP (LOOM_HEALTH_CP_PDP_URL, set by control-plane.bicep when the PDP
+   * deploys). Written into tenant engine config, never called from here. Empty = no PDP: engines then answer 503.
+   */
+  pdpUrl: string;
+}
+
+/** Empty is allowed (PDP not deployed); anything else must be a bare http(s) URL. */
+export function parsePdpUrl(raw: string | undefined): string {
+  const v = (raw ?? '').trim();
+  if (!v) return '';
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be an http(s) URL');
+  }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash) {
+    throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be an http(s) URL without credentials, query or fragment');
+  }
+  return v.replace(/\/$/, '');
 }
 
 export class ConfigError extends Error {}
@@ -92,5 +113,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cosmosDatabase: (env.LOOM_HEALTH_CP_COSMOS_DATABASE ?? '').trim() || 'loom-health-cp',
     sloAvailabilityTarget: target,
     pdpBundleDir: (env.LOOM_HEALTH_CP_PDP_BUNDLE_DIR ?? '').trim(),
+    pdpUrl: parsePdpUrl(env.LOOM_HEALTH_CP_PDP_URL),
   };
 }

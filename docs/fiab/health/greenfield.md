@@ -172,6 +172,44 @@ run reports it.
   `snet-script`, a staging storage account and a script identity. Incremental
   deploys do not delete them; remove them by hand if unwanted.
 
+## Stamp workloads: the PDP is applied through `az aks command invoke` (#5422)
+
+The stamp cluster is private with local accounts disabled and no network path
+from the hub or a runner, so no workload can be applied by `kubectl` from CI and
+a `deploymentScripts` resource cannot run (same shared-key policy as the TLS
+script). `engines.bicep` therefore deploys only the ARM resources (PDP identity,
+federated credential, kubelet `AcrPull`) and **renders the Kubernetes manifest as
+the output `healthPdpState.manifest`**: the single source of truth. After the
+infrastructure apply, `deploy-health.yml` writes it to a file and runs
+`scripts/csa-loom/aks-apply-manifest.sh`, which uses ARM
+`managedClusters/runCommand` (`kubectl apply`, then `kubectl rollout status`
+bounded to 300 s). Every exit code is read; a permission refusal is retried a
+bounded number of times (a new role assignment takes minutes), anything else
+fails the run with the cause named (exit 3 permission, 4 kubectl failure, 5 not
+Ready, 6 outcome unknown).
+
+- **Gate: the bundle verification key.** The PDP deploys only when
+  `controlPlaneConfig.pdpBundleVerificationPublicKeyPem` is set; the workflow
+  reads it from the repository variable `LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM`
+  (EC P-256 PUBLIC key; the step refuses a private key). Unset: the run says
+  "PDP not deployed" and nothing is applied. Where the private half lives and who
+  signs bundles is an open decision (the publish workflow reads a Key Vault
+  secret the private stamp vault does not let a runner reach). **This is a day-one
+  gate, not a finished state.**
+- **Not Ready until a signed bundle exists.** The PDP pod's readiness is
+  `/health?bundles`, so a first apply with no published bundle fails at the
+  rollout step. That is the intended fail-closed signal, not a defect.
+- **Roles.** The signed-in deploy principal gets Kubernetes data role
+  `Azure Kubernetes Service RBAC Cluster Admin` on the cluster
+  (`controlPlaneConfig.pdpApplyPrincipalId`, resolved by the workflow): the
+  manifest creates a Namespace, which is cluster-scoped. The control plane
+  identity gets `Azure Kubernetes Service RBAC Writer` on the cluster for
+  namespaced objects, and `LOOM_HEALTH_CP_PDP_URL` (the in-cluster decision
+  endpoint) in its environment. Its ARM runCommand rights come from
+  `Contributor` on the stamp resource group.
+- **Not exercised:** no deploy has run this path. Commercial and GCC-High are
+  supported in code only.
+
 ## Failure handling
 
 The workflow classifies failures (permission, not found, transient,

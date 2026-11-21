@@ -451,6 +451,41 @@ jobs:
           mv temp/cp.next.json temp/cp.json
           echo "::notice::authorization-server client id resolved from the $SRC (an app registration id, not a secret)."
 
+      # PDP INPUTS (#5422). The stamp PDP (OPA) deploys only when health.bicep is given the PUBLIC key that
+      # verifies bundle signatures. Public material, so it may live in a repository variable. Where the PRIVATE
+      # half lives and who signs bundles is an open design decision (see the PR): until the variable is set the
+      # PDP is NOT deployed and the run says so; it never deploys a PDP that cannot verify a bundle. When it is
+      # set, the service principal this run signs in as is resolved to an object id so health.bicep can grant it
+      # the Kubernetes data role the manifest apply needs (the cluster uses Azure RBAC; Owner carries no data role).
+      - name: Resolve the PDP inputs (bundle verification public key, applying principal)
+        id: pdpinputs
+        if: ${{ steps.verdict.outputs.standdown != 'true' && steps.audiences.outputs.resolved == 'true' }}
+        env:
+          PDP_PUBKEY: ${{ vars.LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM || '' }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ -z "$PDP_PUBKEY" ]; then
+            echo "::notice::PDP NOT deployed by this run: the repository variable LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM (the ES256 PUBLIC key that verifies PDP bundles) is not set. Without it the PDP could not verify any bundle."
+            echo "### deploy-health: PDP not deployed ($BOUNDARY)" >> "$GITHUB_STEP_SUMMARY"
+            echo "LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM is not set, so health.bicep skips the stamp PDP and the control plane gets no LOOM_HEALTH_CP_PDP_URL." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          problem() { echo "::error::$1"; exit 1; }
+          case "$PDP_PUBKEY" in *PRIVATE*) problem "LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM contains a PRIVATE key marker. It must hold the PUBLIC key only. Remove it from the variable and rotate that key." ;; esac
+          printf '%s\n' "$PDP_PUBKEY" | openssl pkey -pubin -noout -text > temp/pdp-pub.txt 2> temp/pdp-pub.err
+          if [ "$?" != "0" ]; then problem "LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM is not a PEM public key ($(head -c 200 temp/pdp-pub.err))."; fi
+          if ! grep -qE 'prime256v1|P-256' temp/pdp-pub.txt; then problem "LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM is not an EC P-256 key; bundle signatures are ES256."; fi
+          CLIENT=$(az account show --query user.name -o tsv 2> temp/acct.err)
+          if [ "$?" != "0" ] || [ -z "$CLIENT" ]; then problem "could not read the signed-in principal (az: $(head -c 300 temp/acct.err)), so the PDP apply cannot be authorised."; fi
+          OID=$(az ad sp show --id "$CLIENT" --query id -o tsv 2> temp/sp.err)
+          if [ "$?" != "0" ] || ! printf '%s' "$OID" | grep -Eq '^[0-9a-fA-F-]{36}$'; then
+            problem "could not resolve the object id of the signed-in service principal $CLIENT (az: $(head -c 300 temp/sp.err)). The deploy identity needs Graph Application.Read.All, or no PDP can be applied."
+          fi
+          jq --arg pem "$PDP_PUBKEY" --arg oid "$OID" '. + {pdpBundleVerificationPublicKeyPem: $pem, pdpApplyPrincipalId: $oid}' temp/cp.json > temp/cp.next.json || { echo "::error::could not add the PDP inputs to temp/cp.json"; exit 1; }
+          mv temp/cp.next.json temp/cp.json
+          echo "::notice::PDP inputs resolved: public key accepted (EC P-256), applying principal object id resolved. No key material printed."
+
       - name: Refuse to adopt or duplicate an existing LHDS stamp
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.allow_existing_hub != true }}
         run: |
@@ -752,6 +787,40 @@ jobs:
             echo "::error::the control plane deployed WITHOUT authorization-server values and will not start: missing $(jq -c '.healthControlPlaneState.value.authServerMissing' temp/outputs.json)."
             exit 1
           fi
+
+      # STAMP PDP DELIVERY (#5422). health.bicep deploys the PDP's ARM resources and RENDERS its manifest as the
+      # output healthPdpState.manifest (single source of truth: engines.bicep). Nothing in ARM can apply a
+      # manifest here (no deploymentScripts: policy forces storage shared-key off), so it is applied through
+      # `az aks command invoke` by scripts/csa-loom/aks-apply-manifest.sh, which reads every exit code and
+      # waits, bounded, for the Deployment to be Ready. The PDP is not Ready until a SIGNED bundle is active, so
+      # a stamp with no published bundle fails HERE, loudly, and is never reported as deployed.
+      - name: Apply the stamp PDP manifest (az aks command invoke)
+        id: pdpapply
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::notice::The stamp PDP was not deployed by this run ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json)), so there is no manifest to apply."
+            echo "Stamp PDP: NOT deployed ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json))." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          RG=$(jq -r '.healthPdpState.value.resourceGroup // ""' temp/outputs.json)
+          CLUSTER=$(jq -r '.healthPdpState.value.aksClusterName // ""' temp/outputs.json)
+          NS=$(jq -r '.healthPdpState.value.namespace // ""' temp/outputs.json)
+          DEP=$(jq -r '.healthPdpState.value.deploymentName // ""' temp/outputs.json)
+          jq -r '.healthPdpState.value.manifest // ""' temp/outputs.json > temp/pdp-manifest.yaml
+          if [ -z "$RG" ] || [ -z "$CLUSTER" ] || [ -z "$NS" ] || [ -z "$DEP" ] || ! grep -q '^kind: Deployment' temp/pdp-manifest.yaml; then
+            echo "::error::healthPdpState says deployed but lacks what the apply needs (resourceGroup='$RG', cluster='$CLUSTER', namespace='$NS', deployment='$DEP', manifest bytes=$(wc -c < temp/pdp-manifest.yaml)). This is a template defect."
+            exit 1
+          fi
+          bash scripts/csa-loom/aks-apply-manifest.sh --resource-group "$RG" --cluster "$CLUSTER" --namespace "$NS" --deployment "$DEP" --manifest temp/pdp-manifest.yaml
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::The stamp PDP manifest was NOT confirmed applied and Ready (aks-apply-manifest.sh exit $RC: 3 permission, 4 kubectl failure, 5 not Ready in time, 6 outcome unknown, 2 usage). The infrastructure deployment itself succeeded; the cause is in the step output above."
+            exit 1
+          fi
+          echo "Stamp PDP: manifest applied and $NS/$DEP rolled out in $CLUSTER (read back from kubectl)." >> "$GITHUB_STEP_SUMMARY"
 
       # AUTO-BIND (#5346): nothing bound LOOM_HEALTH_CP_URL / LOOM_HEALTH_CP_AUDIENCE /
       # LOOM_HEALTH_DEFAULT_STAMP_ID into the console, so an operator hand-set them in /admin/env-config.

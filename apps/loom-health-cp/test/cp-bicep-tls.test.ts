@@ -26,7 +26,7 @@ describe('ingress TLS issued by the control plane (#5345)', () => {
   it('the control plane receives the vault URL, FQDN and cert name only when it issues the certificate', () => {
     // Breaks if the env rows are emitted unconditionally (a supplied CA certificate would then also be issued over).
     expect(cp).toMatch(/var tlsEnv = issueIngressCert \? \[[\s\S]*LOOM_HEALTH_CP_TLS_VAULT_URL[\s\S]*LOOM_HEALTH_CP_TLS_FQDN[\s\S]*LOOM_HEALTH_CP_TLS_CERT_NAME[\s\S]*\] : \[\]/);
-    expect(cp).toContain('var cpEnv = concat(authEnv, tlsEnv, stampEnv, [');
+    expect(cp).toContain('var cpEnv = concat(authEnv, tlsEnv, stampEnv, pdpEnv, [');
     expect(health).toContain("tlsFqdn: cpIssuesIngressCert ? cpIngressFqdn : ''");
     expect(health).toContain('tlsVaultUrl: healthStamp!.outputs.stamp.keyVaultUri');
   });

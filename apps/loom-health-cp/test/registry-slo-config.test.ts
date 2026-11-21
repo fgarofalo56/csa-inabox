@@ -146,6 +146,19 @@ describe('config', () => {
     expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_COSMOS_ENDPOINT: 'http://insecure' })).toThrow(/https/);
     expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET: '1' })).toThrow(/between 0 and 1/);
   });
+  it('LOOM_HEALTH_CP_PDP_URL: unset is "no PDP" (empty), the in-cluster endpoint passes verbatim, junk fails closed (#5422)', () => {
+    const endpoint = 'http://loom-health-pdp.loom-health.svc.cluster.local/v1/data/lhds/authz/decision';
+    // Breaks if an unset var starts throwing (a stamp without a PDP could not start) or yields undefined.
+    expect(loadConfig(base).pdpUrl).toBe('');
+    // Breaks if the value is rewritten (a dropped path would send engines to the wrong OPA route).
+    expect(loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: endpoint }).pdpUrl).toBe(endpoint);
+    // Breaks if the trailing slash is kept (engine config would double it).
+    expect(loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: ' http://pdp.ns.svc/ ' }).pdpUrl).toBe('http://pdp.ns.svc');
+    // Each of these must throw: not a URL, wrong scheme, embedded credentials, query string.
+    for (const bad of ['not a url', 'ftp://pdp.ns.svc', 'http://u:p@pdp.ns.svc', 'http://pdp.ns.svc/x?y=1']) {
+      expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: bad }), bad).toThrow(/LOOM_HEALTH_CP_PDP_URL/);
+    }
+  });
   it('an authority override must be a bare hostname', () => {
     expect(resolveAuthorityHost('commercial', 'login.example.us')).toBe('login.example.us');
     expect(() => resolveAuthorityHost('commercial', 'evil.com/path?x')).toThrow(ConfigError);
