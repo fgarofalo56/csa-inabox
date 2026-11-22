@@ -11,6 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError, badRequest } from '../http/errors.js';
 import type { Collection, Doc } from '../store/types.js';
+import { authoredMessage } from '../safe-error.js';
 import { BundleSignError, signBundle, type BundleSigner } from './bundle-sign.js';
 
 export interface PublishedBundle {
@@ -112,7 +113,7 @@ export class CollectionBundleSource implements BundleSource {
     try {
       signed = await signBundle(bytes, this.signer);
     } catch (e) {
-      if (e instanceof BundleSignError) throw badRequest(e.message);
+      if (e instanceof BundleSignError) throw badRequest(authoredMessage(e));
       // Not a claim about the cause: the sign request or the check of its answer failed after the bundle validated.
       throw new HttpError(502, 'bundle_signing_failed', 'the control plane could not produce a verified signature for the bundle (cause not established); nothing was stored');
     }

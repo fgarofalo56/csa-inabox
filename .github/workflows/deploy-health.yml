@@ -467,10 +467,10 @@ jobs:
             echo "::warning::$1 (what-if continues WITHOUT the PDP grant; a full run would stop here)."
             exit 0
           }
-          CLIENT=$(az account show --query user.name -o tsv 2> temp/acct.err)
-          if [ "$?" != "0" ] || [ -z "$CLIENT" ]; then problem "could not read the signed-in principal (az: $(head -c 300 temp/acct.err)), so the PDP apply cannot be authorised."; fi
-          OID=$(az ad sp show --id "$CLIENT" --query id -o tsv 2> temp/sp.err)
-          if [ "$?" != "0" ] || ! printf '%s' "$OID" | grep -Eq '^[0-9a-fA-F-]{36}$'; then
+          RC=0; CLIENT=$(az account show --query user.name -o tsv 2> temp/acct.err) || RC=$?
+          if [ "$RC" != "0" ] || [ -z "$CLIENT" ]; then problem "could not read the signed-in principal (az: $(head -c 300 temp/acct.err)), so the PDP apply cannot be authorised."; fi
+          RC=0; OID=$(az ad sp show --id "$CLIENT" --query id -o tsv 2> temp/sp.err) || RC=$?
+          if [ "$RC" != "0" ] || ! printf '%s' "$OID" | grep -Eq '^[0-9a-fA-F-]{36}$'; then
             problem "could not resolve the object id of the signed-in service principal $CLIENT (az: $(head -c 300 temp/sp.err)). The deploy identity needs Graph Application.Read.All, or no PDP manifest can be applied."
           fi
           jq --arg oid "$OID" '. + {pdpApplyPrincipalId: $oid}' temp/cp.json > temp/cp.next.json || { echo "::error::could not add pdpApplyPrincipalId to temp/cp.json"; exit 1; }
@@ -703,8 +703,8 @@ jobs:
           if [ -z "$HOST" ] || [ -z "$STAMP" ] || [ -z "$AUD" ]; then
             skip_pdp "the deploy outputs gave host='$HOST', stamp='$STAMP', audience='$AUD', so the verification key cannot be requested (template defect)."
           fi
-          TOKEN=$(az account get-access-token --resource "$AUD" --query accessToken -o tsv 2> temp/tok.err)
-          if [ "$?" != "0" ] || [ -z "$TOKEN" ]; then
+          RC=0; TOKEN=$(az account get-access-token --resource "$AUD" --query accessToken -o tsv 2> temp/tok.err) || RC=$?
+          if [ "$RC" != "0" ] || [ -z "$TOKEN" ]; then
             skip_pdp "could not get a token for the control plane audience $AUD as the deploy principal (az: $(head -c 300 temp/tok.err))."
           fi
           echo "::add-mask::$TOKEN"
@@ -729,8 +729,7 @@ jobs:
           jq -r '.data.publicKeyPem // ""' temp/pdp-key.json > temp/pdp-key.pub
           KEYID=$(jq -r '.data.keyId // ""' temp/pdp-key.json)
           if [ "$KEYID" != "global" ]; then skip_pdp "the control plane reports bundle key id '$KEYID', but the PDP is configured to verify with key id 'global' (engines.bicep): a PDP deployed now could never verify a bundle."; fi
-          openssl pkey -pubin -noout -text -in temp/pdp-key.pub > temp/pdp-key.txt 2> temp/pdp-key.oerr
-          if [ "$?" != "0" ]; then skip_pdp "the control plane returned something that is not a PEM public key ($(head -c 200 temp/pdp-key.oerr))."; fi
+          if ! openssl pkey -pubin -noout -text -in temp/pdp-key.pub > temp/pdp-key.txt 2> temp/pdp-key.oerr; then skip_pdp "the control plane returned something that is not a PEM public key ($(head -c 200 temp/pdp-key.oerr))."; fi
           if ! grep -qE 'prime256v1|P-256' temp/pdp-key.txt; then skip_pdp "the control plane's bundle key is not EC P-256; bundle signatures are ES256."; fi
           jq --rawfile pem temp/pdp-key.pub '. + {pdpBundleVerificationPublicKeyPem: $pem}' temp/cp.json > temp/cp.next.json || skip_pdp "could not add the PDP verification key to temp/cp.json."
           mv temp/cp.next.json temp/cp.json

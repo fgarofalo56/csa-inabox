@@ -14,6 +14,7 @@ import { createPublicKey, verify as nodeVerify } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import type { JWK } from 'jose';
+import { authoredMessage } from '../safe-error.js';
 import { readTar, TarError, writeTar, type TarEntry } from './tar.js';
 
 /** The OPA `signing.keyid` the stamp PDP is deployed with (engines.bicep opaConfig) and the key id in `keys:`. */
@@ -105,7 +106,7 @@ export async function signBundle(tgz: Buffer, signer: BundleSigner): Promise<Buf
   try {
     entries = readTar(gunzipSync(tgz, { maxOutputLength: MAX_UNPACKED_BYTES }));
   } catch (e) {
-    if (e instanceof TarError) throw new BundleSignError(e.message);
+    if (e instanceof TarError) throw new BundleSignError(authoredMessage(e));
     throw new BundleSignError('the bundle is not a readable gzip tarball (or unpacks past the size limit)');
   }
   const files = bundleFileHashes(entries);
@@ -127,7 +128,7 @@ export async function signBundle(tgz: Buffer, signer: BundleSigner): Promise<Buf
     ]);
   } catch (e) {
     // The archive, not the vault, is why this failed: say so (deploy-integrity R7).
-    if (e instanceof TarError) throw new BundleSignError(e.message);
+    if (e instanceof TarError) throw new BundleSignError(authoredMessage(e));
     throw e;
   }
   return gzipSync(signed);

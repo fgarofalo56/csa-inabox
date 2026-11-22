@@ -52,7 +52,7 @@ export function writeTar(entries: readonly TarEntry[]): Buffer {
   const parts: Buffer[] = [];
   for (const e of entries) {
     const name = Buffer.from(e.name, 'utf8');
-    if (name.length === 0 || name.length > 100) throw new TarError(`tar entry name '${e.name}' is empty or longer than 100 bytes`);
+    if (name.length === 0 || name.length > 100) throw new TarError(`a tar entry name is empty or longer than 100 bytes (${name.length})`);
     const h = Buffer.alloc(BLOCK);
     name.copy(h, 0);
     h.write('0000644\0', 100, 'ascii'); // mode
