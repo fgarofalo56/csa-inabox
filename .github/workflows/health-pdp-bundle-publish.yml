@@ -10,17 +10,32 @@ name: health-pdp-bundle-publish
 #
 # Dispatch-only. mode=build-only (default) runs the full test gate and publishes NOTHING.
 # mode=publish additionally needs the `health-pdp-publish` environment (configure required
-# reviewers on it; not verified to exist) and an operator-supplied control plane.
+# reviewers on it; not verified to exist) and a running `loom-aca` runner (the fleet scales to zero; a
+# publish with no runner queues rather than failing).
 #
 # SECRETS. None are read here. The control plane token is masked, and this workflow never prints a
 # token or bundle body. The signature is the control plane's: the stamp's OPA verifies it with the public key
 # deploy-health fetched from the control plane (GET .../verification-key) and deployed. A failure at any
 # step fails the run; nothing here uses continue-on-error or `|| true`.
 #
-# BOUNDARIES. Commercial and GCC-High are selectable (same shape as deploy-health.yml).
-# Neither has a receipt: this workflow has never run, no bundle has been served from a live
-# stamp, and the Entra role `HealthCP.Admin` (publish needs 'write') must be granted to the
-# deploy principal by hand. GCC is not claimed. IL5/DoD are not offered.
+# WHERE IT RUNS (#5422). The control plane's own URL is internal: the hub Container Apps environment has
+# public access Disabled, and the LHDS Front Door routes only /auth/* and /api/health/pdp/* to it (decision 7),
+# deliberately not /api/health/routing-map or the bundle PUT. So the publish job runs on the in-VNet
+# `[self-hosted, loom-aca]` fleet, as the deploy SP, and reaches the control plane at its internal FQDN, which
+# it resolves from the deployed estate with scripts/csa-loom/resolve-health-console-binding.sh exactly as
+# lhds-tenant-destroy.yml does (control_plane_url / control_plane_audience override it when supplied).
+# MEASURED on that image (platform/runners/github-actions/Dockerfile): Node 20 (:154), curl and jq (:75),
+# az (:92); and loom-aca-runner-capability-probe.yml reached github.com and objects.githubusercontent.com (:170),
+# the hosts the pinned OPA download uses. So build, test and PUT all run in the one job.
+# The issuer JWKS is read from the PUBLIC Front Door host ISSUER_URL: it is public by design, and that is the
+# very path the stamp's relying parties use, so reading it there also proves the edge serves it.
+#
+# BOUNDARIES. Commercial only for mode=publish. The `loom-aca` fleet exists only in the Commercial DMLZ
+# subscription; there is no Gov in-VNet runner, so a GCC-High publish cannot reach the internal control plane
+# and is refused with a message saying so (cloud-parity.md: a disclosed gap, not a silent one). mode=build-only
+# still runs the test gate for either boundary. This workflow has never produced a published bundle, and the
+# Entra role `HealthCP.Admin` (publish needs 'write') must be held by the deploy principal. GCC is not
+# claimed. IL5/DoD are not offered.
 
 run-name: health-pdp-bundle-publish ${{ inputs.boundary }} ${{ inputs.stamp_id }}${{ inputs.mode != 'publish' && ' - BUILD ONLY (publishes nothing)' || '' }}
 
@@ -71,16 +86,31 @@ jobs:
   gate:
     uses: ./.github/workflows/health-pdp-opa.yml
 
+  # GCC-High cannot publish: no in-VNet runner exists there, and the control plane is internal. Fail with
+  # the TRUE reason instead of queueing forever on a runner label that has no fleet (or calling a URL that
+  # cannot be reached). Runs only for that selection.
+  gov-unsupported:
+    name: GCC-High publish is not supported (no in-VNet runner)
+    if: ${{ inputs.mode == 'publish' && inputs.boundary == 'GCC-High' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Refuse
+        run: |
+          echo "::error::mode=publish is not supported for GCC-High: the control plane is reachable only in-VNet, and the [self-hosted, loom-aca] runner fleet exists only in the Commercial subscription. Nothing was published. Run mode=build-only, or publish from Commercial. Tracked on #5422."
+          exit 1
+
   publish:
     name: Build, sign and publish (${{ inputs.boundary }}, ${{ inputs.stamp_id }})
     needs: gate
-    if: ${{ inputs.mode == 'publish' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    if: ${{ inputs.mode == 'publish' && inputs.boundary == 'Commercial' }}
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 30
     environment: health-pdp-publish
     env:
-      CP_URL: ${{ inputs.control_plane_url }}
-      CP_AUDIENCE: ${{ inputs.control_plane_audience }}
+      CP_URL_IN: ${{ inputs.control_plane_url }}
+      CP_AUDIENCE_IN: ${{ inputs.control_plane_audience }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       ISSUER_URL: ${{ inputs.issuer_url }}
       STAMP: ${{ inputs.stamp_id }}
       ALLOW_EMPTY: ${{ inputs.allow_empty_stamp }}
@@ -95,13 +125,17 @@ jobs:
       - name: Check publish inputs
         run: |
           set -euo pipefail
-          for v in CP_URL CP_AUDIENCE ISSUER_URL STAMP; do
+          for v in ISSUER_URL STAMP; do
             if [ -z "${!v}" ]; then echo "::error::publish mode needs input for $v (it is empty); nothing was sent"; exit 1; fi
           done
-          case "$CP_URL$ISSUER_URL" in *http://*) echo "::error::control_plane_url and issuer_url must be https"; exit 1;; esac
+          case "$ISSUER_URL" in https://*) ;; *) echo "::error::issuer_url must be https"; exit 1;; esac
+          # Supplied control plane values are validated here; empty ones are resolved from the estate below.
+          if [ -n "$CP_URL_IN" ]; then
+            case "$CP_URL_IN" in https://*) ;; *) echo "::error::control_plane_url must be https; nothing was sent"; exit 1;; esac
+          fi
+          if [ -z "$AZURE_SUBSCRIPTION_ID" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
 
-      - name: Azure login (Commercial)
-        if: ${{ inputs.boundary == 'Commercial' }}
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
         uses: Azure/login@v2
         with:
           creds: |
@@ -112,27 +146,79 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
 
-      - name: Azure login (Gov)
-        if: ${{ inputs.boundary == 'GCC-High' }}
-        uses: Azure/login@v2
-        with:
-          creds: |
-            {
-              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
-              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
-              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
-              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
-              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
-              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
-              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
-            }
-          environment: AzureUSGovernment
+      - name: Locate the stamp resource group (subscription of record)
+        if: ${{ inputs.control_plane_url == '' || inputs.control_plane_audience == '' }}
+        run: |
+          set -euo pipefail
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            n="$(az group list --subscription "$s" --query "[?starts_with(name, 'rg-csa-loom-health-${STAMP}-')] | length(@)" -o tsv | tr -d '\r')"
+            if [ "$n" != "0" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::no resource group rg-csa-loom-health-${STAMP}-* is visible to the deploy SP in any of its subscriptions. Check stamp_id, or supply control_plane_url and control_plane_audience. Nothing was sent."
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          echo "STAMP_SUB=$FOUND" >> "$GITHUB_ENV"
+          echo "stamp resource group found (subscription id withheld from output)"
 
-      - name: Set Azure cloud to Gov
-        if: ${{ inputs.boundary == 'GCC-High' }}
-        run: az cloud set --name AzureUSGovernment
+      - name: Pre-install the containerapp CLI extension
+        if: ${{ inputs.control_plane_url == '' || inputs.control_plane_audience == '' }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors -o none
+          echo "containerapp extension version: $(az extension show --name containerapp --query version -o tsv | tr -d '\r')"
+
+      - name: Resolve the control plane URL and audience from the deployed estate
+        id: binding
+        if: ${{ inputs.control_plane_url == '' || inputs.control_plane_audience == '' }}
+        env:
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$STAMP_SUB"
+
+      - name: Fix the control plane URL and audience (never the Front Door host)
+        env:
+          BINDING: ${{ steps.binding.outputs.health_binding }}
+          BINDING_REASON: ${{ steps.binding.outputs.health_binding_reason }}
+        run: |
+          set -euo pipefail
+          # LOOM_HEALTH_* are written to $GITHUB_ENV by resolve-health-console-binding.sh (a script the
+          # shell-text guard cannot see into); they are only read when a resolve ran, and the check below
+          # refuses unless it resolved.
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          # unset-var-ok: LOOM_HEALTH_DEFAULT_STAMP_ID
+          cp_url="$CP_URL_IN"; cp_aud="$CP_AUDIENCE_IN"
+          if [ -z "$cp_url" ] || [ -z "$cp_aud" ]; then
+            # `preserved` means a lookup was unknown and the console's old values were reused: not good
+            # enough to aim a publish with.
+            if [ "$BINDING" != "resolved" ]; then
+              echo "::error::the control plane binding is '${BINDING:-unset}', not 'resolved' (${BINDING_REASON:-no reason reported}). Supply control_plane_url and control_plane_audience to override. Nothing was sent."
+              exit 1
+            fi
+            if [ "${LOOM_HEALTH_DEFAULT_STAMP_ID:-}" != "$STAMP" ]; then
+              echo "::error::the control plane in this subscription serves stamp '${LOOM_HEALTH_DEFAULT_STAMP_ID:-}', not '$STAMP'. Nothing was sent."
+              exit 1
+            fi
+            [ -n "$cp_url" ] || cp_url="${LOOM_HEALTH_CP_URL:-}"
+            [ -n "$cp_aud" ] || cp_aud="${LOOM_HEALTH_CP_AUDIENCE:-}"
+          fi
+          case "$cp_url" in https://*) ;; *) echo "::error::control plane URL is empty or not https. Nothing was sent."; exit 1;; esac
+          [ -n "$cp_aud" ] || { echo "::error::control plane audience is empty. Nothing was sent."; exit 1; }
+          # Front Door serves only /auth/* and /api/health/pdp/*; the routing-map read and the bundle PUT
+          # would 404 there (#5422). Refuse it by name rather than let curl report a bare 404.
+          cp_host="${cp_url#https://}"; cp_host="${cp_host%%/*}"
+          iss_host="${ISSUER_URL#https://}"; iss_host="${iss_host%%/*}"
+          if [ "$cp_host" = "$iss_host" ] || [[ "$cp_host" == *.azurefd.net ]]; then
+            echo "::error::control plane URL host $cp_host is the LHDS Front Door edge, which routes only /auth/* and /api/health/pdp/*. Use the control plane's internal URL (leave control_plane_url empty to resolve it). Nothing was sent."
+            exit 1
+          fi
+          {
+            echo "CP_URL=$cp_url"
+            echo "CP_AUDIENCE=$cp_aud"
+          } >> "$GITHUB_ENV"
+          echo "control plane resolved for stamp $STAMP (audience is an app id URI, not a secret)"
 
       - name: Install pinned OPA and build the control plane CLI
         run: |
