@@ -983,6 +983,79 @@ jobs:
             echo "Bound, NOT verified live. The stamp id is the deployed stamp name; whether the control plane has it registered and healthy is not checked here."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # STAMP IMAGE PATH (#5422 decision 8). The hub registry is publicNetworkAccess=Disabled and nothing imported the PDP
+      # image, so the first apply went ImagePullBackOff ("failed to fetch anonymous token"). The template now gives the stamp
+      # a private endpoint to the registry (acr-pe.bicep); this step puts the image there. The image is pinned BY DIGEST in
+      # platform/fiab/bicep/modules/health/pdp-image.json, the same file health.bicep deploys from, so the deployed image
+      # equals the imported one. `az acr import` is an ARM operation (the registry pulls from the source itself), so it does
+      # not need a path to the registry data plane; Microsoft Learn: a restricted registry must allow trusted services, which
+      # is the default (https://learn.microsoft.com/azure/container-registry/container-registry-import-images). The presence
+      # check and the read-back ARE data-plane calls, so they hold the shared firewall lease like the other preflights.
+      # Fails closed: no `|| true`, no discarded stderr.
+      - name: Ensure the digest-pinned PDP image is in the registry (az acr import)
+        id: pdpimport
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        env:
+          ACR: ${{ steps.hub.outputs.acr }}
+          HUB_RG: ${{ steps.hub.outputs.hub_rg }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::notice::The stamp PDP was not deployed by this run, so there is no PDP image to import."
+            exit 0
+          fi
+          SPEC=platform/fiab/bicep/modules/health/pdp-image.json
+          SRC=$(jq -r '.source // ""' "$SPEC"); REPO=$(jq -r '.acrRepository // ""' "$SPEC")
+          TAG=$(jq -r '.tag // ""' "$SPEC"); DIGEST=$(jq -r '.digest // ""' "$SPEC")
+          if [ -z "$SRC" ] || [ -z "$REPO" ] || [ -z "$TAG" ] || ! printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::$SPEC is missing source/acrRepository/tag or its digest is not sha256:<64 hex> (source='$SRC', repo='$REPO', tag='$TAG', digest='$DIGEST'). The image must be pinned by digest."
+            exit 1
+          fi
+          # 1. The private path must exist AND be approved, or the pull stays broken whatever this step imports.
+          PE=$(jq -r '.healthStamp.value.acrPrivateEndpoint.privateEndpointName // ""' temp/outputs.json)
+          if [ -z "$PE" ]; then
+            echo "::error::The stamp has no private endpoint to the registry: $(jq -r '.healthStamp.value.acrPrivateEndpoint.reason // "the stamp output carries no acrPrivateEndpoint"' temp/outputs.json). The AKS nodes cannot pull from a registry with public access disabled."
+            exit 1
+          fi
+          az acr private-endpoint-connection list -r "$ACR" -g "$HUB_RG" --query "[?contains(privateEndpoint.id, '/privateEndpoints/$PE')].privateLinkServiceConnectionState.status | [0]" -o tsv > temp/pe.status 2> temp/pe.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::Could not read the private endpoint connections on registry $ACR (az exit $RC: $(head -c 300 temp/pe.err)). Nothing is established about whether $PE is approved."
+            exit 1
+          fi
+          PESTATE=$(tr -d '\r\n' < temp/pe.status)
+          if [ "$PESTATE" != "Approved" ]; then
+            echo "::error::The stamp's private endpoint connection $PE on registry $ACR is '${PESTATE:-not found}', not Approved, so the nodes cannot pull. Approve it: az acr private-endpoint-connection approve -r $ACR -g $HUB_RG -n <connection name from: az acr private-endpoint-connection list -r $ACR -g $HUB_RG>"
+            exit 1
+          fi
+          # 2. Present already? exit 0 present, 3 answered absent, 4 could not be read (NOT a claim of absence).
+          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > temp/pdp-have.out 2> temp/pdp-have.err
+          RC=$?
+          cat temp/pdp-have.err
+          case "$RC" in
+            0) echo "::notice::$REPO@$DIGEST is already in $ACR; import skipped."; echo "Stamp PDP image: $REPO@$DIGEST already in $ACR." >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+            3) echo "$REPO@$DIGEST is absent from $ACR; importing from $SRC." ;;
+            *) echo "::error::Could not establish whether $REPO@$DIGEST is in $ACR (resolve-acr-digest.sh exit $RC; 4 = the registry could not be read, which is NOT a claim that the image is missing). See the output above."; exit 1 ;;
+          esac
+          az acr import --name "$ACR" --resource-group "$HUB_RG" --source "$SRC@$DIGEST" --image "$REPO:$TAG" --force > temp/pdp-import.out 2> temp/pdp-import.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::az acr import of $SRC@$DIGEST into $ACR exited $RC: $(head -c 600 temp/pdp-import.err). Established: the image was NOT imported by this step. NOT established: why. Likely causes (unverified): the registry has 'allow trusted services' turned off (required for import into a network-restricted registry), the deploy identity lacks Contributor on the registry, or the source registry throttled an anonymous pull."
+            exit 1
+          fi
+          # 3. Read it back: an import that returned 0 is not proof the digest is there.
+          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > temp/pdp-after.out 2> temp/pdp-after.err
+          RC=$?
+          cat temp/pdp-after.err
+          GOT=$(grep -Eo 'sha256:[0-9a-f]{64}' temp/pdp-after.out | tail -n 1)
+          if [ "$RC" != "0" ] || [ "$GOT" != "$DIGEST" ]; then
+            echo "::error::az acr import exited 0 but reading $REPO@$DIGEST back from $ACR gave exit $RC and digest '${GOT:-none}'. The image is NOT confirmed present."
+            exit 1
+          fi
+          echo "::notice::Imported $SRC@$DIGEST into $ACR as $REPO:$TAG and read it back."
+          echo "Stamp PDP image: imported $REPO@$DIGEST into $ACR and read back." >> "$GITHUB_STEP_SUMMARY"
+
       # Runs AFTER the console bind on purpose: the first apply fails at rollout (exit 5) until a signed bundle is
       # published and the PDP identity is on the allowlist, and that must not skip the console auto-bind (#5346) or anything
       # else. A failure here still fails the job.

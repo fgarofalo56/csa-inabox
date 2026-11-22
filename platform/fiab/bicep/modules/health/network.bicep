@@ -36,6 +36,9 @@ param firewallSku string = 'Standard'
 @description('Login server of the shared ACR the stamp pulls images from (for example myacr.azurecr.io). Empty = no ACR rule. The matching data endpoint wildcard is added automatically.')
 param acrLoginServer string = ''
 
+@description('Create the stamp-scoped privatelink.azurecr zone (linked to the stamp VNet only) so a private endpoint to the hub registry resolves for the nodes. False = no zone is created (no registry is known).')
+param acrPrivateLinkEnabled bool = false
+
 @description('Extra FQDNs to allow outbound. Adding one is a reviewed change (SECURITY-AND-COMPLIANCE.md s5).')
 param extraAllowedFqdns array = []
 
@@ -77,6 +80,11 @@ var postgresZoneName = 'lhds-${stampName}.private.postgres${pgHostSuffix}'
 var vaultZoneName = 'privatelink.vaultcore${substring(environment().suffixes.keyvaultDns, length('.vault'))}'
 var blobZoneName = 'privatelink.blob.${environment().suffixes.storage}'
 var serviceBusZoneName = 'privatelink.servicebus.${isGov ? 'usgovcloudapi.net' : 'windows.net'}'
+
+// #5422 decision 8: environment().suffixes.acrLoginServer is '.azurecr.io' / '.azurecr.us'; dropping the leading '.' leaves the cloud suffix.
+// NOT in zoneNames on purpose: extraLinks below link every zoneNames zone to the hub VNet, and the hub already links its own
+// privatelink.azurecr zone (a VNet cannot link two zones with the same name), so this zone is linked to the stamp VNet only.
+var acrZoneName = 'privatelink.${substring(environment().suffixes.acrLoginServer, 1)}'
 
 var zoneNames = [
   { key: 'vault', name: vaultZoneName }
@@ -343,6 +351,24 @@ resource stampLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-
   }
 }]
 
+// The registry zone (#5422): only when a registry is known. Linked to the stamp VNet only (see acrZoneName).
+resource acrZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (acrPrivateLinkEnabled) {
+  name: acrZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource acrZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (acrPrivateLinkEnabled) {
+  parent: acrZone
+  name: 'link-stamp'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: { id: vnet.id }
+  }
+}
+
 // Extra links (hub VNets). @batchSize(1): concurrent link PUTs against one zone
 // race in ARM.
 @batchSize(1)
@@ -369,6 +395,7 @@ output routeTableId string = useFirewall ? routeTable.id : ''
 output firewallPrivateIp string = useFirewall ? firewall!.properties.ipConfigurations[0].properties.privateIPAddress : ''
 output firewallPublicIp string = useFirewall ? fwPip!.properties.ipAddress : ''
 output egressFqdns array = useFirewall ? allowedFqdns : []
+output acrZoneId string = acrPrivateLinkEnabled ? acrZone.id : ''
 output privateDnsZoneIds object = {
   vault: zones[0].id
   blob: zones[1].id

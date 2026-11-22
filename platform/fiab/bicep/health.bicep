@@ -42,8 +42,8 @@
 //   hubVaultPeSubnetId, hubVaultZoneId, hubResourceGroup (optional overrides of the hub-side stamp-vault
 //     private endpoint inputs, #5345; derived from environmentId and the hub naming convention by default),
 //   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
-//     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
-//     <acr>/opa), pdpControlPlaneBaseUrl (https; default = the Front Door issuer endpoint, which serves
+//     this is set and the control plane deploys), pdpImage is NOT a parameter: the PDP image is modules/health/pdp-image.json (tag for display + the sha256 digest deployed AND imported by deploy-health; image
+//     <acr>/opa@<digest>), pdpControlPlaneBaseUrl (https; default = the Front Door issuer endpoint, which serves
 //     /api/health/pdp/*; required when there is no frontDoor profile), pdpReplicas (default 2), pdpApplyPrincipalId (object id of the service principal that
 //     applies the PDP manifest; gets the Kubernetes data role Azure Kubernetes Service RBAC Cluster Admin, #5422),
 //   frontDoor ({profileName, resourceGroup?, subscriptionId?}; the EXISTING Front Door Premium
@@ -130,6 +130,9 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
     useAvailabilityZones: bool(healthConfig.?useAvailabilityZones ?? true)
     kubernetesVersion: string(healthConfig.?kubernetesVersion ?? '1.34')
     acrLoginServer: string(healthConfig.?acrLoginServer ?? '')
+    // #5422 decision 8: the hub registry is public-access Disabled; the stamp gets a private endpoint to it (acr-pe.bicep) plus a
+    // stamp-scoped privatelink.azurecr zone. Same subscription as the deployment (acr-pull.bicep shares that assumption). Empty = neither.
+    acrResourceId: cpAcrKnown ? resourceId(subscription().subscriptionId, cpAcrResourceGroup, 'Microsoft.ContainerRegistry/registries', cpAcrName) : ''
     // #5422: in firewall mode the PDP reaches its bundle through the Front Door endpoint, which therefore must be on the egress
     // allow-list (login.microsoftonline is already there). In loadBalancer mode no rule is deployed, so appending it is inert.
     extraAllowedFqdns: concat(healthConfig.?extraAllowedFqdns ?? [], fdIssuerDeploy ? [healthAuthEndpoint!.outputs.endpointHostName] : [])
@@ -337,6 +340,8 @@ var pdpCpBaseUrlOverride = string(controlPlaneConfig.?pdpControlPlaneBaseUrl ?? 
 // explicit override there is no URL the PDP could use, and it is NOT deployed.
 var pdpUrlKnown = startsWith(pdpCpBaseUrlOverride, 'https://') || fdIssuerDeploy
 var pdpDeploy = cpDeploy && !empty(pdpPublicKey) && pdpUrlKnown
+// ONE place for the PDP image: tag (display) + digest (what is deployed and what deploy-health imports). #5422 decision 8.
+var pdpImageSpec = loadJsonContent('modules/health/pdp-image.json')
 var pdpName = 'loom-health-pdp'
 var pdpNamespace = 'loom-health'
 // MUST equal engines.bicep output decisionEndpoint (pinned by scripts/ci/__tests__/lhds-engine-delivery.test.mjs).
@@ -353,7 +358,7 @@ module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
     applyPrincipalId: pdpApplyPrincipalId
     controlPlanePrincipalId: healthControlPlane!.outputs.identityPrincipalId
     location: healthLocation
-    image: '${cpAcrLoginServer}/opa:${string(controlPlaneConfig.?pdpImageTag ?? '1.9.0-static')}'
+    image: '${cpAcrLoginServer}/${pdpImageSpec.acrRepository}@${pdpImageSpec.digest}'
     acrName: cpAcrName
     acrResourceGroup: cpAcrResourceGroup
     stampId: healthStampName

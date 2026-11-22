@@ -67,6 +67,9 @@ param kubernetesVersion string = '1.34'
 @description('Login server of the shared ACR the stamp pulls images from. Empty = no ACR firewall rule.')
 param acrLoginServer string = ''
 
+@description('Resource id of the shared ACR (same subscription, another resource group). Non-empty = the stamp gets a private endpoint to it plus a stamp-scoped privatelink.azurecr zone (#5422): the hub ACR is public-access Disabled, so without it the kubelet cannot pull. Empty = neither is created.')
+param acrResourceId string = ''
+
 @description('Extra FQDNs allowed through the egress firewall. A reviewed change.')
 param extraAllowedFqdns array = []
 
@@ -203,6 +206,8 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+var acrPrivateLinkEnabled = !empty(acrResourceId)
+
 // ── Network ───────────────────────────────────────────────────────────────────
 module network 'network.bicep' = {
   name: 'lhds-${stampName}-network'
@@ -213,8 +218,22 @@ module network 'network.bicep' = {
     vnetAddressPrefix: vnetAddressPrefix
     egressMode: egressMode
     acrLoginServer: acrLoginServer
+    acrPrivateLinkEnabled: acrPrivateLinkEnabled
     extraAllowedFqdns: extraAllowedFqdns
     extraDnsLinkVnetIds: extraDnsLinkVnetIds
+    tags: stampTags
+  }
+}
+
+// ── Private endpoint to the hub registry (#5422, decision 8) ──────────────────
+module acrPe 'acr-pe.bicep' = if (acrPrivateLinkEnabled) {
+  name: 'lhds-${stampName}-acr-pe'
+  params: {
+    location: location
+    stampName: stampName
+    acrResourceId: acrResourceId
+    peSubnetId: network.outputs.peSubnetId
+    acrZoneId: network.outputs.acrZoneId
     tags: stampTags
   }
 }
@@ -378,6 +397,17 @@ output stamp object = {
   vnetId: network.outputs.vnetId
   peSubnetId: network.outputs.peSubnetId
   privateDnsZoneIds: network.outputs.privateDnsZoneIds
+  acrPrivateEndpoint: acrPrivateLinkEnabled ? {
+    deployed: true
+    privateEndpointName: acrPe!.outputs.privateEndpointName
+    zoneId: network.outputs.acrZoneId
+    reason: ''
+  } : {
+    deployed: false
+    privateEndpointName: ''
+    zoneId: ''
+    reason: 'no hub registry resource id was supplied to the stamp (controlPlaneConfig acrName/acrLoginServer/acrResourceGroup are not all set), so the stamp has no private path to a registry'
+  }
   egressMode: egressMode
   egressFqdns: network.outputs.egressFqdns
   keyVaultId: keyvault.outputs.vaultId
