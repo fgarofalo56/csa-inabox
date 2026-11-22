@@ -242,6 +242,29 @@ jobs:
           printf 'authorization: Bearer %s\n' "$tok" > "$work/auth.hdr"
           echo "LHDS_CP_TOKEN=$tok" >> "$GITHUB_ENV"
 
+      - name: Refresh the routing map from the tenant registry
+        run: |
+          set -uo pipefail
+          # The bundle must reflect the CURRENT registry, and a fresh stamp has no map at all: GET
+          # /api/health/routing-map answers 404 until something publishes one (measured on dev01,
+          # run 45038029387). publish is idempotent (unchanged registry = published:false) and the
+          # control plane refuses, with a 409, to replace a non-empty map with an empty one.
+          RC=0
+          CODE=$(curl -fsS -X POST -H @"$WORK/auth.hdr" -o "$WORK/routing-publish.json" -w '%{http_code}' "${CP_URL%/}/api/health/routing-map/publish" 2> "$WORK/routing-publish.err") || RC=$?
+          if [ "$RC" != "0" ]; then
+            case "$CODE" in
+              409) WHY="the control plane refused to replace a non-empty routing map with an empty one (the registry lists no routable tenant). Not overriding that guard; check the tenant registry." ;;
+              401|403) WHY="the deploy principal was not authorised to publish the routing map (HealthCP.Admin and the caller allowlist are granted by csa-loom-post-deploy-bootstrap)." ;;
+              *) WHY="cause not established (curl: $(head -c 200 "$WORK/routing-publish.err"))." ;;
+            esac
+            echo "::error::POST /api/health/routing-map/publish answered HTTP ${CODE:-none} (curl exit $RC): $WHY Nothing was published."
+            exit 1
+          fi
+          if ! node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!r.ok||!r.data||typeof r.data.version!=="string"){process.exit(1)} console.log(`routing map ${r.data.published?"published":"unchanged"}: version ${r.data.version}, ${r.data.entryCount} entries, ${(r.data.skipped||[]).length} skipped`)' "$WORK/routing-publish.json"; then
+            echo "::error::POST /api/health/routing-map/publish answered HTTP $CODE but the body is not a publish result (no data.version). Nothing was published."
+            exit 1
+          fi
+
       - name: Derive stamp inputs from the live routing map and AS JWKS
         run: |
           set -euo pipefail
