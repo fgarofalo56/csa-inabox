@@ -440,6 +440,16 @@
       }
     },
     {
+      "name": "config — the REAL az wording for a missing DIGEST (repo@sha256:...): the OCI MANIFEST_UNKNOWN message, spaced",
+      "source": "deploy-health run 45059427917 (#5429): `resolve-acr-digest.sh opa@sha256:60b6...` on a registry that ANSWERED; classified `unknown` until this row, so the import never ran (exit 4)",
+      "input": "ERROR: 2026-11-22 19:29:10.967819 Error: manifest unknown. Correlation ID: 9508afa2-85f4-4005-b652-a1cea619a655.",
+      "expect": {
+        "class": "config",
+        "signalId": "config.image-tag-absent",
+        "retryable": false
+      }
+    },
+    {
       "name": "R7 — a correlation id that merely CONTAINS '404' establishes nothing (the false-MISSING the shell regex produced)",
       "source": "#3090: scripts/ci/{assert-acr-image-tags,resolve-acr-digest}.sh matched a bare `404` alternation, so any az error carrying those three digits read as ABSENT. Both now delegate to this table; this case is what stops the loose pattern coming back.",
       "input": "ERROR: An unexpected error occurred while processing the request. Correlation id: 404abc12-3456-7890-abcd-ef0123456789",
