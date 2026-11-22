@@ -278,6 +278,9 @@ export async function ensure(opts, io) {
   const grants = [];
   if (apimSp) grants.push({ who: 'APIM gateway', principalId: apimSp.id, role: ROLE_READER });
   if (opts.consolePrincipalId) grants.push({ who: 'Console UAMI', principalId: opts.consolePrincipalId, role: ROLE_ADMIN });
+  // The stamp PDP's workload identity pulls its bundle with client credentials: Reader (bundle + verification key, read-only) and
+  // its client (app) id on the allowlist, exactly like the CI SP (#5422). Without both it gets 403 and the PDP never becomes Ready.
+  if (opts.pdpPrincipalId) grants.push({ who: 'stamp PDP identity', principalId: opts.pdpPrincipalId, role: ROLE_READER });
   grants.push({ who: 'CI deploy SP', principalId: ciSp.id, role: ROLE_ADMIN });
   const assignedPath = `/servicePrincipals/${cpSp.id}/appRoleAssignedTo`;
   const has = (list, g) => list.some((a) => a.principalId === g.principalId && a.appRoleId === resolved[g.role.value]);
@@ -290,7 +293,7 @@ export async function ensure(opts, io) {
   }
 
   // ---- 3. caller allowlist on the Container App ----
-  const addIds = [apimAppId, opts.consoleClientId, opts.ciClientId].filter(Boolean);
+  const addIds = [apimAppId, opts.consoleClientId, opts.ciClientId, opts.pdpClientId].filter(Boolean);
   const app = { name: opts.cpAppName, resourceGroup: opts.cpResourceGroup, subscription: opts.subscription };
   const readAllow = () => (io.getAppEnv(app).find((e) => e.name === ALLOWLIST_ENV)?.value ?? '');
   const before = readAllow();
@@ -325,6 +328,7 @@ export async function ensure(opts, io) {
 
   const partial = [];
   if (!opts.apimPrincipalId) partial.push('APIM gateway NOT wired (no APIM identity supplied): HealthCP.Reader not assigned, its appId not in the allowlist');
+  if (!opts.pdpPrincipalId) partial.push('stamp PDP identity NOT wired (none supplied): no HealthCP.Reader, its client id not in the allowlist; a PDP deployed later gets 403 on its bundle until this is re-run');
   if (!opts.consolePrincipalId || !opts.consoleClientId) partial.push('Console UAMI NOT wired (principal id or client id not supplied)');
   const summary = plan.dryRun
     ? `DRY-RUN: ${plan.would.length} write(s) would be made${plan.would.length ? `:\n  - ${plan.would.join('\n  - ')}` : ''}`
@@ -341,6 +345,7 @@ export function parseArgs(argv) {
     '--as-client-id': 'asClientId', '--cp-app-client-id': 'cpAppClientId', '--tenant-id': 'tenantId',
     '--cp-identity-principal-id': 'cpIdentityPrincipalId', '--apim-principal-id': 'apimPrincipalId',
     '--console-client-id': 'consoleClientId', '--ci-client-id': 'ciClientId', '--console-principal-id': 'consolePrincipalId',
+    '--pdp-principal-id': 'pdpPrincipalId', '--pdp-client-id': 'pdpClientId',
     '--cp-app-name': 'cpAppName', '--cp-resource-group': 'cpResourceGroup', '--subscription': 'subscription', '--platform': 'platform',
   };
   const o = { dryRun: false, platform: 'containerApps' };
@@ -357,7 +362,8 @@ export async function run(argv, io = realIo()) {
   try { opts = parseArgs(argv); } catch (e) { io.log(`bootstrap-health-cp-entra: ${e.message}`); return EXIT_USAGE; }
   const guids = { 'as-client-id': opts.asClientId, 'cp-app-client-id': opts.cpAppClientId, 'tenant-id': opts.tenantId, 'ci-client-id': opts.ciClientId, 'cp-identity-principal-id': opts.cpIdentityPrincipalId };
   for (const [k, v] of Object.entries(guids)) if (!GUID.test(v ?? '')) { io.log(`bootstrap-health-cp-entra: --${k} <GUID> is required (got '${v ?? ''}').${k === 'ci-client-id' ? ' It is the client id the workflow logs in with (AZURE_CLIENT_ID for Commercial, AZURE_GOV_CLIENT_ID for GCC-High/IL5, AZURE_GCC_CLIENT_ID for GCC); without it the CI service principal gets no HealthCP.Admin and its control-plane calls 403. Nothing was changed.' : ''}`); return EXIT_USAGE; }
-  for (const k of ['apimPrincipalId', 'consoleClientId', 'consolePrincipalId']) if (opts[k] && !GUID.test(opts[k])) { io.log(`bootstrap-health-cp-entra: --${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} must be a GUID.`); return EXIT_USAGE; }
+  if (Boolean(opts.pdpPrincipalId) !== Boolean(opts.pdpClientId)) { io.log('bootstrap-health-cp-entra: --pdp-principal-id and --pdp-client-id must be supplied together (the role goes to the object id, the allowlist takes the client id). Nothing was changed.'); return EXIT_USAGE; }
+  for (const k of ['apimPrincipalId', 'consoleClientId', 'consolePrincipalId', 'pdpPrincipalId', 'pdpClientId']) if (opts[k] && !GUID.test(opts[k])) { io.log(`bootstrap-health-cp-entra: --${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} must be a GUID.`); return EXIT_USAGE; }
   for (const k of ['cpAppName', 'cpResourceGroup', 'subscription']) if (!opts[k]) { io.log(`bootstrap-health-cp-entra: --${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required.`); return EXIT_USAGE; }
   try {
     await ensure(opts, io);

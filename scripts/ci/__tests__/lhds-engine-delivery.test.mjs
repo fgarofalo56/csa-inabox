@@ -93,21 +93,63 @@ test('health.bicep: the CP env address equals the module output, and the PDP mod
   assert.match(health, /manifest: healthPdp!\.outputs\.manifest/);
 });
 
-test('control-plane.bicep: grants RBAC Writer (never Cluster Admin / Owner) at the stamp cluster and emits LOOM_HEALTH_CP_PDP_URL only when set', () => {
-  const ras = resourcesOf(cp).filter((r) => r.type === 'Microsoft.Authorization/roleAssignments' && JSON.stringify(r).includes("variables('aksRbacWriterRoleId')"));
-  assert.equal(ras.length, 1, `expected exactly one RBAC Writer assignment, got ${ras.length}`);
-  const ra = ras[0];
-  assert.equal(cp.variables.aksRbacWriterRoleId, RBAC_WRITER);
-  // Breaks if the grant widens: RBAC Cluster Admin b1ff04bb... would let the control plane edit any RBAC object.
+test('control-plane.bicep holds NO Azure data role on the cluster (the cluster-scope RBAC Writer is gone) and emits LOOM_HEALTH_CP_PDP_URL only when set', () => {
   const src = read(`${BICEP}/modules/health/control-plane.bicep`);
-  // (the file already carries that id for its own aks-path deploy script, so the check is on THIS assignment.)
-  assert.ok(!JSON.stringify(ra).includes('aksRbacClusterAdminRoleId'), 'the CP runCommand grant must not be RBAC Cluster Admin');
-  assert.ok(!JSON.stringify(ra).includes('aksClusterAdminRoleId'), 'nor AKS Cluster Admin Role');
-  assert.match(ra.condition, /empty\(parameters\('stampAksClusterName'\)\)/);
-  assert.match(ra.condition, /parameters\('skipRoleGrants'\)/);
+  // Breaks if the cluster-scope Azure role returns: RBAC Writer reads Secrets and runs pods as any ServiceAccount in EVERY
+  // namespace. The control plane's Kubernetes access is the namespace-scoped RoleBinding rendered by engines.bicep instead.
+  assert.ok(!src.includes(RBAC_WRITER), 'RBAC Writer must not be granted to the control plane');
+  assert.ok(!src.includes('cpAksRbacWriter') && !src.includes('stampAksClusterName'));
+  assert.equal(cp.variables.aksRbacWriterRoleId, undefined);
   // Breaks if the env is emitted unconditionally: an empty value would be read as "PDP deployed" and fail validation.
   assert.match(src, /var pdpEnv = empty\(pdpUrl\) \? \[\] : \[\n\s+\{ name: 'LOOM_HEALTH_CP_PDP_URL', value: pdpUrl \}/);
   assert.equal(cp.parameters.pdpUrl.defaultValue, '');
+});
+
+test('the control plane gets a namespace-scoped RoleBinding (ClusterRole edit) in the manifest, never cluster-admin and never a ClusterRoleBinding', () => {
+  const expr = JSON.stringify(engines.variables.controlPlaneBinding);
+  // Breaks if the binding widens to a ClusterRoleBinding (cluster-wide) or to cluster-admin, if its kind/roleRef drift, or if
+  // the subject stops being the control plane principal id (the binding would then name nobody).
+  assert.match(expr, /kind: RoleBinding/);
+  assert.match(expr, /kind: ClusterRole'/);
+  assert.match(expr, /name: edit'/);
+  assert.doesNotMatch(expr, /ClusterRoleBinding|cluster-admin|name: admin/);
+  assert.match(expr, /parameters\('controlPlanePrincipalId'\)/);
+  assert.match(expr, /parameters\('aksNamespace'\)/);
+  // The guard: no principal, no binding (a literal empty subject would be rejected by the API server).
+  assert.match(JSON.stringify(engines.variables.controlPlaneBinding), /empty\(parameters\('controlPlanePrincipalId'\)\)/);
+  assert.match(read(`${BICEP}/health.bicep`), /controlPlanePrincipalId: healthControlPlane!\.outputs\.identityPrincipalId/);
+});
+
+test('control-plane.bicep creates the PDP bundle signing key as EC-HSM P-256, sign+verify only, with Crypto User on THAT key only', () => {
+  const key = resourcesOf(cp).find((r) => r.type === 'Microsoft.KeyVault/vaults/keys' && JSON.stringify(r.name).includes('pdpSigningKeyName'));
+  assert.ok(key, 'PDP signing key resource missing');
+  // Breaks if the curve is not P-256 (ES256 needs it), the key is software-backed (kty EC), or it gains key ops such as 'export'/'decrypt'.
+  assert.equal(key.properties.kty, 'EC-HSM');
+  assert.equal(key.properties.curveName, 'P-256');
+  assert.deepEqual(key.properties.keyOps, ['sign', 'verify']);
+  assert.equal(cp.variables.pdpSigningKeyName, 'lhds-pdp-bundle-sign');
+  assert.notEqual(cp.variables.pdpSigningKeyName, 'lhds-as-signing', 'must not share the token signing key');
+  const ras = resourcesOf(cp).filter((r) => r.type === 'Microsoft.Authorization/roleAssignments' && JSON.stringify(r).includes('pdpSigningKeyName'));
+  assert.equal(ras.length, 1);
+  assert.match(JSON.stringify(ras[0].scope), /pdpSigningKeyName/); // scoped to the key, not the vault
+  assert.equal(cp.variables.kvCryptoUserRoleId, '12338af0-0e69-4776-bea7-57ae8d297424');
+  const src = read(`${BICEP}/modules/health/control-plane.bicep`);
+  assert.match(src, /var pdpSigningEnv = empty\(pdpSigningKeyId\) \? \[\] : \[\n\s+\{ name: 'LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID', value: pdpSigningKeyId \}/);
+  assert.match(src, /var pdpSigningKeyId = createPdpSigningKey \? pdpSigningKey!\.properties\.keyUriWithVersion : ''/); // the VERSIONED id
+});
+
+test('health.bicep: the PDP pulls its bundle through the Front Door endpoint, which is on the egress allow-list; no Front Door and no override = no PDP', () => {
+  const health = read(`${BICEP}/health.bicep`);
+  // Breaks if the default goes back to the internal control plane FQDN (the stamp cannot resolve or reach it), if the PDP
+  // deploys without any URL it can use, or if the AFD host is not allowed through the stamp firewall.
+  assert.match(health, /controlPlaneBaseUrl: !empty\(pdpCpBaseUrlOverride\) \? pdpCpBaseUrlOverride : healthAuthEndpoint!\.outputs\.pdpBaseUrl/);
+  const pdpBlock = health.slice(health.indexOf("module healthPdp "), health.indexOf('// ── APIM tenant-routing fragment'));
+  assert.ok(pdpBlock.length > 200, 'pdp module block not found');
+  assert.doesNotMatch(pdpBlock, /healthControlPlane!\.outputs\.fqdn/);
+  assert.match(health, /var pdpUrlKnown = startsWith\(pdpCpBaseUrlOverride, 'https:\/\/'\) \|\| fdIssuerDeploy\n/);
+  assert.match(health, /extraAllowedFqdns: concat\(healthConfig\.\?extraAllowedFqdns \?\? \[\], fdIssuerDeploy \? \[healthAuthEndpoint!\.outputs\.endpointHostName\] : \[\]\)/);
+  const issuer = read(`${BICEP}/modules/health/afd-issuer.bicep`);
+  assert.match(issuer, /output pdpBaseUrl string = 'https:\/\/\$\{endpoint\.properties\.hostName\}'/); // scheme+host only: OPA appends /api/health/pdp/...
 });
 
 // ── the apply script, executed ────────────────────────────────────────────────────────────────────────────
@@ -222,28 +264,140 @@ function stepBlock(wf, name) {
 
 test('deploy-health.yml applies the manifest through the script, fail-closed, with no discarded results', () => {
   const wf = read('.github/workflows/deploy-health.yml');
-  for (const name of ['Apply the stamp PDP manifest (az aks command invoke)', 'Resolve the PDP inputs (bundle verification public key, applying principal)']) {
+  const names = ['Apply the stamp PDP manifest (az aks command invoke)', 'Resolve the PDP applying principal', 'Fetch the PDP bundle verification key through Front Door'];
+  for (const name of names) {
     const b = stepBlock(wf, name);
-    // Breaks if any of these result-discarding shapes enters either step.
+    // Breaks if any of these result-discarding shapes enters a step.
     assert.doesNotMatch(b, /\|\| true|continue-on-error|2>\s*\/dev\/null/, name);
   }
-  const apply = stepBlock(wf, 'Apply the stamp PDP manifest (az aks command invoke)');
+  const apply = stepBlock(wf, names[0]);
   assert.match(apply, /bash scripts\/csa-loom\/aks-apply-manifest\.sh/);
   assert.match(apply, /--manifest temp\/pdp-manifest\.yaml/);
   assert.match(apply, /exit 1\n/);
   // The manifest is read from the deploy OUTPUT, the single source of truth, not re-rendered in the workflow.
   assert.match(apply, /\.healthPdpState\.value\.manifest/);
-  // Ordering: the apply runs after the infra apply step (needs temp/outputs.json) and before the console bind.
+  // Ordering: the apply runs after the infra apply (needs temp/outputs.json) and before the console bind.
   assert.ok(wf.indexOf('- name: Deploy health.bicep\n') < wf.indexOf('- name: Apply the stamp PDP manifest'), 'apply before infra apply');
   assert.ok(wf.indexOf('- name: Apply the stamp PDP manifest') < wf.indexOf('- name: Bind the health control plane into the console'), 'apply after console bind');
-  // The PDP inputs reach health.bicep through cp.json BEFORE any what-if or apply reads it.
-  assert.ok(wf.indexOf('- name: Resolve the PDP inputs') < wf.indexOf('- name: Bicep what-if'), 'inputs after what-if');
+  // The applying principal reaches health.bicep through cp.json BEFORE any what-if or apply reads it.
+  assert.ok(wf.indexOf('- name: Resolve the PDP applying principal') < wf.indexOf('- name: Bicep what-if'), 'principal after what-if');
 });
 
-test('the PDP key input step refuses a private key and a non-P-256 key (the markers it greps are present)', () => {
-  const b = stepBlock(read('.github/workflows/deploy-health.yml'), 'Resolve the PDP inputs (bundle verification public key, applying principal)');
-  // Breaks if the PRIVATE guard or the curve guard is deleted: a private key in a repository variable would be accepted.
-  assert.match(b, /\*PRIVATE\*\)/);
-  assert.match(b, /prime256v1\|P-256/);
-  assert.match(b, /pdpApplyPrincipalId: \$oid/);
+test('the repository-variable key gate is GONE: no LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM anywhere in the workflow', () => {
+  // Breaks if the hand-supplied key path (decision 6 removed it) creeps back as a second source of the verification key.
+  assert.doesNotMatch(read('.github/workflows/deploy-health.yml'), /LOOM_HEALTH_PDP_BUNDLE_PUBKEY_PEM/);
+});
+
+test('the verification key is fetched through Front Door AFTER the issuer is verified, as the deploy principal, and feeds the ONE phase-2 deployment', () => {
+  const wf = read('.github/workflows/deploy-health.yml');
+  const fetch = stepBlock(wf, 'Fetch the PDP bundle verification key through Front Door');
+  // Breaks if the fetch goes direct to the (private, internal) control plane FQDN instead of Front Door, if the token is not
+  // masked, if the key id check is dropped, or if the key is not validated as EC P-256 before it reaches the template.
+  assert.match(fetch, /URL="https:\/\/\$HOST\/api\/health\/pdp\/stamps\/\$STAMP\/verification-key"/);
+  assert.match(fetch, /::add-mask::\$TOKEN/);
+  assert.match(fetch, /"\$KEYID" != "global"/);
+  assert.match(fetch, /prime256v1\|P-256/);
+  assert.match(fetch, /pdpBundleVerificationPublicKeyPem: \$pem/);
+  assert.match(fetch, /401\) echo/);
+  assert.match(fetch, /403\) echo/);
+  assert.ok(wf.indexOf('- name: Verify the issuer through Front Door') < wf.indexOf('- name: Fetch the PDP bundle verification key'), 'key fetch before issuer verified');
+  assert.ok(wf.indexOf('- name: Fetch the PDP bundle verification key') < wf.indexOf('- name: Deploy health.bicep phase 2'), 'key fetch after phase 2');
+  // roll-race pins the az deployment write count of this workflow at 2 (phase 1 + phase 2): a third deployment is a defect here.
+  assert.equal((wf.match(/^\s+az deployment sub create --name/gm) ?? []).length, 2);
+  const phase2 = stepBlock(wf, 'Deploy health.bicep phase 2');
+  assert.match(phase2, /steps\.pdpkey\.outputs\.fetched == 'true'/);
+  assert.match(phase2, /TLS_ARG=\(\)/);
+});
+
+
+// ── the verification-key fetch step, EXECUTED under bash with stub az / curl (real openssl) ────────────────────────
+import { generateKeyPairSync } from 'node:crypto';
+
+function stepScript(name) {
+  const wf = read('.github/workflows/deploy-health.yml');
+  const b = stepBlock(wf, name);
+  const m = b.match(/\n {8}run: \|\n([\s\S]*)$/);
+  assert.ok(m, `step ${name} has no run block`);
+  return m[1].split('\n').map((l) => l.replace(/^ {10}/, '')).join('\n');
+}
+const pem = (curve) => generateKeyPairSync('ec', { namedCurve: curve }).publicKey.export({ format: 'pem', type: 'spki' }).toString();
+const FETCH = 'Fetch the PDP bundle verification key through Front Door';
+const CP_JSON = JSON.stringify({ audiences: ['a', 'b'] });
+const OUTPUTS = JSON.stringify({ healthControlPlaneState: { value: { deployed: true } }, healthIssuerState: { value: { frontDoorEndpointHost: 'lhds-auth-x.z01.azurefd.net' } }, healthStamp: { value: { stampName: 'stamp-x' } } });
+
+function runFetch({ codes, body, az = 'echo tok-SECRET-123', attempts = '3' }) {
+  const dir = mkdtempSync(join(tmpdir(), 'lhds-key-'));
+  const d = dir.replace(/\\/g, '/');
+  mkdirSync(join(dir, 'temp'));
+  mkdirSync(join(dir, 'bin'));
+  writeFileSync(join(dir, 'temp/outputs.json'), OUTPUTS);
+  writeFileSync(join(dir, 'temp/cp.json'), CP_JSON);
+  writeFileSync(join(dir, 'codes'), codes.join('\n') + '\n');
+  writeFileSync(join(dir, 'body.json'), body ?? '');
+  const stub = (n, t) => { writeFileSync(join(dir, 'bin', n), `#!/bin/bash\n${t}\n`); chmodSync(join(dir, 'bin', n), 0o755); };
+  stub('az', `echo "az $*" >> "${d}/az.log"\n${az}`);
+  stub('sleep', 'exit 0');
+  // curl: pops the next status code from the list (the last one repeats), writes the canned body to -o, prints the code.
+  stub('curl', `OUT=""; while [ $# -gt 0 ]; do case "$1" in -o) OUT="$2"; shift 2 ;; *) shift ;; esac; done
+n=$(cat "${d}/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${d}/n"
+code=$(sed -n "\${n}p" "${d}/codes"); [ -n "$code" ] || code=$(tail -n 1 "${d}/codes")
+[ "$OUT" != /dev/null ] && cp "${d}/body.json" "$OUT"
+printf '%s' "$code"`);
+  writeFileSync(join(dir, 'out.txt'), '');
+  writeFileSync(join(dir, 'step.sh'), stepScript(FETCH));
+  const r = spawnSync('bash', ['-e', 'step.sh'], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, MSYS_NO_PATHCONV: '1', PATH: `${d}/bin:${process.env.PATH}`, GITHUB_OUTPUT: `${d}/out.txt`, AUDIENCES: 'aaaa,api://aaaa', KEY_ATTEMPTS: attempts },
+  });
+  const read2 = (f) => { try { return readFileSync(join(dir, f), 'utf8'); } catch { return ''; } };
+  const res = { status: r.status, out: `${r.stdout}\n${r.stderr}`, outputs: read2('out.txt'), cp: read2('temp/cp.json'), curls: Number(read2('n').trim() || 0) };
+  rmSync(dir, { recursive: true, force: true });
+  return res;
+}
+const keyBody = (o) => JSON.stringify({ ok: true, data: { alg: 'ES256', keyId: 'global', publicKeyPem: pem('prime256v1'), ...o } });
+
+test('key fetch: 200 with a P-256 key and key id global writes it into cp.json and reports fetched=true; the token is masked and never echoed', () => {
+  const r = runFetch({ codes: [200], body: keyBody({}) });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.outputs, /fetched=true/);
+  // Breaks if the key is not handed to the template under the name health.bicep reads.
+  assert.match(JSON.parse(r.cp).pdpBundleVerificationPublicKeyPem, /^-----BEGIN PUBLIC KEY-----/);
+  assert.match(r.out, /::add-mask::tok-SECRET-123/); // masked BEFORE any use
+  assert.doesNotMatch(r.out.replace('::add-mask::tok-SECRET-123', ''), /tok-SECRET-123/); // and never printed otherwise
+});
+
+test('key fetch: 403 fails on the FIRST attempt naming the bootstrap (a retry cannot grant a role); 401 names the audience', () => {
+  const r403 = runFetch({ codes: [403], body: '{}', attempts: '5' });
+  assert.notEqual(r403.status, 0);
+  assert.equal(r403.curls, 1, 'a 403 must not be retried');
+  assert.match(r403.out, /csa-loom-post-deploy-bootstrap/);
+  assert.doesNotMatch(r403.outputs, /fetched=true/);
+  const r401 = runFetch({ codes: [401], body: '{}', attempts: '5' });
+  assert.notEqual(r401.status, 0);
+  assert.equal(r401.curls, 1);
+  assert.match(r401.out, /answered 401/);
+});
+
+test('key fetch: a persistent 404 / 503 is retried the bounded number of times, then fails naming the cause WITHOUT claiming it', () => {
+  const r = runFetch({ codes: [404], body: JSON.stringify({ ok: false, error: { code: 'not_found' } }), attempts: '3' });
+  assert.notEqual(r.status, 0);
+  assert.equal(r.curls, 3, 'exactly the bounded attempts');
+  assert.match(r.out, /NOT established: why/);
+  // Recovery: 503 twice, then 200 passes (the control plane reads the key after it starts).
+  const ok = runFetch({ codes: [503, 503, 200], body: keyBody({}), attempts: '5' });
+  assert.equal(ok.status, 0, ok.out);
+  assert.equal(ok.curls, 3);
+});
+
+test('key fetch: refuses a key id other than global and a key that is not EC P-256 (the PDP could never verify with either)', () => {
+  const wrongId = runFetch({ codes: [200], body: keyBody({ keyId: 'default' }) });
+  assert.notEqual(wrongId.status, 0);
+  assert.match(wrongId.out, /key id 'default'/);
+  const p384 = runFetch({ codes: [200], body: keyBody({ publicKeyPem: pem('secp384r1') }) });
+  assert.notEqual(p384.status, 0);
+  assert.match(p384.out, /not EC P-256/);
+  const junk = runFetch({ codes: [200], body: keyBody({ publicKeyPem: 'not a pem' }) });
+  assert.notEqual(junk.status, 0);
+  assert.match(junk.out, /not a PEM public key/);
 });

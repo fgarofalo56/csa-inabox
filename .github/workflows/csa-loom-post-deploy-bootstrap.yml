@@ -3062,6 +3062,18 @@ jobs:
           ARGS=(--as-client-id "$AS_CLIENT" --cp-app-client-id "$CP_APP" --tenant-id "$TENANT" --cp-identity-principal-id "$CP_IDENTITY"
                 --cp-app-name "$CP_NAME" --cp-resource-group "$CP_RG" --subscription "$ADMIN_SUB" --platform containerApps
                 --ci-client-id "$CI_SP_CLIENT_ID")
+          # The stamp PDP's workload identity (#5422) pulls its bundle with client credentials through Front Door: it needs
+          # HealthCP.Reader and its client id on the caller allowlist. 0 found = no PDP deployed (not an error); an unreadable
+          # list fails (never read as "no PDP"); more than one is ambiguous (R5).
+          az identity list --subscription "$ADMIN_SUB" --query "[?starts_with(name, 'uami-loom-health-pdp-')].{p:principalId,c:clientId}" -o json > temp/lhds-pdp.json 2> temp/lhds-pdp.err \
+            || fail "azure-read" "could not LIST managed identities in subscription $ADMIN_SUB, so whether a stamp PDP identity exists is UNKNOWN (not a claim that it is absent). az said: $(head -c 400 temp/lhds-pdp.err)"
+          PDP_N=$(jq 'length' temp/lhds-pdp.json)
+          [ "$PDP_N" -le 1 ] || fail "ambiguous" "$PDP_N identities named uami-loom-health-pdp-* in $ADMIN_SUB; refusing to guess which stamp PDP to wire."
+          if [ "$PDP_N" = "1" ]; then
+            ARGS+=(--pdp-principal-id "$(jq -r '.[0].p' temp/lhds-pdp.json)" --pdp-client-id "$(jq -r '.[0].c' temp/lhds-pdp.json)")
+          else
+            echo "::notice::No uami-loom-health-pdp-* identity in $ADMIN_SUB: the stamp PDP is not deployed yet, so it is not wired. Re-run this bootstrap after deploy-health deploys it."
+          fi
           [ -n "$APIM_PRINCIPAL" ] && ARGS+=(--apim-principal-id "$APIM_PRINCIPAL")
           [ -n "${CONSOLE_UAMI_CLIENT:-}" ] && ARGS+=(--console-client-id "$CONSOLE_UAMI_CLIENT")
           [ -n "${CONSOLE_UAMI_PRINCIPAL:-}" ] && ARGS+=(--console-principal-id "$CONSOLE_UAMI_PRINCIPAL")
