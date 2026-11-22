@@ -13,7 +13,7 @@ describe('stamp self-registration wiring (#5377)', () => {
   it('the four stamp env names the service reads are the ones bicep emits, as one all-or-nothing block', () => {
     // Breaks if bicep renames a var (the service would then refuse to start on a partial set) or emits it unconditionally.
     expect(cp).toMatch(/var stampEnv = empty\(stampId\) \? \[\] : \[[\s\S]*LOOM_HEALTH_CP_STAMP_ID[\s\S]*LOOM_HEALTH_CP_STAMP_REGION[\s\S]*LOOM_HEALTH_CP_STAMP_CLASS[\s\S]*LOOM_HEALTH_CP_STAMP_BASE_URL[\s\S]*\]/);
-    expect(cp).toContain('var cpEnv = concat(authEnv, tlsEnv, stampEnv, pdpEnv, [');
+    expect(cp).toContain('var cpEnv = concat(authEnv, tlsEnv, stampEnv, pdpEnv, pdpSigningEnv, [');
     const src = readFileSync(resolve(dir, '../src/registry/self-register.ts'), 'utf8');
     for (const n of ['LOOM_HEALTH_CP_STAMP_ID', 'LOOM_HEALTH_CP_STAMP_REGION', 'LOOM_HEALTH_CP_STAMP_CLASS', 'LOOM_HEALTH_CP_STAMP_BASE_URL']) {
       expect(src, n).toContain(n);

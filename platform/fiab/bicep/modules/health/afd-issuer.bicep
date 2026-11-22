@@ -5,11 +5,13 @@
 // Gateway sits in the stamp VNet, which has no peering to the hub, so https://<stamp ingress>/auth
 // answered 502 on every path (measured 2026-11-21, Commercial dev01). Operator decision 2026-11-21:
 // serve the issuer through the Front Door profile that is already private-linked to the hub
-// environment for the console, on a route that matches ONLY /auth/*.
+// environment for the console, on a route that matches ONLY /auth/*. #5422 adds one more path to the
+// same route: /api/health/pdp/*, the bundle the stamp PDP pulls (the stamp has no network path to the
+// internal control plane, and its dev profile egresses through a load balancer with 0 peerings).
 //
 // WHAT. A DEDICATED endpoint (the console endpoint and its route are untouched), an origin group that
 // probes the issuer metadata document, one origin = the control plane FQDN with a Private Link
-// connection to the environment, a route whose patternsToMatch is exactly ['/auth/*'], a DEDICATED WAF
+// connection to the environment, a route whose patternsToMatch is exactly ['/auth/*', '/api/health/pdp/*'], a DEDICATED WAF
 // policy, and a NEW security policy attaching that WAF to the new endpoint only (the console's
 // securityPolicy, its WAF policy and its domain list are not touched).
 //
@@ -116,9 +118,12 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = if (rou
   properties: {
     originGroup: { id: originGroup.id }
     supportedProtocols: ['Https']
-    // ONLY the authorization server. Every other path on this endpoint (including /api/health/*)
-    // gets Front Door's own 404, so the control plane API is never published here.
-    patternsToMatch: ['/auth/*']
+    // ONLY the authorization server and the PDP bundle path. Every other path on this endpoint (including
+    // /api/health/tenants and the rest of /api/health/*) gets Front Door's own 404, so the rest of the control
+    // plane API is never published here. /api/health/pdp/* (#5422) is how the stamp PDP, which cannot resolve or
+    // reach the internal control plane FQDN, pulls its signed bundle; the control plane still enforces the Entra
+    // token, the HealthCP role and the caller allowlist on it (src/middleware/auth.ts).
+    patternsToMatch: ['/auth/*', '/api/health/pdp/*']
     forwardingProtocol: 'HttpsOnly'
     linkToDefaultDomain: 'Enabled'
     httpsRedirect: 'Enabled'
@@ -183,6 +188,9 @@ output issuerUrl string = 'https://${endpoint.properties.hostName}/auth'
 
 @description('Whether the origin group, origin and route were declared by this invocation.')
 output routeDeployed bool = routeDeploy
+
+@description('Base URL the stamp PDP pulls its bundle from (https://<host>); OPA appends /api/health/pdp/stamps/<id>/bundle.tar.gz.')
+output pdpBaseUrl string = 'https://${endpoint.properties.hostName}'
 
 @description('Whether a WAF security policy was attached to the issuer endpoint.')
 output wafAttached bool = routeDeploy

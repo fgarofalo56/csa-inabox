@@ -20,7 +20,8 @@
 // run on tenants whose policy forces storage shared-key access off (same cause as #5345/#5355).
 // The rendered manifest is the output `manifest`; .github/workflows/deploy-health.yml applies it
 // with scripts/csa-loom/aks-apply-manifest.sh (`az aks command invoke`). The output is the single
-// source of truth: nothing else renders this YAML.
+// source of truth: nothing else renders this YAML. Besides the PDP it carries the Namespace and the control plane's
+// namespace-scoped RoleBinding (ClusterRole edit), which is how the control plane reaches the cluster (#5422).
 //
 // Follow-up that is NOT done here and is a real gate until done: the PDP identity
 // (output identityPrincipalId) must hold the `HealthCP.Reader` app role on the control-plane app
@@ -77,6 +78,9 @@ param replicas int = 2
 
 @description('Object id of the service principal that applies the manifest (the deploy workflow). It receives Azure Kubernetes Service RBAC Cluster Admin on the cluster: the cluster uses Azure RBAC, local accounts are disabled, and the manifest creates a Namespace (cluster-scoped), so a namespace-scoped role cannot do it. Empty = no grant; the apply then fails closed with the role named.')
 param applyPrincipalId string = ''
+
+@description('Object id of the control plane identity. When set the manifest adds a RoleBinding (ClusterRole edit, this namespace only) so the control plane can apply tenant workloads through runCommand. Empty = no binding.')
+param controlPlanePrincipalId string = ''
 
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
@@ -170,7 +174,28 @@ var opaConfig = join([
 // all capabilities dropped, seccomp RuntimeDefault. Readiness is /health?bundles:
 // the pod takes no traffic until a SIGNED bundle is active, so an unconfigured or
 // unverifiable PDP is not Ready and its callers fail closed (503, ADR-011).
-var manifest = join([
+// The control plane's Kubernetes access, scoped to THIS namespace only (#5422): a RoleBinding to the built-in ClusterRole
+// `edit` (namespaced objects, no RBAC objects, no cluster-scoped objects). This replaces the cluster-scope Azure role
+// "Azure Kubernetes Service RBAC Writer", which reads Secrets and runs pods as any ServiceAccount in every namespace.
+// The subject is the control plane identity's Entra OBJECT ID (a service principal presents its object id as the user).
+var controlPlaneBinding = empty(controlPlanePrincipalId) ? [] : [
+  '---'
+  'apiVersion: rbac.authorization.k8s.io/v1'
+  'kind: RoleBinding'
+  'metadata:'
+  '  name: loom-health-cp-edit'
+  '  namespace: ${aksNamespace}'
+  'roleRef:'
+  '  apiGroup: rbac.authorization.k8s.io'
+  '  kind: ClusterRole'
+  '  name: edit'
+  'subjects:'
+  '  - apiGroup: rbac.authorization.k8s.io'
+  '    kind: User'
+  '    name: "${controlPlanePrincipalId}"'
+]
+
+var manifest = join(concat([
   'apiVersion: v1'
   'kind: Namespace'
   'metadata:'
@@ -262,7 +287,7 @@ var manifest = join([
   '  ports:'
   '    - port: 80'
   '      targetPort: ${opaPort}'
-], '\n')
+], controlPlaneBinding), '\n')
 
 @description('The rendered Kubernetes manifest (Namespace, ServiceAccount, ConfigMap, Deployment, Service). Carries the PUBLIC bundle-verification key and ids only, no private material. Applied by the deploy workflow.')
 output manifest string = manifest
