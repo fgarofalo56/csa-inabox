@@ -154,6 +154,16 @@ test('workflow: the import step exists and runs BEFORE the PDP apply step', () =
   assert.ok(importEnd > importStart);
 });
 
+test('workflow: the import step waits the documented 90 s firewall propagation, not the 35 s default', () => {
+  // Breaks if the env line is removed or lowered: run 45066030346 got 403 for ~65 s after the lease opened
+  // the firewall, so resolve-acr-digest.sh (which never concludes "absent" after a refused read) exited 4
+  // and the import never ran. Pinned to the step block, so the same line elsewhere cannot satisfy it.
+  const m = importBlock.match(/^ {10}LOOM_ACR_LEASE_OPEN_SECONDS: '(\d+)'$/m);
+  assert.ok(m, 'LOOM_ACR_LEASE_OPEN_SECONDS is not set on the import step');
+  assert.ok(Number(m[1]) >= 90, `propagation wait ${m[1]}s is below the documented 90 s maximum`);
+  assert.ok(importBlock.indexOf('LOOM_ACR_LEASE_OPEN_SECONDS') < importBlock.indexOf('run: |'), 'must be in the step env, not inside the script');
+});
+
 test('workflow: the import source is digest-pinned and the tag is not the pull reference', () => {
   assert.match(runBody, /az acr import --name "\$ACR" --resource-group "\$HUB_RG" --source "\$SRC@\$DIGEST" --image "\$REPO:\$TAG"/);
   assert.match(runBody, /grep -qE '\^sha256:\[0-9a-f\]\{64\}\$'/);

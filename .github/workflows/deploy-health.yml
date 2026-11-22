@@ -998,6 +998,11 @@ jobs:
         env:
           ACR: ${{ steps.hub.outputs.acr }}
           HUB_RG: ${{ steps.hub.outputs.hub_rg }}
+          # Wait the DOCUMENTED maximum (90 s; docs/fiab/acr-firewall-lease.md) after the lease opens
+          # the firewall, not the 35 s default: run 45066030346 got 403 for ~65 s after open, and
+          # resolve-acr-digest.sh rightly never concludes "absent" once a read was refused, so a short
+          # wait made a genuinely absent image read as "registry unreadable" and the import never ran.
+          LOOM_ACR_LEASE_OPEN_SECONDS: '90'
         run: |
           set -uo pipefail
           set +e
