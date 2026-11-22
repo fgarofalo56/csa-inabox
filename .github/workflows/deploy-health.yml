@@ -639,19 +639,36 @@ jobs:
             echo "::error::The issuer metadata is served but its issuer is '$GOT', not the configured '$ISSUER'."
             exit 1
           fi
+          # The route also carries /api/health/pdp/* (#5422). Without a token the control plane must answer 401. A newly added
+          # route takes Front Door's edge about 10 minutes to propagate (measured live, run 44973459903: 404 for ~9 minutes after ARM
+          # reported the route Succeeded), and until then the edge answers 404 with its OWN page. So this probe retries, bounded, on 404
+          # ONLY (propagation shows up as 404, same as the issuer check above). Any other answer ends the loop at once: 401 passes;
+          # 200 means no authentication and 403 or anything else means the authentication in front of it is not what it should be.
+          STAMP=$(jq -r '.healthStamp.value.stampName // ""' temp/outputs.json)
+          if [ -z "$STAMP" ]; then echo "::error::The deploy outputs carry no stamp name, so the PDP path cannot be probed."; exit 1; fi
+          PDPCODE=000
+          PDP_START=$SECONDS
+          for i in $(seq 1 "${VERIFY_ATTEMPTS:-40}"); do
+            PDPCODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$HOST/api/health/pdp/stamps/$STAMP/verification-key" 2> temp/pdpneg.err)
+            [ "$PDPCODE" != "404" ] && break
+            echo "attempt $i: HTTP 404 on the PDP path (a new Front Door route takes minutes to reach the edge)"
+            sleep 15
+          done
+          PDP_ELAPSED=$((SECONDS - PDP_START))
+          if [ "$PDPCODE" = "404" ]; then
+            echo "::error::https://$HOST/api/health/pdp/stamps/$STAMP/verification-key still answered HTTP 404 to an unauthenticated request after ${VERIFY_ATTEMPTS:-40} attempts (about ${PDP_ELAPSED}s). Most likely cause (NOT proven): the Front Door route has not propagated to the edge yet (seen to take about 10 minutes); the other possibility is that the route does not carry /api/health/pdp/*. Check the route patterns in the portal, then re-run. curl: $(head -c 200 temp/pdpneg.err)"
+            exit 1
+          fi
+          if [ "$PDPCODE" != "401" ]; then
+            echo "::error::https://$HOST/api/health/pdp/stamps/$STAMP/verification-key answered HTTP $PDPCODE to an UNAUTHENTICATED request; expected 401 from the control plane (200 = no authentication). Not retried: only 404 is a propagation signal. curl: $(head -c 200 temp/pdpneg.err)"
+            exit 1
+          fi
+          # NEGATIVE CONTROL, deliberately AFTER the PDP probe and deliberately single-shot: 404 is its PASS condition, so a retry
+          # could only turn a real 401/200 into a pass by waiting. It runs once the PDP path has answered 401, so it reads the
+          # propagated route configuration rather than a stale one.
           NEG=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$HOST/api/health/tenants" 2> temp/neg.err)
           if [ "$NEG" = "200" ] || [ "$NEG" = "401" ] || [ "$NEG" = "403" ]; then
             echo "::error::NEGATIVE CONTROL FAILED: https://$HOST/api/health/tenants answered HTTP $NEG, so the control plane API is reachable on the issuer endpoint. The route must match /auth/* only."
-            exit 1
-          fi
-          # The route also carries /api/health/pdp/* (#5422). Without a token the control plane must answer 401: a 404 means the
-          # route is not serving the PDP path (the PDP could never pull a bundle), a 200 or 403 on an unauthenticated call means
-          # the authentication in front of it is not what it should be.
-          STAMP=$(jq -r '.healthStamp.value.stampName // ""' temp/outputs.json)
-          if [ -z "$STAMP" ]; then echo "::error::The deploy outputs carry no stamp name, so the PDP path cannot be probed."; exit 1; fi
-          PDPCODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$HOST/api/health/pdp/stamps/$STAMP/verification-key" 2> temp/pdpneg.err)
-          if [ "$PDPCODE" != "401" ]; then
-            echo "::error::https://$HOST/api/health/pdp/stamps/$STAMP/verification-key answered HTTP $PDPCODE to an UNAUTHENTICATED request; expected 401 from the control plane (404 = Front Door is not routing /api/health/pdp/*, 200 = no authentication). curl: $(head -c 200 temp/pdpneg.err)"
             exit 1
           fi
           echo "::notice::Issuer verified through Front Door: https://$HOST/auth/.well-known/openid-configuration returned 200 with issuer $GOT; /api/health/tenants answered HTTP $NEG (not served); /api/health/pdp/* answered HTTP $PDPCODE without a token (served, authenticated)."

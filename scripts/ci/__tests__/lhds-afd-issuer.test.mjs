@@ -295,7 +295,11 @@ test('verify step: the PDP path must answer 401 WITHOUT a token: 404 (not routed
   const ok = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 404, pdpCode: 401 }), files });
   assert.equal(ok.status, 0, ok.out); // positive control
   assert.match(ok.out, /\/api\/health\/pdp\/\* answered HTTP 401 without a token/);
-  for (const bad of [404, 200, 403]) {
+  // 404 is retried first (Front Door propagation); once the attempts are exhausted it fails with its own message.
+  const notRouted = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 404, pdpCode: 404 }), files });
+  assert.notEqual(notRouted.status, 0, 'a PDP path that never leaves 404 must fail');
+  assert.match(notRouted.out, /still answered HTTP 404/);
+  for (const bad of [200, 403]) {
     const r = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 404, pdpCode: bad }), files });
     assert.notEqual(r.status, 0, `HTTP ${bad} on the PDP path must fail the verify step`);
     assert.match(r.out, new RegExp(`answered HTTP ${bad} to an UNAUTHENTICATED request`));
