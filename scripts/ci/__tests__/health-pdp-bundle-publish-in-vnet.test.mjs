@@ -62,8 +62,18 @@ test('the control plane URL comes from the estate resolver or a validated https 
 
 test('no curl targets the issuer host for the control plane; the JWKS read is the only Front Door call', () => {
   const curls = [...J.publish.matchAll(/curl [^\n]*/g)].map((m) => m[0]);
-  const cpCurls = curls.filter((c) => c.includes('routing-map'));
+  const cpCurls = curls.filter((c) => c.includes('routing-map') && !c.includes('routing-map/publish'));
   assert.equal(cpCurls.length, 1, 'positive: exactly one routing-map read');
+  // The refresh: breaks if the POST is dropped (a fresh stamp has no map, GET answers 404,
+  // run 45038029387), aimed at Front Door, or loses --fail.
+  const refresh = curls.filter((c) => c.includes('routing-map/publish'));
+  assert.equal(refresh.length, 1, 'breaks if the routing-map refresh POST is removed or duplicated');
+  assert.ok(refresh[0].includes('-X POST') && refresh[0].includes('${CP_URL%/}/api/health/routing-map/publish'), 'breaks if the refresh is not a POST to the in-VNet CP');
+  // A status-observing probe must NOT use -f (the curl-httpcode-fallback guard); it branches on the code instead.
+  assert.ok(!/curl -f/.test(refresh[0]) && !/ISSUER_URL/.test(refresh[0]), 'breaks if -f returns (collapses 4xx/5xx) or the refresh is aimed at Front Door');
+  assert.match(J.publish, /if \[ "\$\{CODE:0:1\}" != "2" \]; then/, 'breaks if a non-2xx refresh is not treated as a failure');
+  assert.ok(J.publish.indexOf('routing-map/publish') < J.publish.indexOf('${CP_URL%/}/api/health/routing-map"'), 'breaks if the refresh runs AFTER the read');
+  assert.match(J.publish, /409\) WHY="the control plane refused to replace a non-empty routing map/, 'breaks if the 409 wipe guard is not named (or is overridden)');
   assert.ok(cpCurls[0].includes('${CP_URL%/}/api/health/routing-map'), 'breaks if the routing-map read is aimed at ISSUER_URL or a literal host');
   assert.ok(!/ISSUER_URL/.test(cpCurls[0]), 'ISSUER_URL (Front Door) in the routing-map curl');
   assert.ok(curls.some((c) => c.includes('${ISSUER_URL%/}/jwks.json')), 'positive: JWKS still read from the public issuer');
