@@ -17,6 +17,22 @@ export function unsignedBundle(label = 'x'): Buffer {
   );
 }
 
+/**
+ * An unsigned bundle whose single module has an entry name of EXACTLY `nameBytes` bytes once a reader joins the USTAR prefix and
+ * name fields (an archive another tool wrote: writeTar itself refuses names over 100 bytes).
+ */
+export function bundleWithNameBytes(nameBytes: number): Buffer {
+  const t = writeTar([{ name: '/a.rego', data: Buffer.from('package a\n') }]);
+  const prefix = 'p'.repeat(nameBytes - 1 - 'a.rego'.length); // name = prefix + '/' + 'a.rego'
+  t.fill(0, 0, 100);
+  t.write('a.rego', 0, 'ascii');
+  t.write(prefix, 345, 'ascii');
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 32 : (t[i] as number);
+  t.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 'ascii');
+  return gzipSync(t);
+}
+
 export interface LocalBundleSigner extends BundleSigner {
   calls: number;
   /** true when `sig` verifies over `input` with this signer's public key. */

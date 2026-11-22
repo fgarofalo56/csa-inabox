@@ -21,6 +21,8 @@ export const BUNDLE_KEY_ID = 'global';
 /** Largest archive we will unpack (a signed bundle is ~10 KB; this bounds a decompression bomb). */
 export const MAX_UNPACKED_BYTES = 256 * 1024;
 const SIGNATURES_FILE = '.signatures.json';
+/** Longest entry name writeTar can store (USTAR name field). */
+export const MAX_NAME_BYTES = 100;
 
 export interface BundleSigner {
   readonly alg: 'ES256';
@@ -77,6 +79,8 @@ export function bundleFileHashes(entries: readonly TarEntry[]): Array<{ name: st
   const seen = new Set<string>();
   const files: Array<{ name: string; hash: string; algorithm: 'SHA-256' }> = [];
   for (const e of entries) {
+    // writeTar can store at most 100 bytes of name; refuse here, before the vault is called, with a message that is true.
+    if (Buffer.byteLength(e.name) > MAX_NAME_BYTES) throw new BundleSignError(`a file name in the bundle is ${Buffer.byteLength(e.name)} bytes; the archive format holds at most ${MAX_NAME_BYTES}`);
     const name = e.name.replace(/^\/+/, '');
     if (name === SIGNATURES_FILE) throw new BundleSignError('the bundle already contains .signatures.json: upload it UNSIGNED, the control plane signs it');
     if (!SAFE_NAME.test(name) && name !== '.manifest') throw new BundleSignError(`unsupported file name in the bundle: ${name.slice(0, 60)}`);
@@ -115,10 +119,17 @@ export async function signBundle(tgz: Buffer, signer: BundleSigner): Promise<Buf
   if (!nodeVerify('sha256', input, { key, dsaEncoding: 'ieee-p1363' }, sig)) {
     throw new Error('key vault signature did not verify against the key it published');
   }
-  const signed = writeTar([
-    ...entries,
-    { name: `/${SIGNATURES_FILE}`, data: Buffer.from(JSON.stringify({ signatures: [`${header}.${payload}.${b64u(sig)}`] })) },
-  ]);
+  let signed: Buffer;
+  try {
+    signed = writeTar([
+      ...entries,
+      { name: `/${SIGNATURES_FILE}`, data: Buffer.from(JSON.stringify({ signatures: [`${header}.${payload}.${b64u(sig)}`] })) },
+    ]);
+  } catch (e) {
+    // The archive, not the vault, is why this failed: say so (deploy-integrity R7).
+    if (e instanceof TarError) throw new BundleSignError(e.message);
+    throw e;
+  }
   return gzipSync(signed);
 }
 

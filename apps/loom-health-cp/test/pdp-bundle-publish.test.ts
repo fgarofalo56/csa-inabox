@@ -11,7 +11,7 @@ import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { signBundle } from '../src/pdp/bundle-sign.js';
 import { CollectionBundleSource, MAX_BUNDLE_BYTES } from '../src/pdp/bundles.js';
-import { entriesOf, localBundleSigner, unsignedBundle, type LocalBundleSigner } from './bundle-fixtures.js';
+import { bundleWithNameBytes, entriesOf, localBundleSigner, unsignedBundle, type LocalBundleSigner } from './bundle-fixtures.js';
 import { adminToken, memoryStores, readerToken, startHarness, stampBody, type Harness } from './helpers.js';
 
 const run = promisify(execFile);
@@ -94,6 +94,19 @@ describe('PUT /api/health/pdp/stamps/{id}/bundle', () => {
     expect(r.json.error.message).toMatch(/UNSIGNED/);
     expect(signer.calls).toBe(calls);
     expect((await served('stamp-a')).status).toBe(404);
+  });
+
+  it('an entry name of 101 bytes is a 400 that names the name length, NOT a 502 "could not sign"; nothing stored, vault not called', async () => {
+    const calls = signer.calls;
+    const r = await h.call('PUT', B('stamp-a'), { token: admin, body: body(bundleWithNameBytes(101)) });
+    // Breaks if the TarError from writeTar is reported as a signing/vault fault (502): that would blame Key Vault for the publisher's archive.
+    expect(r.status).toBe(400);
+    expect(r.json.error.message).toMatch(/101 bytes/);
+    expect(r.json.error.message).not.toMatch(/key vault|sign/i);
+    expect(signer.calls).toBe(calls);
+    expect((await served('stamp-a')).status).toBe(404);
+    // Positive control: 100 bytes is accepted, so the 400 above is the name length and not a dead route.
+    expect((await h.call('PUT', B('stamp-a'), { token: admin, body: body(bundleWithNameBytes(100)) })).status).toBe(200);
   });
 
   it('a vault that fails to sign is 502 and NOTHING stored (never a silently unsigned store)', async () => {

@@ -113,7 +113,8 @@ export class CollectionBundleSource implements BundleSource {
       signed = await signBundle(bytes, this.signer);
     } catch (e) {
       if (e instanceof BundleSignError) throw badRequest(e.message);
-      throw new HttpError(502, 'bundle_signing_failed', 'Key Vault could not sign the bundle; nothing was stored');
+      // Not a claim about the cause: the sign request or the check of its answer failed after the bundle validated.
+      throw new HttpError(502, 'bundle_signing_failed', 'the control plane could not produce a verified signature for the bundle (cause not established); nothing was stored');
     }
     const storedSha = sha256Hex(signed);
     await this.docs.upsert({

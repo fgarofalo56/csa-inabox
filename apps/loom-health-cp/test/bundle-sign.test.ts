@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { KeyVaultBundleSigner } from '../src/auth/signer.js';
 import { BundleSignError, bundleFileHashes, canonicalJson, signBundle, verificationKeyPem } from '../src/pdp/bundle-sign.js';
 import { readTar, TarError, writeTar } from '../src/pdp/tar.js';
-import { entriesOf, localBundleSigner, unsignedBundle } from './bundle-fixtures.js';
+import { bundleWithNameBytes, entriesOf, localBundleSigner, unsignedBundle } from './bundle-fixtures.js';
 
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 
@@ -78,6 +78,19 @@ describe('signBundle', () => {
     await expect(signBundle(make(), signer)).rejects.toThrow(BundleSignError);
     await expect(signBundle(make(), signer)).rejects.toThrow(msg);
     expect(signer.calls).toBe(0); // a rejected archive costs no Key Vault operation
+  });
+
+  it('an entry name of 101 bytes is a BundleSignError that says so (never a vault failure) and costs no vault call; 100 bytes signs', async () => {
+    const signer = localBundleSigner();
+    // Breaks if the over-long name reaches writeTar after the vault was already called (a TarError would then surface as a
+    // "could not sign" fault) or if the limit moves: 101 must be refused, 100 must still sign.
+    const e = await signBundle(bundleWithNameBytes(101), signer).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(BundleSignError);
+    expect((e as Error).message).toMatch(/101 bytes/);
+    expect((e as Error).message).not.toMatch(/key vault/i);
+    expect(signer.calls).toBe(0);
+    await expect(signBundle(bundleWithNameBytes(100), signer)).resolves.toBeInstanceOf(Buffer);
+    expect(signer.calls).toBe(1);
   });
 
   it('a decompression bomb is refused before unpacking past the cap', async () => {
