@@ -1,10 +1,10 @@
-// Serves the per-stamp signed Rego bundle to that stamp's OPA (ADR-011, W1-5).
-// The control plane does NOT sign or build: bundles are produced and ES256-signed
-// by apps/loom-health-pdp/tools/build-bundle.sh in the pipeline (the private key
-// stays in Key Vault) and published here (PUT .../bundle -> CollectionBundleSource,
-// or a file dropped at <dir>/<stamp>.tar.gz). This module only stores and hands them
-// out, so a bundle OPA cannot verify is the pipeline's defect and OPA's own
-// signature check rejects it (persist:true keeps the last good one).
+// Serves the per-stamp signed Rego bundle to that stamp's OPA (ADR-011, W1-5) and signs what the pipeline
+// publishes (#5422). The control plane does not BUILD bundles: apps/loom-health-pdp/tools/build-bundle.sh --unsigned
+// does, and the pipeline PUTs the unsigned archive (PUT .../bundle -> CollectionBundleSource). This module SIGNS it
+// with the stamp's Key Vault key (bundle-sign.ts) before storing it, then hands the signed archive out. A file dropped
+// at <dir>/<stamp>.tar.gz (FileBundleSource, dev, read-only) is served as-is and must already be signed. OPA's own
+// signature check against the key the PDP was deployed with is the trust decision (persist:true keeps the last good
+// bundle through an outage).
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
