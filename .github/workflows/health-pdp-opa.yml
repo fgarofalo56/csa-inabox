@@ -13,6 +13,9 @@ on:
       - 'apps/loom-health-cp/src/pdp/**'
       - 'apps/loom-health-cp/src/http/app.ts'
       - 'apps/loom-health-cp/test/pdp-*.ts'
+      - 'apps/loom-health-cp/test/bundle-*.ts'
+      - 'apps/loom-health-cp/src/auth/signer.ts'
+      - 'apps/loom-health-cp/package*.json'
       - '.github/workflows/health-pdp-opa.yml'
   workflow_dispatch: {}
   # Reused as the test gate of health-pdp-bundle-publish.yml.
@@ -59,12 +62,19 @@ jobs:
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/opa" check --strict --schema input-contract.json "$RUNNER_TEMP/stage"
-      - name: Publish-path tests (control plane endpoint, publish script)
+      # No other workflow runs the loom-health-cp vitest suite (#5396), so this job is where the control plane's bundle SIGNING is
+      # checked against a REAL OPA: bundle-sign-opa.test.ts has OPA verify what the control plane signed (and reject a tampered
+      # module and a different key). OPA is set to the pinned binary installed above, and REQUIRE_OPA=1 makes that file FAIL
+      # instead of skip if the binary is ever not wired, so a silent skip cannot read as green.
+      - name: Publish-path and signing tests (control plane endpoints, publish script, real-OPA signature check)
         working-directory: apps/loom-health-cp
+        env:
+          OPA: ${{ runner.temp }}/opa
+          REQUIRE_OPA: '1'
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
-          npx vitest run test/pdp-bundle.test.ts test/pdp-bundle-publish.test.ts test/pdp-stamp-data.test.ts
+          npx vitest run test/pdp-bundle.test.ts test/pdp-bundle-publish.test.ts test/pdp-stamp-data.test.ts test/pdp-verification-key.test.ts test/bundle-sign.test.ts test/bundle-sign-opa.test.ts
           npm run build
       - name: End-to-end - a signed per-stamp bundle in a real OPA allows and denies
         working-directory: apps/loom-health-pdp

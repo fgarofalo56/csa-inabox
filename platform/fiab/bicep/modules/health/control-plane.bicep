@@ -135,6 +135,9 @@ param stampClass string = ''
 @description('Stamp public ingress base URL (https://<ingress fqdn>), recorded as the stamp baseUrl the routing publisher serves. Required with stampId.')
 param stampBaseUrl string = ''
 
+@description('In-cluster decision endpoint of the stamp PDP, emitted as LOOM_HEALTH_CP_PDP_URL for the tenant engine config. Empty = PDP not deployed, no env emitted.')
+param pdpUrl string = ''
+
 @description('Tags.')
 param tags object = {}
 
@@ -301,6 +304,20 @@ resource cpStampRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// ── Stamp AKS: run kubectl through ARM runCommand (#5422) ─────────────────────
+// The private stamp cluster has no network path from the hub, so the control plane reaches it with
+// `managedClusters/runCommand`. ARM half: Microsoft.ContainerService/managedClusters/runcommand/action and
+// .../commandResults/read. No separate grant: Contributor on this resource group (cpStampContributor above)
+// carries both through managedClusters/*, and the only built-in role that names runcommand
+// (Azure Kubernetes Service Cluster Admin Role) lacks commandResults/read.
+// https://learn.microsoft.com/azure/aks/access-private-cluster (RBAC actions row)
+// Kubernetes half: NO Azure data role. The cluster uses Azure RBAC with local accounts disabled, and the cluster-scope
+// Azure role that would do this (Azure Kubernetes Service RBAC Writer) reads Secrets and runs pods as any
+// ServiceAccount in EVERY namespace. Instead engines.bicep renders a namespace-scoped Kubernetes RoleBinding
+// (ClusterRole edit, namespace loom-health) for this identity's object id (output identityPrincipalId), which the
+// deploy workflow applies once through runCommand as Cluster Admin. A RoleBinding for a service principal names its
+// object id as the user.
+
 // ── Ingress TLS certificate (#5345) ───────────────────────────────────────────
 // The control plane ensures the ingress certificate in the stamp vault (apps/loom-health-cp
 // src/tls/ingress-cert.ts). Key Vault Certificates Officer = certificate create/read/renew on the
@@ -353,7 +370,41 @@ resource cpSigningKeyUser 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
-var signingKeyIdEffective = !empty(authSigningKeyId) ? authSigningKeyId : (createSigningKey ? signingKey!.properties.keyUriWithVersion : '')
+// ── PDP bundle signing key (#5422, operator decision 6) ───────────────────────
+// The control plane signs each stamp's OPA bundle (ES256) through the Key Vault sign operation, so the private key
+// never leaves the vault and no pipeline or GitHub secret holds it (apps/loom-health-cp src/pdp/bundle-sign.ts).
+// Created through ARM exactly like the token signing key above: ARM creates keys on a private vault with no
+// data-plane role. The VERSIONED id goes to the app, so the version that signs is the version whose public half
+// /api/health/pdp/stamps/<id>/verification-key serves. Rotation is a redeploy with a new key name, never an automatic
+// new version (a stamp PDP verifies against one deployed public key).
+var pdpSigningKeyName = 'lhds-pdp-bundle-sign'
+var createPdpSigningKey = !empty(keyVaultId)
+
+resource pdpSigningKey 'Microsoft.KeyVault/vaults/keys@2024-11-01' = if (createPdpSigningKey) {
+  parent: stampVault
+  name: pdpSigningKeyName
+  properties: {
+    kty: 'EC-HSM'
+    curveName: 'P-256'
+    keyOps: ['sign', 'verify']
+    attributes: { enabled: true }
+  }
+}
+
+resource cpPdpSigningKeyUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createPdpSigningKey && !skipRoleGrants) {
+  scope: pdpSigningKey
+  name: guid(keyVaultId, pdpSigningKeyName, cpIdentity.id, kvCryptoUserRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvCryptoUserRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: sign PDP policy bundles (ES256) and read the public key, on this key only.'
+  }
+}
+
+var pdpSigningKeyId = createPdpSigningKey ? pdpSigningKey!.properties.keyUriWithVersion : ''
+
+var signingKeyIdEffective =!empty(authSigningKeyId) ? authSigningKeyId : (createSigningKey ? signingKey!.properties.keyUriWithVersion : '')
 
 resource cosmosPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(privateEndpointSubnetId)) {
   name: 'pe-${accountName}'
@@ -452,7 +503,17 @@ var stampEnv = empty(stampId) ? [] : [
   { name: 'LOOM_HEALTH_CP_STAMP_BASE_URL', value: stampBaseUrl }
 ]
 
-var cpEnv = concat(authEnv, tlsEnv, stampEnv, [
+// #5422: where tenant FHIR engines call the stamp PDP. In-cluster address: the control plane writes it into
+// engine config, it never calls it. Absent when the PDP is not deployed (engines then fail closed, 503).
+var pdpEnv = empty(pdpUrl) ? [] : [
+  { name: 'LOOM_HEALTH_CP_PDP_URL', value: pdpUrl }
+]
+
+var pdpSigningEnv = empty(pdpSigningKeyId) ? [] : [
+  { name: 'LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID', value: pdpSigningKeyId }
+]
+
+var cpEnv = concat(authEnv, tlsEnv, stampEnv, pdpEnv, pdpSigningEnv, [
   { name: 'PORT', value: string(servicePort) }
   { name: 'LOOM_HEALTH_CP_CLOUD', value: cloudName }
   { name: 'LOOM_HEALTH_CP_TENANT_ID', value: entraTenantId }

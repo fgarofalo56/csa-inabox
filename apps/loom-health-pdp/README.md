@@ -61,15 +61,18 @@ code serves Container Apps and AKS, and the control plane already holds Cosmos d
 RBAC; a bundle is ~10 KB. A `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` file source still exists for
 dev (read-only). Integrity: the publisher sends the tarball's sha256, the control plane
 rejects a mismatch and re-checks it on every read; the publisher reads the bundle back and
-compares. Trust is OPA's ES256 signature check with the key the PDP was deployed with.
+compares. The control plane SIGNS the upload (ES256, Key Vault key) before storing it and reports
+the stored sha256. Trust is OPA's ES256 signature check with the public key the PDP was deployed
+with (GET .../verification-key).
 
 Pipeline: `.github/workflows/health-pdp-bundle-publish.yml` (dispatch; gate = the OPA
-suite + the end-to-end check below; `mode=publish` pulls the ES256 key from Key Vault,
-derives the inputs from the live routing map and AS JWKS, then runs):
+suite + the end-to-end check below; `mode=publish` derives the inputs from the live routing
+map and AS JWKS, builds UNSIGNED and PUTs; it holds no key):
 
 ```
 node apps/loom-health-cp/dist/pdp/pdp-stamp-inputs-cli.js routing-map.json <stamp> <issuer> jwks.json inputs.json
-STAMP_INPUTS=inputs.json OPA=opa apps/loom-health-pdp/tools/build-bundle.sh <priv.pem> <pub.pem> <revision> <outdir>
+STAMP_INPUTS=inputs.json OPA=opa apps/loom-health-pdp/tools/build-bundle.sh --unsigned <revision> <outdir>
+# (the signed form, build-bundle.sh <priv> <pub> <revision> <outdir>, remains for the CI gate and the e2e check)
 LHDS_CP_TOKEN=<bearer> node apps/loom-health-pdp/tools/publish-bundle.mjs <outdir>/lhds-pdp.tar.gz <stamp> <cp-url> <revision>
 ```
 
@@ -97,7 +100,7 @@ principal, GCC-High. Decision latency is UNMEASURED. The PDP workload is `platfo
 | `tests/jwt_fixtures.rego` | NOT committed (secret scanners flag JWT-shaped strings): `node tools/gen-jwt-fixtures.mjs` writes it before each test run, with a throwaway key (private half discarded) |
 | `tests/scope_matrix_test.rego` | GENERATED from the role map + interactions (`tools/gen-scope-matrix.mjs`, `--check` fails when stale); verification mocked at the `token_valid`/`claims`/`now` seam |
 | `tools/stage-policies.mjs` | stage `policies/` + role map into a bundle tree |
-| `tools/build-bundle.sh` | stage, build, ES256-sign, verify |
+| `tools/build-bundle.sh` | stage, build, ES256-sign, verify; `--unsigned` builds only (the control plane signs) |
 | `config/opa-config.yaml` | OPA bundle/signing/keys template |
 
 ## Test

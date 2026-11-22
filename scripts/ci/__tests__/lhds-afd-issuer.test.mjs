@@ -43,11 +43,24 @@ rmSync(tmp, { recursive: true, force: true });
 
 const ofType = (arm, t) => resourcesOf(arm).filter((r) => r.type === t);
 
-test('the issuer route matches EXACTLY /auth/* (breaks on /*, on a second pattern, or on a dropped route)', () => {
+// Front Door pattern semantics (Learn, "Routing rules"): '/x/*' matches /x/ and anything under it; a path matching no pattern gets 404.
+const afdMatches = (patterns, path) => patterns.some((pt) => (pt.endsWith('/*') ? path.startsWith(pt.slice(0, -1)) : path === pt));
+
+test('the route matches EXACTLY /auth/* and /api/health/pdp/* (breaks on /*, on /api/health/*, on a third pattern, or on a dropped pattern)', () => {
   const routes = ofType(issuer, 'Microsoft.Cdn/profiles/afdEndpoints/routes');
   assert.equal(routes.length, 1, 'exactly one route');
-  // Breaks if patternsToMatch becomes ['/*'] (publishes /api/health/* of the control plane) or gains a pattern.
-  assert.deepEqual(routes[0].properties.patternsToMatch, ['/auth/*']);
+  // Breaks if patternsToMatch becomes ['/*'] or ['/auth/*', '/api/health/*'] (publishes the rest of the control plane API),
+  // gains a pattern, or loses /api/health/pdp/* (the stamp PDP could then never pull its bundle: the 2026-11-21 defect).
+  const patterns = routes[0].properties.patternsToMatch;
+  assert.deepEqual(patterns, ['/auth/*', '/api/health/pdp/*']);
+  // NEGATIVE CONTROL on the compiled patterns: the paths that must NOT be served resolve to Front Door's 404.
+  for (const p of ['/api/health/tenants', '/api/health/stamps', '/api/health/jobs', '/api/health/pdp', '/api/health/pdpx/stamps/a/bundle.tar.gz', '/']) {
+    assert.equal(afdMatches(patterns, p), false, `${p} must not be served on this endpoint`);
+  }
+  // POSITIVE CONTROL: the paths that must be served are matched, so the negatives above are not an empty matcher.
+  for (const p of ['/auth/.well-known/openid-configuration', '/api/health/pdp/stamps/a/bundle.tar.gz', '/api/health/pdp/stamps/a/verification-key']) {
+    assert.equal(afdMatches(patterns, p), true, `${p} must be served on this endpoint`);
+  }
   assert.deepEqual(routes[0].properties.supportedProtocols, ['Https'], 'issuer is HTTPS only');
   assert.equal(routes[0].properties.forwardingProtocol, 'HttpsOnly');
 });
@@ -252,13 +265,14 @@ test('approve step: runs the shared approve script with --require-one; refuses w
 });
 
 const VERIFY = 'Verify the issuer through Front Door';
-const outputsJson = JSON.stringify({ healthIssuerState: { value: { viaFrontDoor: true, frontDoorEndpointHost: 'lhds-auth-x.z01.azurefd.net', issuerUrl: 'https://lhds-auth-x.z01.azurefd.net/auth' } } });
+const outputsJson = JSON.stringify({ healthStamp: { value: { stampName: 'stamp-x' } }, healthIssuerState: { value: { viaFrontDoor: true, frontDoorEndpointHost: 'lhds-auth-x.z01.azurefd.net', issuerUrl: 'https://lhds-auth-x.z01.azurefd.net/auth' } } });
 // A curl stub: writes the -o body and prints the status code chosen per URL.
-const curlStub = ({ oidcCode, oidcBody, negCode }) => `
+const curlStub = ({ oidcCode, oidcBody, negCode, pdpCode = 401 }) => `
 OUT=""; URL=""
 while [ $# -gt 0 ]; do case "$1" in -o) OUT="$2"; shift 2 ;; http*) URL="$1"; shift ;; *) shift ;; esac; done
 case "$URL" in
   */auth/.well-known/openid-configuration) [ "$OUT" != /dev/null ] && printf '%s' '${oidcBody}' > "$OUT"; printf '%s' ${oidcCode} ;;
+  */api/health/pdp/*) printf '%s' ${pdpCode} ;;
   *) printf '%s' ${negCode} ;;
 esac`;
 const goodBody = '{"issuer":"https://lhds-auth-x.z01.azurefd.net/auth"}';
@@ -274,6 +288,18 @@ test('verify step: NEGATIVE CONTROL fails when /api/health/* answers 401 on the 
   const r = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 401 }), files: { 'temp/outputs.json': outputsJson } });
   assert.notEqual(r.status, 0);
   assert.match(r.out, /NEGATIVE CONTROL FAILED/);
+});
+
+test('verify step: the PDP path must answer 401 WITHOUT a token: 404 (not routed) and 200 (no authentication) both fail', () => {
+  const files = { 'temp/outputs.json': outputsJson };
+  const ok = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 404, pdpCode: 401 }), files });
+  assert.equal(ok.status, 0, ok.out); // positive control
+  assert.match(ok.out, /\/api\/health\/pdp\/\* answered HTTP 401 without a token/);
+  for (const bad of [404, 200, 403]) {
+    const r = run(VERIFY, { curl: curlStub({ oidcCode: 200, oidcBody: goodBody, negCode: 404, pdpCode: bad }), files });
+    assert.notEqual(r.status, 0, `HTTP ${bad} on the PDP path must fail the verify step`);
+    assert.match(r.out, new RegExp(`answered HTTP ${bad} to an UNAUTHENTICATED request`));
+  }
 });
 
 test('verify step: a persistent 502 fails closed naming the code; a wrong issuer in the document fails', () => {

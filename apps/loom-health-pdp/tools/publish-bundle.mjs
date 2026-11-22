@@ -1,4 +1,4 @@
-// Publishes a built+signed+verified PDP bundle to the stamp's control plane
+// Publishes a built, UNSIGNED PDP bundle (the control plane signs it with its Key Vault key) to the stamp's control plane
 // (PUT /api/health/pdp/stamps/<stamp>/bundle) and READS IT BACK: the PUT status is not
 // the verdict, the served bytes' sha256 is. Fails closed (exit 1) with a message that
 // states only what was established. Prints ids, revision, sizes and hashes; never the
@@ -44,6 +44,11 @@ try {
   });
 } catch (e) { die(`could not reach the control plane (${e.name}); the bundle was NOT published`); }
 if (!put.ok) die(`publish rejected, HTTP ${put.status} ${await describe(put)}`);
+// The control plane SIGNS the upload (Key Vault, #5422) and stores the signed archive, so the read-back must equal the
+// STORED archive's sha256 it reports, not the unsigned bytes sent. A response without one cannot be verified: fail.
+let stored;
+try { stored = (await put.json())?.data?.sha256; } catch { stored = undefined; }
+if (typeof stored !== 'string' || !/^[0-9a-f]{64}$/.test(stored)) die('published, but the control plane did not report the stored sha256; UNVERIFIED');
 
 let got;
 try {
@@ -51,5 +56,5 @@ try {
 } catch (e) { die(`published, but the read-back could not reach the control plane (${e.name}); UNVERIFIED`); }
 if (!got.ok) die(`published, but the read-back failed, HTTP ${got.status} ${await describe(got)}; UNVERIFIED`);
 const served = createHash('sha256').update(Buffer.from(await got.arrayBuffer())).digest('hex');
-if (served !== sha256) die(`read-back mismatch: published ${sha256} but the control plane serves ${served}`);
-console.log(`published stamp=${stamp} revision=${revision} bytes=${bytes.length} sha256=${sha256} (read back identical)`);
+if (served !== stored) die(`read-back mismatch: the control plane stored ${stored} but serves ${served}`);
+console.log(`published stamp=${stamp} revision=${revision} uploaded_bytes=${bytes.length} uploaded_sha256=${sha256} stored_sha256=${stored} (signed by the control plane, read back identical)`);

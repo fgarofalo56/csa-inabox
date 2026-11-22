@@ -1,16 +1,18 @@
-// Serves the per-stamp signed Rego bundle to that stamp's OPA (ADR-011, W1-5).
-// The control plane does NOT sign or build: bundles are produced and ES256-signed
-// by apps/loom-health-pdp/tools/build-bundle.sh in the pipeline (the private key
-// stays in Key Vault) and published here (PUT .../bundle -> CollectionBundleSource,
-// or a file dropped at <dir>/<stamp>.tar.gz). This module only stores and hands them
-// out, so a bundle OPA cannot verify is the pipeline's defect and OPA's own
-// signature check rejects it (persist:true keeps the last good one).
+// Serves the per-stamp signed Rego bundle to that stamp's OPA (ADR-011, W1-5) and signs what the pipeline
+// publishes (#5422). The control plane does not BUILD bundles: apps/loom-health-pdp/tools/build-bundle.sh --unsigned
+// does, and the pipeline PUTs the unsigned archive (PUT .../bundle -> CollectionBundleSource). This module SIGNS it
+// with the stamp's Key Vault key (bundle-sign.ts) before storing it, then hands the signed archive out. A file dropped
+// at <dir>/<stamp>.tar.gz (FileBundleSource, dev, read-only) is served as-is and must already be signed. OPA's own
+// signature check against the key the PDP was deployed with is the trust decision (persist:true keeps the last good
+// bundle through an outage).
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError, badRequest } from '../http/errors.js';
 import type { Collection, Doc } from '../store/types.js';
+import { authoredMessage } from '../safe-error.js';
+import { BundleSignError, signBundle, type BundleSigner } from './bundle-sign.js';
 
 export interface PublishedBundle {
   stampId: string;
@@ -70,14 +72,18 @@ const sha256Hex = (b: Buffer): string => createHash('sha256').update(b).digest('
 
 /**
  * Bundles published through the control plane, stored in Cosmos so a deployed stamp
- * needs no file share. It checks the bytes are the gzip tarball the publisher hashed;
- * OPA's own signature check, against the key the PDP was deployed with, decides
- * whether the bundle is trusted.
+ * needs no file share. The publisher uploads an UNSIGNED `opa build` archive (its sha256
+ * checks the transfer); this source SIGNS it with the stamp's Key Vault key BEFORE storing,
+ * so what is served is always signed by the key the PDP was deployed with. With no signer
+ * configured a publish is refused (503): an unsigned bundle is never stored, because OPA
+ * would refuse it and a quietly unsigned store is a control that watches nothing. OPA's own
+ * signature check remains the trust decision.
  */
 export class CollectionBundleSource implements BundleSource {
   constructor(
     private readonly docs: Collection<PdpBundleDoc>,
     private readonly now: () => Date = () => new Date(),
+    private readonly signer?: BundleSigner,
   ) {}
 
   async get(stampId: string): Promise<Buffer | undefined> {
@@ -100,14 +106,27 @@ export class CollectionBundleSource implements BundleSource {
     if (!isGzip(bytes)) throw badRequest('bundle is not a gzip tarball');
     const actual = sha256Hex(bytes);
     if (actual !== input.sha256) throw badRequest('sha256 does not match the bundle bytes');
+    if (!this.signer) {
+      throw new HttpError(503, 'bundle_signing_unconfigured', 'PDP bundle signing is not configured (LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID): nothing was stored');
+    }
+    let signed: Buffer;
+    try {
+      signed = await signBundle(bytes, this.signer);
+    } catch (e) {
+      if (e instanceof BundleSignError) throw badRequest(authoredMessage(e));
+      // Not a claim about the cause: the sign request or the check of its answer failed after the bundle validated.
+      throw new HttpError(502, 'bundle_signing_failed', 'the control plane could not produce a verified signature for the bundle (cause not established); nothing was stored');
+    }
+    const storedSha = sha256Hex(signed);
     await this.docs.upsert({
       id: stampId,
       revision: input.revision,
-      sha256: actual,
-      bundleBase64: input.bundleBase64,
+      sha256: storedSha,
+      bundleBase64: signed.toString('base64'),
       publishedAt: this.now().toISOString(),
       publishedBy: by,
     });
-    return { stampId, revision: input.revision, sha256: actual, bytes: bytes.length };
+    // sha256 and bytes describe the STORED (signed) archive: that is what the PDP downloads and what a read-back must equal.
+    return { stampId, revision: input.revision, sha256: storedSha, bytes: signed.length };
   }
 }

@@ -21,9 +21,9 @@ export interface Signer {
 
 const b64u = (b: Buffer): string => b.toString('base64url');
 
-async function withKid(jwk: JWK): Promise<JWK> {
+async function withKid(jwk: JWK, alg: 'ES256' | 'ES384' = 'ES384'): Promise<JWK> {
   const kid = await calculateJwkThumbprint(jwk, 'sha256');
-  return { ...jwk, kid, alg: 'ES384', use: 'sig' };
+  return { ...jwk, kid, alg, use: 'sig' };
 }
 
 export class LocalSigner implements Signer {
@@ -64,12 +64,25 @@ export function validateKeyVaultKeyId(cloud: Cloud, keyId: string): URL {
   return u;
 }
 
-export class KeyVaultSigner implements Signer {
-  readonly alg = 'ES384' as const;
+export type EcAlg = 'ES256' | 'ES384';
+const EC_PARAMS: Record<EcAlg, { crv: string; hash: 'sha256' | 'sha384'; sigBytes: number }> = {
+  ES256: { crv: 'P-256', hash: 'sha256', sigBytes: 64 },
+  ES384: { crv: 'P-384', hash: 'sha384', sigBytes: 96 },
+};
+
+/**
+ * Key Vault EC signing, parametrised by algorithm. One implementation for the token signer (ES384, P-384) and the
+ * PDP bundle signer (ES256, P-256, #5422): the Key Vault call, the EC-HSM acceptance and the no-cached-failure rule
+ * live here once.
+ */
+export class KeyVaultEcSigner {
   private readonly url: URL;
   private pub: Promise<JWK> | undefined;
   private readonly f: typeof fetch;
-  constructor(private readonly o: KeyVaultSignerOptions) {
+  constructor(
+    private readonly o: KeyVaultSignerOptions,
+    readonly alg: EcAlg,
+  ) {
     this.url = validateKeyVaultKeyId(o.cloud, o.keyId);
     this.f = o.fetchImpl ?? fetch;
   }
@@ -94,10 +107,11 @@ export class KeyVaultSigner implements Signer {
     this.pub ??= this.call('', { method: 'GET' })
       .then((r) => {
         const k = r.key as JWK | undefined;
-        if (!k || (k.kty !== 'EC' && k.kty !== 'EC-HSM') || k.crv !== 'P-384' || !k.x || !k.y) {
-          throw new Error('key is not an EC P-384 key');
+        const p = EC_PARAMS[this.alg];
+        if (!k || (k.kty !== 'EC' && k.kty !== 'EC-HSM') || k.crv !== p.crv || !k.x || !k.y) {
+          throw new Error(`key is not an EC ${p.crv} key`);
         }
-        return withKid({ kty: 'EC', crv: k.crv, x: k.x, y: k.y });
+        return withKid({ kty: 'EC', crv: k.crv, x: k.x, y: k.y }, this.alg);
       })
       .catch((e: unknown) => {
         this.pub = undefined;
@@ -109,10 +123,27 @@ export class KeyVaultSigner implements Signer {
     return (await this.publicJwk()).kid as string;
   }
   async sign(signingInput: Buffer): Promise<Buffer> {
-    const digest = createHash('sha384').update(signingInput).digest();
-    const r = await this.call('/sign', { method: 'POST', body: JSON.stringify({ alg: 'ES384', value: b64u(digest) }) });
+    const p = EC_PARAMS[this.alg];
+    const digest = createHash(p.hash).update(signingInput).digest();
+    const r = await this.call('/sign', { method: 'POST', body: JSON.stringify({ alg: this.alg, value: b64u(digest) }) });
     const sig = Buffer.from(String(r.value ?? ''), 'base64url');
-    if (sig.length !== 96) throw new Error('key vault returned a malformed ES384 signature');
+    if (sig.length !== p.sigBytes) throw new Error(`key vault returned a malformed ${this.alg} signature`);
     return sig;
+  }
+}
+
+/** The authorization-server token signer: ES384 on a P-384 key. */
+export class KeyVaultSigner extends KeyVaultEcSigner implements Signer {
+  declare readonly alg: 'ES384';
+  constructor(o: KeyVaultSignerOptions) {
+    super(o, 'ES384');
+  }
+}
+
+/** The PDP bundle signer: ES256 on a P-256 key (OPA bundle signing, #5422). */
+export class KeyVaultBundleSigner extends KeyVaultEcSigner {
+  declare readonly alg: 'ES256';
+  constructor(o: KeyVaultSignerOptions) {
+    super(o, 'ES256');
   }
 }

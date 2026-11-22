@@ -236,8 +236,9 @@ test('without an APIM identity the run is reported PARTIAL and the APIM is not g
   // Breaks if: a missing APIM is silently reported as fully wired.
   const w = world();
   const r = await ensure({ ...OPTS, apimPrincipalId: '' }, w.io);
-  assert.equal(r.partial.length, 1);
-  assert.match(r.partial[0], /APIM gateway NOT wired/);
+  const apimPartial = r.partial.filter((p) => /APIM/.test(p));
+  assert.equal(apimPartial.length, 1); // (OPTS also omits the PDP identity, a separate PARTIAL line since #5422)
+  assert.match(apimPartial[0], /APIM gateway NOT wired/);
   assert.deepEqual(w.st.assignments, [{ principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id }, { principalId: CI_SP, appRoleId: ROLE_ADMIN.id }]);
   assert.ok(!w.st.allow.includes(APIM_APPID));
 });
@@ -334,4 +335,36 @@ test('an existing Directory.Read.All declaration from an earlier run is KEPT, re
   const ids = w.st.rra[0].resourceAccess.map((a) => a.id);
   assert.deepEqual(ids, [LEARN_DIRECTORY_READ_ALL, LEARN_USER_READBASIC_ALL, LEARN_GROUPMEMBER_READ_ALL]);
   assert.match(w.log.join('\n'), /still declares Directory\.Read\.All/);
+});
+
+// ---- #5422: the stamp PDP's workload identity -------------------------------------------------------------------------
+const PDP_PRINCIPAL = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', PDP_CLIENT = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+
+test('the stamp PDP identity gets HealthCP.Reader (never Admin) on its OBJECT id, and its CLIENT id lands in the allowlist', async () => {
+  // Breaks if: the PDP is granted Admin (it could PUT bundles), assigned by client id instead of object id, omitted from the
+  // allowlist (the control plane would 403 it whenever the allowlist is non-empty), or the object/client ids are swapped.
+  const w = world();
+  await ensure({ ...OPTS, pdpPrincipalId: PDP_PRINCIPAL, pdpClientId: PDP_CLIENT }, w.io);
+  assert.deepEqual(w.st.assignments.filter((a) => a.principalId === PDP_PRINCIPAL), [{ principalId: PDP_PRINCIPAL, appRoleId: ROLE_READER.id }]);
+  assert.ok(!w.st.assignments.some((a) => a.principalId === PDP_CLIENT), 'object id, never the client id');
+  assert.ok(w.st.allow.split(',').includes(PDP_CLIENT));
+  assert.ok(!w.st.allow.split(',').includes(PDP_PRINCIPAL), 'the allowlist takes the client (app) id');
+  assert.notEqual(PDP_CLIENT, PDP_PRINCIPAL, 'fixture: distinct ids so a mix-up is visible');
+});
+
+test('without a PDP identity the run is PARTIAL and says the PDP would 403; the allowlist gets no PDP id', async () => {
+  const w = world();
+  const r = await ensure(OPTS, w.io);
+  assert.ok(r.partial.some((p) => /stamp PDP identity NOT wired/.test(p)), JSON.stringify(r.partial));
+  assert.ok(!w.st.allow.split(',').includes(PDP_CLIENT));
+});
+
+test('--pdp-principal-id without --pdp-client-id (or the reverse) exits 2 with zero Graph calls', async () => {
+  for (const extra of [['--pdp-principal-id', PDP_PRINCIPAL], ['--pdp-client-id', PDP_CLIENT]]) {
+    const w = world();
+    const argv = ['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--cp-identity-principal-id', CP_IDENTITY, '--ci-client-id', CI_APP,
+      '--cp-app-name', 'loom-health-cp', '--cp-resource-group', 'rg-x', '--subscription', 'sub', ...extra];
+    assert.equal(await run(argv, w.io), EXIT_USAGE);
+    assert.equal(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)).length, 0, 'no Graph call before the usage error');
+  }
 });

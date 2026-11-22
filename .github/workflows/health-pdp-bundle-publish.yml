@@ -1,19 +1,21 @@
 name: health-pdp-bundle-publish
 
-# LHDS PDP (W1-5): builds, tests, ES256-signs, verifies and PUBLISHES the per-stamp Rego
-# bundle to the stamp's control plane (PUT /api/health/pdp/stamps/<stamp>/bundle, stored in
-# the health-pdp-bundles Cosmos container; the stamp's OPA pulls it from
-# GET .../bundle.tar.gz and verifies the signature itself). Until a bundle is published a
-# stamp's PDP has no data and denies every request.
+# LHDS PDP (W1-5): builds, tests and PUBLISHES the per-stamp Rego bundle UNSIGNED to the stamp's
+# control plane (PUT /api/health/pdp/stamps/<stamp>/bundle). The control plane ES256-signs it with its
+# non-exportable Key Vault key before storing it in the health-pdp-bundles Cosmos container (#5422), so no
+# private key exists on this runner or in GitHub. (This workflow used to sign here with a Key Vault secret that
+# the private stamp vault never let a runner read.) The stamp's OPA pulls the signed bundle from
+# GET .../bundle.tar.gz and verifies the signature itself. Until a bundle is published a stamp's PDP has no
+# data and denies every request.
 #
 # Dispatch-only. mode=build-only (default) runs the full test gate and publishes NOTHING.
 # mode=publish additionally needs the `health-pdp-publish` environment (configure required
 # reviewers on it; not verified to exist) and an operator-supplied control plane.
 #
-# SECRETS. The bundle signing key is read from Key Vault by name into a 0600 file on the
-# runner, never echoed, and removed in an always() step. This workflow never prints a key,
-# token or bundle body. A failure at any step fails the run; nothing here uses
-# continue-on-error or `|| true`.
+# SECRETS. None are read here. The control plane token is masked, and this workflow never prints a
+# token or bundle body. The signature is the control plane's: the stamp's OPA verifies it with the public key
+# deploy-health fetched from the control plane (GET .../verification-key) and deployed. A failure at any
+# step fails the run; nothing here uses continue-on-error or `|| true`.
 #
 # BOUNDARIES. Commercial and GCC-High are selectable (same shape as deploy-health.yml).
 # Neither has a receipt: this workflow has never run, no bundle has been served from a live
@@ -31,7 +33,7 @@ on:
         default: Commercial
         options: [Commercial, GCC-High]
       mode:
-        description: 'build-only runs the test gate and the build, publishes NOTHING. publish also signs with the Key Vault key and PUTs to the control plane.'
+        description: 'build-only runs the test gate and the build, publishes NOTHING. publish also PUTs the unsigned bundle to the control plane, which signs it.'
         type: choice
         default: build-only
         options: [build-only, publish]
@@ -49,18 +51,6 @@ on:
         default: ''
       issuer_url:
         description: 'Authorization server issuer URL; its /jwks.json goes into the bundle (publish mode).'
-        type: string
-        default: ''
-      key_vault_name:
-        description: 'Key Vault holding the bundle signing key (publish mode).'
-        type: string
-        default: ''
-      signing_secret_name:
-        description: 'Key Vault secret holding the ES256 PKCS8 PEM private key.'
-        type: string
-        default: lhds-pdp-bundle-signing
-      expected_pubkey_sha256:
-        description: 'sha256 of the PEM public key the stamp PDP was deployed with (pdpBundleVerificationPublicKeyPem). When set, publish refuses if the signing key does not match it. Empty = not checked.'
         type: string
         default: ''
       allow_empty_stamp:
@@ -92,10 +82,7 @@ jobs:
       CP_URL: ${{ inputs.control_plane_url }}
       CP_AUDIENCE: ${{ inputs.control_plane_audience }}
       ISSUER_URL: ${{ inputs.issuer_url }}
-      KV_NAME: ${{ inputs.key_vault_name }}
-      KV_SECRET: ${{ inputs.signing_secret_name }}
       STAMP: ${{ inputs.stamp_id }}
-      EXPECTED_PUB_SHA: ${{ inputs.expected_pubkey_sha256 }}
       ALLOW_EMPTY: ${{ inputs.allow_empty_stamp }}
       OPA_VERSION: v1.9.0
       OPA_SHA256: 66fa66f3b730b2fb086003863428b382b2898d343adb4b5dfab5598b4d739eed
@@ -108,7 +95,7 @@ jobs:
       - name: Check publish inputs
         run: |
           set -euo pipefail
-          for v in CP_URL CP_AUDIENCE ISSUER_URL KV_NAME KV_SECRET STAMP; do
+          for v in CP_URL CP_AUDIENCE ISSUER_URL STAMP; do
             if [ -z "${!v}" ]; then echo "::error::publish mode needs input for $v (it is empty); nothing was sent"; exit 1; fi
           done
           case "$CP_URL$ISSUER_URL" in *http://*) echo "::error::control_plane_url and issuer_url must be https"; exit 1;; esac
@@ -157,34 +144,17 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - name: Fetch the signing key and the control plane token (neither is printed)
+      - name: Get the control plane token (not printed)
         run: |
           set -euo pipefail
           umask 077
           work="$RUNNER_TEMP/pdp-publish"; mkdir -p "$work"
           echo "WORK=$work" >> "$GITHUB_ENV"
-          # stderr is kept: a permission or not-found failure must say so (deploy-integrity R6/R7).
-          az keyvault secret show --vault-name "$KV_NAME" --name "$KV_SECRET" --query value -o tsv > "$work/sign.pem"
-          # Parse it rather than pattern-match it: must be an EC P-256 key (what ES256 needs). openssl's own error is kept.
-          curve="$(openssl pkey -in "$work/sign.pem" -noout -text | sed -n 's/^ASN1 OID: //p')"
-          [ "$curve" = "prime256v1" ] || { echo "::error::Key Vault secret $KV_SECRET in $KV_NAME is not an EC P-256 (prime256v1) PEM private key (got curve '${curve:-none}'); nothing was built"; exit 1; }
           tok="$(az account get-access-token --resource "$CP_AUDIENCE" --query accessToken -o tsv)"
           [ -n "$tok" ] || { echo "::error::no access token for audience $CP_AUDIENCE"; exit 1; }
           echo "::add-mask::$tok"
           printf 'authorization: Bearer %s\n' "$tok" > "$work/auth.hdr"
           echo "LHDS_CP_TOKEN=$tok" >> "$GITHUB_ENV"
-
-      - name: Derive the verification key and check it against the stamp's
-        run: |
-          set -euo pipefail
-          openssl pkey -in "$WORK/sign.pem" -pubout -out "$WORK/verify.pem"
-          got="$(sha256sum "$WORK/verify.pem" | cut -d' ' -f1)"
-          echo "bundle verification key sha256: $got"
-          if [ -n "$EXPECTED_PUB_SHA" ] && [ "$got" != "$EXPECTED_PUB_SHA" ]; then
-            echo "::error::signing key does not match expected_pubkey_sha256 (got $got). A bundle signed with it would be rejected by the stamp's OPA. Nothing was published."
-            exit 1
-          fi
-          [ -n "$EXPECTED_PUB_SHA" ] || echo "::warning::expected_pubkey_sha256 not supplied: the match with the deployed pdpBundleVerificationPublicKeyPem is NOT checked"
 
       - name: Derive stamp inputs from the live routing map and AS JWKS
         run: |
@@ -200,15 +170,15 @@ jobs:
             exit 1
           fi
 
-      - name: Build, sign, verify and publish
+      - name: Build (unsigned) and publish; the control plane signs it
         run: |
           set -euo pipefail
           rev="${GITHUB_SHA::12}-${GITHUB_RUN_ID}"
           OPA="$RUNNER_TEMP/opa" STAMP_INPUTS="$WORK/inputs.json" \
-            bash apps/loom-health-pdp/tools/build-bundle.sh "$WORK/sign.pem" "$WORK/verify.pem" "$rev" "$WORK/out"
+            bash apps/loom-health-pdp/tools/build-bundle.sh --unsigned "$rev" "$WORK/out"
           node apps/loom-health-pdp/tools/publish-bundle.mjs "$WORK/out/lhds-pdp.tar.gz" "$STAMP" "$CP_URL" "$rev" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Remove key material
+      - name: Remove working files
         if: ${{ always() }}
         run: |
           if [ -n "${WORK:-}" ] && [ -d "$WORK" ]; then rm -rf "$WORK"; fi

@@ -172,6 +172,54 @@ run reports it.
   `snet-script`, a staging storage account and a script identity. Incremental
   deploys do not delete them; remove them by hand if unwanted.
 
+## Stamp workloads: the PDP is applied through `az aks command invoke` (#5422)
+
+The stamp cluster is private with local accounts disabled and no network path
+from the hub or a runner, so no workload can be applied by `kubectl` from CI and
+a `deploymentScripts` resource cannot run (same shared-key policy as the TLS
+script). `engines.bicep` therefore deploys only the ARM resources (PDP identity,
+federated credential, kubelet `AcrPull`) and **renders the Kubernetes manifest as
+the output `healthPdpState.manifest`**: the single source of truth. After the
+infrastructure apply, `deploy-health.yml` writes it to a file and runs
+`scripts/csa-loom/aks-apply-manifest.sh`, which uses ARM
+`managedClusters/runCommand` (`kubectl apply`, then `kubectl rollout status`
+bounded to 300 s). Every exit code is read; a permission refusal is retried a
+bounded number of times (a new role assignment takes minutes), anything else
+fails the run with the cause named (exit 3 permission, 4 kubectl failure, 5 not
+Ready, 6 outcome unknown).
+
+- **The bundle signing key is the control plane's, in Key Vault.** `control-plane.bicep` creates an EC-HSM P-256 key
+  (`lhds-pdp-bundle-sign`, sign and verify only) through ARM, like the token signing key, and gives the control plane
+  `Key Vault Crypto User` on that key alone. A publisher uploads an UNSIGNED `opa build` archive
+  (`health-pdp-bundle-publish.yml`, `build-bundle.sh --unsigned`); the control plane adds `.signatures.json` (ES256, key
+  id `global`) through the Key Vault sign operation and stores the signed archive; an upload that is already signed is
+  refused. The private key never leaves Key Vault and no secret is held in GitHub.
+- **The PDP key reaches the template without a human.** `GET /api/health/pdp/stamps/<stamp>/verification-key` returns the
+  PEM public key. `deploy-health.yml` fetches it through Front Door as the deploy principal (HealthCP.Admin and a caller
+  allowlist entry from `csa-loom-post-deploy-bootstrap`), checks it is EC P-256 with key id `global`, and passes it to the
+  phase-2 deployment as `pdpBundleVerificationPublicKeyPem`; the PDP deploys in that same phase. If the control plane or
+  the key is not ready the step fails with the status it saw and the likely, unproven, cause.
+- **The PDP pulls its bundle through Front Door.** The stamp cannot resolve or reach the internal control plane FQDN
+  (load-balancer egress, no peering). The existing issuer endpoint (`afd-issuer.bicep`) now routes `/auth/*` and
+  `/api/health/pdp/*` and nothing else; `/api/health/tenants` and the rest of the API still return Front Door's 404. The
+  control plane still enforces the Entra token, the HealthCP role and the caller allowlist on that path (an unauthenticated
+  request must answer 401; `deploy-health` checks it). The Front Door host is added to the stamp firewall egress
+  allow-list (firewall mode; inert on the dev load-balancer profile). Without a Front Door profile and without
+  `controlPlaneConfig.pdpControlPlaneBaseUrl` the PDP is not deployed and `healthPdpState.reason` says why.
+- **Not Ready until a signed bundle exists.** The PDP pod's readiness is `/health?bundles`, so a first apply with no
+  published bundle fails at the rollout step. That is the intended fail-closed signal, not a defect.
+- **Roles.** The signed-in deploy principal gets Kubernetes data role `Azure Kubernetes Service RBAC Cluster Admin` on
+  the cluster (`controlPlaneConfig.pdpApplyPrincipalId`, resolved by the workflow): the manifest creates a Namespace.
+  The control plane gets NO Azure data role on the cluster. Its Kubernetes access is a namespace-scoped `RoleBinding`
+  (ClusterRole `edit`, namespace `loom-health`) in the same manifest, bound to its Entra object id, so it cannot read
+  Secrets or run pods in other namespaces; per-tenant workloads therefore live in `loom-health` unless a later item adds
+  tenant namespaces. Its ARM runCommand rights come from `Contributor` on the stamp resource group. It also gets
+  `LOOM_HEALTH_CP_PDP_URL` (the in-cluster decision endpoint) and `LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID`. The PDP's own
+  identity needs `HealthCP.Reader` and an allowlist entry: `csa-loom-post-deploy-bootstrap` discovers
+  `uami-loom-health-pdp-*` and grants both; run it after `deploy-health` deploys the PDP.
+- **Not exercised:** no deploy has run this path. Commercial and GCC-High are
+  supported in code only.
+
 ## Failure handling
 
 The workflow classifies failures (permission, not found, transient,

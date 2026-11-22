@@ -11,14 +11,22 @@
 // from the projected service-account token): no secret exists. The only value
 // embedded is the bundle-verification PUBLIC key.
 //
-// NOT wired into health.bicep (outside this item's file ownership) and not deployed:
-// supported-in-code only, no deploy receipt (cloud-parity.md). Decision latency
-// p95 < 10 ms is UNMEASURED.
+// Wired into health.bicep (module healthPdp, gated by pdpDeploy). Supported-in-code, no deploy
+// receipt yet (cloud-parity.md). Decision latency p95 < 10 ms is UNMEASURED.
+//
+// DELIVERY (#5422). This module deploys the ARM resources only (PDP identity, federated
+// credential, kubelet AcrPull, and the data role for the principal that applies the manifest). It
+// does NOT apply the Kubernetes manifest: a Microsoft.Resources/deploymentScripts resource cannot
+// run on tenants whose policy forces storage shared-key access off (same cause as #5345/#5355).
+// The rendered manifest is the output `manifest`; .github/workflows/deploy-health.yml applies it
+// with scripts/csa-loom/aks-apply-manifest.sh (`az aks command invoke`). The output is the single
+// source of truth: nothing else renders this YAML. Besides the PDP it carries the Namespace and the control plane's
+// namespace-scoped RoleBinding (ClusterRole edit), which is how the control plane reaches the cluster (#5422).
 //
 // Follow-up that is NOT done here and is a real gate until done: the PDP identity
-// (output identityPrincipalId) must hold the `HealthCP.Reader` app role on the
-// control-plane app registration. That is an Entra app-role assignment (Graph),
-// not an ARM resource, so it belongs in post-deploy bootstrap.
+// (output identityPrincipalId) must hold the `HealthCP.Reader` app role on the control-plane app
+// registration. That is an Entra app-role assignment (Graph), not an ARM resource, so it belongs
+// in post-deploy bootstrap.
 
 targetScope = 'resourceGroup'
 
@@ -68,6 +76,12 @@ param aksNamespace string = 'loom-health'
 @minValue(1)
 param replicas int = 2
 
+@description('Object id of the service principal that applies the manifest (the deploy workflow). It receives Azure Kubernetes Service RBAC Cluster Admin on the cluster: the cluster uses Azure RBAC, local accounts are disabled, and the manifest creates a Namespace (cluster-scoped), so a namespace-scoped role cannot do it. Empty = no grant; the apply then fails closed with the role named.')
+param applyPrincipalId string = ''
+
+@description('Object id of the control plane identity. When set the manifest adds a RoleBinding (ClusterRole edit, this namespace only) so the control plane can apply tenant workloads through runCommand. Empty = no binding.')
+param controlPlanePrincipalId string = ''
+
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
@@ -76,7 +90,6 @@ param tags object = {}
 
 var authorityHost = replace(replace(environment().authentication.loginEndpoint, 'https://', ''), '/', '')
 var opaPort = 8181
-var aksClusterAdminRoleId = '0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8'
 var aksRbacClusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
 
 resource pdpIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
@@ -109,29 +122,17 @@ resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedI
   }
 }
 
-resource scriptIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
-  name: 'uami-${name}-deploy-${location}'
-  location: location
-  tags: tags
-}
-
-resource scriptClusterAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
+// Azure Kubernetes Service RBAC Cluster Admin (Kubernetes data role). The ARM action
+// Microsoft.ContainerService/managedClusters/runcommand/action is already carried by the deploy
+// principal's Contributor/Owner on the subscription; this is the DATA half, which Owner does not include.
+resource applierRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(applyPrincipalId)) {
   scope: cluster
-  name: guid(cluster.id, scriptIdentity.id, aksClusterAdminRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksClusterAdminRoleId)
-    principalId: scriptIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource scriptRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
-  scope: cluster
-  name: guid(cluster.id, scriptIdentity.id, aksRbacClusterAdminRoleId)
+  name: guid(cluster.id, applyPrincipalId, aksRbacClusterAdminRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacClusterAdminRoleId)
-    principalId: scriptIdentity.properties.principalId
+    principalId: applyPrincipalId
     principalType: 'ServicePrincipal'
+    description: 'LHDS: the deploy workflow applies the stamp PDP manifest through az aks command invoke.'
   }
 }
 
@@ -173,7 +174,28 @@ var opaConfig = join([
 // all capabilities dropped, seccomp RuntimeDefault. Readiness is /health?bundles:
 // the pod takes no traffic until a SIGNED bundle is active, so an unconfigured or
 // unverifiable PDP is not Ready and its callers fail closed (503, ADR-011).
-var manifest = join([
+// The control plane's Kubernetes access, scoped to THIS namespace only (#5422): a RoleBinding to the built-in ClusterRole
+// `edit` (namespaced objects, no RBAC objects, no cluster-scoped objects). This replaces the cluster-scope Azure role
+// "Azure Kubernetes Service RBAC Writer", which reads Secrets and runs pods as any ServiceAccount in every namespace.
+// The subject is the control plane identity's Entra OBJECT ID (a service principal presents its object id as the user).
+var controlPlaneBinding = empty(controlPlanePrincipalId) ? [] : [
+  '---'
+  'apiVersion: rbac.authorization.k8s.io/v1'
+  'kind: RoleBinding'
+  'metadata:'
+  '  name: loom-health-cp-edit'
+  '  namespace: ${aksNamespace}'
+  'roleRef:'
+  '  apiGroup: rbac.authorization.k8s.io'
+  '  kind: ClusterRole'
+  '  name: edit'
+  'subjects:'
+  '  - apiGroup: rbac.authorization.k8s.io'
+  '    kind: User'
+  '    name: "${controlPlanePrincipalId}"'
+]
+
+var manifest = join(concat([
   'apiVersion: v1'
   'kind: Namespace'
   'metadata:'
@@ -265,51 +287,16 @@ var manifest = join([
   '  ports:'
   '    - port: 80'
   '      targetPort: ${opaPort}'
-], '\n')
+], controlPlaneBinding), '\n')
 
-// Fails closed: `set -e`, and `rollout status` must succeed before the script exits 0.
-// With no signed bundle the pod never becomes Ready, so this FAILS the deployment
-// rather than reporting success over an unverified outcome (deploy-integrity R6).
-resource applyManifest 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
-  name: 'apply-${name}'
-  location: location
-  kind: 'AzureCLI'
-  tags: tags
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${scriptIdentity.id}': {}
-    }
-  }
-  properties: {
-    azCliVersion: '2.67.0'
-    retentionInterval: 'PT1H'
-    timeout: 'PT20M'
-    cleanupPreference: 'OnSuccess'
-    forceUpdateTag: uniqueString(manifest)
-    environmentVariables: [
-      { name: 'MANIFEST_B64', value: base64(manifest) }
-      { name: 'CLUSTER_RG', value: resourceGroup().name }
-      { name: 'CLUSTER_NAME', value: aksClusterName }
-      { name: 'NAMESPACE', value: aksNamespace }
-      { name: 'DEPLOYMENT', value: name }
-    ]
-    scriptContent: '''
-      set -euo pipefail
-      echo "$MANIFEST_B64" | base64 -d > manifest.yaml
-      az aks command invoke -g "$CLUSTER_RG" -n "$CLUSTER_NAME" --file manifest.yaml \
-        --command "kubectl apply -f manifest.yaml"
-      az aks command invoke -g "$CLUSTER_RG" -n "$CLUSTER_NAME" \
-        --command "kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=300s"
-    '''
-  }
-  dependsOn: [
-    scriptClusterAdmin
-    scriptRbacAdmin
-    kubeletAcrPull
-    federation
-  ]
-}
+@description('The rendered Kubernetes manifest (Namespace, ServiceAccount, ConfigMap, Deployment, Service). Carries the PUBLIC bundle-verification key and ids only, no private material. Applied by the deploy workflow.')
+output manifest string = manifest
+
+@description('Kubernetes namespace of the workload.')
+output namespace string = aksNamespace
+
+@description('Name of the Deployment (and Service, ServiceAccount) the manifest creates.')
+output deploymentName string = name
 
 @description('In-cluster decision API address interceptors call: POST /v1/data/lhds/authz/decision.')
 output decisionEndpoint string = 'http://${name}.${aksNamespace}.svc.cluster.local/v1/data/lhds/authz/decision'

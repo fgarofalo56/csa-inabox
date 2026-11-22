@@ -23,8 +23,9 @@ table below in the same PR. A PR that finds the slot held rebases its non-bicep 
 | fix/lhds-tls-script-storage-rbac | W01b-close-deploy-receipts | 2026-11-16 | 2026-11-16 (#5326 merged `0afcbaca8`) |
 | fix/4672-retire-dotnet6-vm-images | none (compliance hotfix #4672) | 2026-11-16 | |
 | fix/lhds-5345-kv-issued-tls | W01b-close-deploy-receipts | 2026-11-17 | 2026-11-17 (#5355 merged `99da651a9`; slot free) |
-| feat/lhds-w1b2-afd-issuer | W01b-close-deploy-receipts | 2026-11-21 | (open) |
-| fix/lhds-issuer-dedicated-waf | W01b-close-deploy-receipts | 2026-11-21 | (open) |
+| feat/lhds-w1b2-afd-issuer | W01b-close-deploy-receipts | 2026-11-21 | 2026-11-21 (#5413 merged `99e020124`) |
+| fix/lhds-issuer-dedicated-waf | W01b-close-deploy-receipts | 2026-11-21 | 2026-11-21 (#5419 merged `1a8940553`) |
+| feat/lhds-w2-2b-1-engine-delivery | W02a-fhir-core-build (W2-2b) | 2026-11-21 | (open) |
 
 Rationale: `main.bicep`, `admin-plane/main.bicep`, `apim.bicep`, `health.bicep` (~279 KB) and the seven `params/*.bicepparam` files are
 co-edited by five programs, and `main.json` has an ARM size ceiling (measure it with `git cat-file -s` at the ref; never quote a number).
