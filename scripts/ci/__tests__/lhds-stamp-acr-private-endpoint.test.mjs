@@ -262,10 +262,20 @@ test('step script: import fails -> exit 1 with the real exit code, no success cl
   assert.doesNotMatch(r.out, /Imported docker\.io/);
 });
 
-test('step script: import returns 0 but read-back shows a DIFFERENT digest -> fails closed', () => {
+test('step script: import returns 0 and the by-digest read-back resolves to a platform CHILD digest -> success (manifest list)', () => {
+  // Measured live (run 45070074523): the pinned OPA index read back as its linux/arm64 child. Breaks if the
+  // step demands printed-digest equality again (status 1 here), which can never hold for a manifest list.
   const r = runStep({ resolveSeq: ['3 x', `0 ${OTHER}`] });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /the registry resolves .*@sha256:/);
+});
+
+test('step script: import returns 0 but the by-digest read-back is NOT FOUND (exit 3) -> fails closed', () => {
+  // Breaks if a failed read-back is accepted: an import that exited 0 is not proof the content is there.
+  const r = runStep({ resolveSeq: ['3 x', '3 x'] });
   assert.equal(r.status, 1, r.out);
-  assert.match(r.out, new RegExp(`digest '${OTHER}'`));
+  assert.match(r.out, /did not resolve .* afterwards \(resolve-acr-digest\.sh exit 3/);
+  assert.doesNotMatch(r.out, /the registry resolves/);
 });
 
 test('step script: registry unreadable (resolve exit 4) -> exit 1, NO import, and no claim that the image is missing', () => {
