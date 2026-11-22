@@ -217,6 +217,32 @@ Ready, 6 outcome unknown).
   `LOOM_HEALTH_CP_PDP_URL` (the in-cluster decision endpoint) and `LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID`. The PDP's own
   identity needs `HealthCP.Reader` and an allowlist entry: `csa-loom-post-deploy-bootstrap` discovers
   `uami-loom-health-pdp-*` and grants both; run it after `deploy-health` deploys the PDP.
+- **The image path: private endpoint plus a digest-pinned import (#5422, decision 8).** The hub registry is
+  `publicNetworkAccess: Disabled` with its private endpoints in the hub VNet, and the stamp VNet has no peering, so the
+  kubelet's `AcrPull` role alone could not pull (measured on Commercial dev01: `ImagePullBackOff` on `opa:1.9.0-static`,
+  "failed to fetch anonymous token"). When the hub registry is known, `stamp.bicep` now adds a private endpoint
+  (`pe-lhds-<stamp>-acr`, group `registry`, `acr-pe.bicep`) in the stamp private-endpoint subnet and a stamp-scoped
+  `privatelink.<cloud suffix>` zone linked to the stamp VNet only (the suffix comes from
+  `environment().suffixes.acrLoginServer`: `azurecr.io` or `azurecr.us`). The zone is deliberately not linked to the hub
+  VNet, which already links its own. A same-tenant connection made by a deployer with RBAC on the registry is
+  auto-approved ([Learn](https://learn.microsoft.com/azure/container-registry/container-registry-private-link));
+  `deploy-health` reads the connection state back and fails with the approve command if it is not `Approved`. With no
+  registry known nothing is created and `healthStamp.acrPrivateEndpoint.reason` says so.
+  The PDP image is pinned by digest in `platform/fiab/bicep/modules/health/pdp-image.json` (source
+  `docker.io/openpolicyagent/opa`, tag `1.9.0-static` for display, digest from the Docker Hub manifest list). One file
+  feeds both consumers: `health.bicep` deploys `<acr>/opa@<digest>`, and the `deploy-health` step "Ensure the
+  digest-pinned PDP image is in the registry" checks for that digest (data plane, under the shared firewall lease) and runs
+  `az acr import --source docker.io/openpolicyagent/opa@<digest> --image opa:1.9.0-static --force` when it is absent,
+  then reads it back. Import is an ARM operation, and a network-restricted registry accepts it when "allow trusted
+  services" is on, which is the default
+  ([Learn](https://learn.microsoft.com/azure/container-registry/container-registry-import-images)). To move to a new OPA
+  version, edit that one file (take the digest from the registry manifest, never from a tag).
+- **Per-cloud status of the image path.** Commercial: the defect was measured on dev01; the fix is built and tested at
+  the template and script level and is **merged-not-deployed until a deploy-health run exercises it**. GCC-High:
+  supported in code (the zone suffix resolves to `azurecr.us`), never exercised. IL5 and DoD: supported in code, never
+  exercised. GCC: supported in code, never exercised (no GCC tenant exists). Docker Hub as the import source is
+  reachable from the ACR import service in Commercial; whether it is reachable from a Gov registry is NOT established,
+  and a Gov deployment may need the image mirrored first.
 - **Not exercised:** no deploy has run this path. Commercial and GCC-High are
   supported in code only.
 
