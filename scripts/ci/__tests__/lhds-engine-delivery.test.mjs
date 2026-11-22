@@ -430,3 +430,72 @@ test('the fetch step can never fail the job (no exit 1), and the job FAILS LAST 
   assert.equal(r.status, 1);
   assert.match(`${r.stdout}${r.stderr}`, /PDP was NOT deployed: the control plane answered 403 \(test reason\)/);
 });
+
+// ── the issuer verify step's PDP-path probe, EXECUTED under bash with a stub curl (#5422 follow-up) ──────────────────
+const VERIFY = 'Verify the issuer through Front Door';
+function runVerify({ pdp, tenants = [404], attempts = '3' }) {
+  const dir = mkdtempSync(join(tmpdir(), 'lhds-ver-'));
+  const d = dir.replace(/\\/g, '/');
+  mkdirSync(join(dir, 'temp'));
+  mkdirSync(join(dir, 'bin'));
+  writeFileSync(join(dir, 'temp/outputs.json'), JSON.stringify({ healthStamp: { value: { stampName: 'stamp-x' } }, healthIssuerState: { value: { frontDoorEndpointHost: 'h.z01.azurefd.net', issuerUrl: 'https://h.z01.azurefd.net/auth' } } }));
+  writeFileSync(join(dir, 'pdp'), pdp.join('\n') + '\n');
+  writeFileSync(join(dir, 'tenants'), tenants.join('\n') + '\n');
+  const stub = (n, t) => { writeFileSync(join(dir, 'bin', n), `#!/bin/bash\n${t}\n`); chmodSync(join(dir, 'bin', n), 0o755); };
+  stub('sleep', 'exit 0');
+  // Each URL has its own call counter and code list (the last code repeats). The call ORDER is logged.
+  stub('curl', `OUT=""; URL=""; while [ $# -gt 0 ]; do case "$1" in -o) OUT="$2"; shift 2 ;; http*) URL="$1"; shift ;; *) shift ;; esac; done
+case "$URL" in
+  */auth/.well-known/openid-configuration) [ "$OUT" != /dev/null ] && printf '%s' '{"issuer":"https://h.z01.azurefd.net/auth"}' > "$OUT"; printf '%s' 200; exit 0 ;;
+  */api/health/pdp/*) K=pdp ;;
+  *) K=tenants ;;
+esac
+echo "$K" >> "${d}/order"
+n=$(grep -c "^$K$" "${d}/order"); code=$(sed -n "\${n}p" "${d}/$K"); [ -n "$code" ] || code=$(tail -n 1 "${d}/$K")
+printf '%s' "$code"`);
+  writeFileSync(join(dir, 'step.sh'), stepScript(VERIFY));
+  const r = spawnSync('bash', ['step.sh'], { cwd: dir, encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1', VERIFY_ATTEMPTS: attempts, PATH: `${d}/bin:${process.env.PATH}` } });
+  let order = [];
+  try { order = readFileSync(join(dir, 'order'), 'utf8').trim().split('\n'); } catch { order = []; }
+  rmSync(dir, { recursive: true, force: true });
+  return { status: r.status, out: `${r.stdout}\n${r.stderr}`, pdpCalls: order.filter((x) => x === 'pdp').length, tenantCalls: order.filter((x) => x === 'tenants').length, order };
+}
+
+test('PDP-path probe: 404 is retried (propagation) and a later 401 passes; the tenants negative control then runs exactly once, AFTER the PDP probe', () => {
+  const r = runVerify({ pdp: [404, 404, 401] });
+  assert.equal(r.status, 0, r.out);
+  // Breaks if the probe is single-shot again (the 2026-11-22 live failure: pdpCalls would be 1 and the run red), or if the
+  // negative control moves before the PDP probe (it would read a stale edge configuration).
+  assert.equal(r.pdpCalls, 3);
+  assert.equal(r.tenantCalls, 1);
+  assert.equal(r.order.lastIndexOf('pdp') < r.order.indexOf('tenants'), true, `order was ${r.order.join(',')}`);
+});
+
+test('PDP-path probe: 404 on EVERY attempt fails after exactly the bounded attempts, naming propagation as the likely but UNPROVEN cause with the elapsed time', () => {
+  const r = runVerify({ pdp: [404], attempts: '4' });
+  assert.notEqual(r.status, 0);
+  assert.equal(r.pdpCalls, 4, 'exactly the bounded attempts, no more');
+  assert.equal(r.tenantCalls, 0, 'the negative control must not run when the PDP path never answered');
+  // Breaks if the message asserts a cause it did not establish, or loses the elapsed time.
+  assert.match(r.out, /Most likely cause \(NOT proven\)/);
+  assert.match(r.out, /after 4 attempts \(about \d+s\)/);
+});
+
+test('PDP-path probe: 200 (no authentication) and 403 fail IMMEDIATELY with one call; they are never retried into a pass', () => {
+  for (const code of [200, 403, 500]) {
+    const r = runVerify({ pdp: [code, 401, 401], attempts: '5' });
+    // Breaks if retry covers more than 404: the later 401 in the list would then mask a 200 (open endpoint) as a pass.
+    assert.notEqual(r.status, 0, `HTTP ${code} must fail`);
+    assert.equal(r.pdpCalls, 1, `HTTP ${code} must not be retried`);
+    assert.match(r.out, new RegExp(`answered HTTP ${code} to an UNAUTHENTICATED request`));
+    assert.equal(r.tenantCalls, 0);
+  }
+});
+
+test('negative control stays SINGLE-SHOT: 404 is its pass condition, so a 401 on it fails once and is never retried into a pass', () => {
+  const r = runVerify({ pdp: [401], tenants: [401, 404, 404], attempts: '5' });
+  // Breaks if the control is wrapped in a retry: the later 404 would turn a reachable control-plane API (401) into a pass.
+  assert.notEqual(r.status, 0);
+  assert.equal(r.tenantCalls, 1);
+  assert.match(r.out, /NEGATIVE CONTROL FAILED/);
+});
