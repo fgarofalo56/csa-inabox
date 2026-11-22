@@ -278,7 +278,9 @@ test('deploy-health.yml applies the manifest through the script, fail-closed, wi
   assert.match(apply, /\.healthPdpState\.value\.manifest/);
   // Ordering: the apply runs after the infra apply (needs temp/outputs.json) and before the console bind.
   assert.ok(wf.indexOf('- name: Deploy health.bicep\n') < wf.indexOf('- name: Apply the stamp PDP manifest'), 'apply before infra apply');
-  assert.ok(wf.indexOf('- name: Apply the stamp PDP manifest') < wf.indexOf('- name: Bind the health control plane into the console'), 'apply after console bind');
+  // The console bind (#5346) runs BEFORE the apply: the first apply fails at rollout until a bundle is published, and that must not skip the bind.
+  assert.ok(wf.indexOf('- name: Bind the health control plane into the console') < wf.indexOf('- name: Apply the stamp PDP manifest'), 'bind must precede the PDP apply');
+  assert.ok(wf.indexOf('- name: Apply the stamp PDP manifest') < wf.indexOf('- name: Fail the run when the PDP was not deployed'), 'final step last');
   // The applying principal reaches health.bicep through cp.json BEFORE any what-if or apply reads it.
   assert.ok(wf.indexOf('- name: Resolve the PDP applying principal') < wf.indexOf('- name: Bicep what-if'), 'principal after what-if');
 });
@@ -298,8 +300,8 @@ test('the verification key is fetched through Front Door AFTER the issuer is ver
   assert.match(fetch, /"\$KEYID" != "global"/);
   assert.match(fetch, /prime256v1\|P-256/);
   assert.match(fetch, /pdpBundleVerificationPublicKeyPem: \$pem/);
-  assert.match(fetch, /401\) echo/);
-  assert.match(fetch, /403\) echo/);
+  assert.match(fetch, /401\) skip_pdp/);
+  assert.match(fetch, /403\) skip_pdp/);
   assert.ok(wf.indexOf('- name: Verify the issuer through Front Door') < wf.indexOf('- name: Fetch the PDP bundle verification key'), 'key fetch before issuer verified');
   assert.ok(wf.indexOf('- name: Fetch the PDP bundle verification key') < wf.indexOf('- name: Deploy health.bicep phase 2'), 'key fetch after phase 2');
   // roll-race pins the az deployment write count of this workflow at 2 (phase 1 + phase 2): a third deployment is a defect here.
@@ -348,7 +350,7 @@ printf '%s' "$code"`);
   const r = spawnSync('bash', ['-e', 'step.sh'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, MSYS_NO_PATHCONV: '1', PATH: `${d}/bin:${process.env.PATH}`, GITHUB_OUTPUT: `${d}/out.txt`, AUDIENCES: 'aaaa,api://aaaa', KEY_ATTEMPTS: attempts },
+    env: { ...process.env, MSYS_NO_PATHCONV: '1', PATH: `${d}/bin:${process.env.PATH}`, GITHUB_OUTPUT: `${d}/out.txt`, GITHUB_STEP_SUMMARY: `${d}/summary.md`, BOUNDARY: 'Commercial', AUDIENCES: 'aaaa,api://aaaa', KEY_ATTEMPTS: attempts },
   });
   const read2 = (f) => { try { return readFileSync(join(dir, f), 'utf8'); } catch { return ''; } };
   const res = { status: r.status, out: `${r.stdout}\n${r.stderr}`, outputs: read2('out.txt'), cp: read2('temp/cp.json'), curls: Number(read2('n').trim() || 0) };
@@ -367,37 +369,64 @@ test('key fetch: 200 with a P-256 key and key id global writes it into cp.json a
   assert.doesNotMatch(r.out.replace('::add-mask::tok-SECRET-123', ''), /tok-SECRET-123/); // and never printed otherwise
 });
 
-test('key fetch: 403 fails on the FIRST attempt naming the bootstrap (a retry cannot grant a role); 401 names the audience', () => {
+// A fetch failure must NOT fail the step (TLS phase 2 and the console bind still have to run): it records fetched=false and a reason.
+const skipped = (r, why) => {
+  assert.equal(r.status, 0, `the step must exit 0 so later steps run: ${r.out}`);
+  assert.match(r.outputs, /fetched=false/);
+  assert.doesNotMatch(r.outputs, /fetched=true/);
+  assert.match(r.outputs, /reason=[^\n]+/);
+  assert.match(r.out, /::warning::PDP NOT deployed by this run/);
+  assert.match(r.outputs, why);
+  assert.equal(JSON.parse(r.cp).pdpBundleVerificationPublicKeyPem, undefined, 'no key may reach the template after a failure');
+};
+
+test('key fetch: 403 on a greenfield run skips ONLY the PDP (exit 0, fetched=false), on the FIRST attempt, naming the bootstrap', () => {
   const r403 = runFetch({ codes: [403], body: '{}', attempts: '5' });
-  assert.notEqual(r403.status, 0);
+  // Breaks if a 403 fails the step (it would skip TLS phase 2 on every greenfield run) or is retried (a retry cannot grant a role).
+  skipped(r403, /csa-loom-post-deploy-bootstrap/);
   assert.equal(r403.curls, 1, 'a 403 must not be retried');
-  assert.match(r403.out, /csa-loom-post-deploy-bootstrap/);
-  assert.doesNotMatch(r403.outputs, /fetched=true/);
+  assert.match(r403.outputs, /greenfield/);
   const r401 = runFetch({ codes: [401], body: '{}', attempts: '5' });
-  assert.notEqual(r401.status, 0);
+  skipped(r401, /answered 401/);
   assert.equal(r401.curls, 1);
-  assert.match(r401.out, /answered 401/);
 });
 
-test('key fetch: a persistent 404 / 503 is retried the bounded number of times, then fails naming the cause WITHOUT claiming it', () => {
+test('key fetch: a persistent 404 / 503 is retried the bounded number of times, then skips the PDP naming the cause WITHOUT claiming it', () => {
   const r = runFetch({ codes: [404], body: JSON.stringify({ ok: false, error: { code: 'not_found' } }), attempts: '3' });
-  assert.notEqual(r.status, 0);
+  skipped(r, /NOT established: why/);
   assert.equal(r.curls, 3, 'exactly the bounded attempts');
-  assert.match(r.out, /NOT established: why/);
   // Recovery: 503 twice, then 200 passes (the control plane reads the key after it starts).
   const ok = runFetch({ codes: [503, 503, 200], body: keyBody({}), attempts: '5' });
   assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.outputs, /fetched=true/);
   assert.equal(ok.curls, 3);
 });
 
-test('key fetch: refuses a key id other than global and a key that is not EC P-256 (the PDP could never verify with either)', () => {
-  const wrongId = runFetch({ codes: [200], body: keyBody({ keyId: 'default' }) });
-  assert.notEqual(wrongId.status, 0);
-  assert.match(wrongId.out, /key id 'default'/);
-  const p384 = runFetch({ codes: [200], body: keyBody({ publicKeyPem: pem('secp384r1') }) });
-  assert.notEqual(p384.status, 0);
-  assert.match(p384.out, /not EC P-256/);
-  const junk = runFetch({ codes: [200], body: keyBody({ publicKeyPem: 'not a pem' }) });
-  assert.notEqual(junk.status, 0);
-  assert.match(junk.out, /not a PEM public key/);
+test('key fetch: a key id other than global, a key that is not EC P-256, or junk skips the PDP (it could never verify with any of them)', () => {
+  skipped(runFetch({ codes: [200], body: keyBody({ keyId: 'default' }) }), /key id 'default'/);
+  skipped(runFetch({ codes: [200], body: keyBody({ publicKeyPem: pem('secp384r1') }) }), /not EC P-256/);
+  skipped(runFetch({ codes: [200], body: keyBody({ publicKeyPem: 'not a pem' }) }), /not a PEM public key/);
+});
+
+test('the fetch step can never fail the job (no exit 1), and the job FAILS LAST when the PDP was not deployed, with the recorded reason', () => {
+  const wf = read('.github/workflows/deploy-health.yml');
+  const fetch = stepBlock(wf, 'Fetch the PDP bundle verification key through Front Door');
+  // Breaks if an `exit 1` returns to the fetch step: it would skip TLS phase 2 and the console bind again.
+  assert.doesNotMatch(fetch, /exit 1/);
+  const fin = stepBlock(wf, 'Fail the run when the PDP was not deployed');
+  assert.match(fin, /steps\.pdpkey\.outputs\.fetched == 'false'/);
+  assert.match(fin, /!cancelled\(\)/);
+  assert.match(fin, /exit 1/);
+  // It is the LAST step: everything else (TLS phase 2, ingress verify, bind, apply) has run before it can fail the job.
+  assert.ok(wf.indexOf('- name: Fail the run when the PDP was not deployed') > wf.indexOf('- name: Apply the stamp PDP manifest'));
+  assert.ok(wf.indexOf('- name: Fail the run when the PDP was not deployed') > wf.indexOf('- name: Verify the ingress presents the issued certificate'));
+  // TLS phase 2 does not depend on the PDP key outcome.
+  assert.match(stepBlock(wf, 'Deploy health.bicep phase 2'), /steps\.tlswait\.outputs\.wait == 'true' \|\| steps\.pdpkey\.outputs\.fetched == 'true'/);
+  // Executed: with a recorded reason the step exits 1 and states it; this is the value that makes the job red.
+  const dir = mkdtempSync(join(tmpdir(), 'lhds-fin-'));
+  writeFileSync(join(dir, 'step.sh'), stepScript('Fail the run when the PDP was not deployed'));
+  const r = spawnSync('bash', ['step.sh'], { cwd: dir, encoding: 'utf8', env: { ...process.env, PDP_REASON: 'the control plane answered 403 (test reason)' } });
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(r.status, 1);
+  assert.match(`${r.stdout}${r.stderr}`, /PDP was NOT deployed: the control plane answered 403 \(test reason\)/);
 });

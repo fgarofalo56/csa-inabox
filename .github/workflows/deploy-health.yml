@@ -662,7 +662,14 @@ jobs:
       # (the route that serves /api/health/pdp/*), as the deploy principal, which holds HealthCP.Admin and a caller
       # allowlist entry from csa-loom-post-deploy-bootstrap. The key then goes to the phase-2 deploy as
       # pdpBundleVerificationPublicKeyPem. Bounded wait (the control plane registers the stamp and reads the key
-      # after it starts); fails closed with the cause. The token is masked and never printed.
+      # after it starts). The token is masked and never printed.
+      #
+      # THIS STEP DOES NOT FAIL THE JOB. On a greenfield run bootstrap has not granted the deploy principal anything
+      # yet, so a 403 is expected, and failing here would skip TLS phase 2, which has nothing to do with the PDP
+      # (a regression from before the PDP existed). Instead a failure records fetched=false and a one-line TRUE reason,
+      # raises a ::warning:: and a step-summary entry, and the job FAILS LAST in "Fail the run when the PDP was not
+      # deployed" below, after TLS, the console bind and the rest have run. Chosen over a warning alone because a
+      # green run over an undeployed PDP is exactly the silent-green deploy-integrity R2 forbids.
       - name: Fetch the PDP bundle verification key through Front Door
         id: pdpkey
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.hub.outputs.fd_profile != '' }}
@@ -672,23 +679,33 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          if [ "$(jq -r '.healthControlPlaneState.value.deployed' temp/outputs.json)" != "true" ]; then
-            echo "::notice::The control plane was not deployed by this run, so there is no bundle key to fetch and no PDP is deployed."
+          skip_pdp() { # $1 = one-line reason. Never fails the step: TLS and the console bind must still run.
+            MSG=$(printf '%s' "$1" | tr '\r\n' '  ' | head -c 900)
             echo "fetched=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$MSG" >> "$GITHUB_OUTPUT"
+            echo "::warning::PDP NOT deployed by this run: $MSG"
+            {
+              echo "### deploy-health: PDP NOT deployed ($BOUNDARY)"
+              echo
+              echo "$MSG"
+              echo
+              echo "TLS phase 2 and the console bind still run. This job is failed at its end so the run is not read as a deployed PDP."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          }
+          if [ "$(jq -r '.healthControlPlaneState.value.deployed' temp/outputs.json)" != "true" ]; then
+            skip_pdp "the control plane was not deployed by this run ($(jq -r '.healthControlPlaneState.value.reason // "no reason reported"' temp/outputs.json)), so there is no bundle key to fetch."
           fi
           HOST=$(jq -r '.healthIssuerState.value.frontDoorEndpointHost // ""' temp/outputs.json)
           STAMP=$(jq -r '.healthStamp.value.stampName // ""' temp/outputs.json)
           AUD=$(printf '%s' "$AUDIENCES" | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | grep -E '^api://' | head -n 1)
           [ -n "$AUD" ] || AUD=$(printf '%s' "$AUDIENCES" | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$' | head -n 1)
           if [ -z "$HOST" ] || [ -z "$STAMP" ] || [ -z "$AUD" ]; then
-            echo "::error::Cannot fetch the PDP verification key: the deploy outputs gave host='$HOST', stamp='$STAMP', audience='$AUD'."
-            exit 1
+            skip_pdp "the deploy outputs gave host='$HOST', stamp='$STAMP', audience='$AUD', so the verification key cannot be requested (template defect)."
           fi
           TOKEN=$(az account get-access-token --resource "$AUD" --query accessToken -o tsv 2> temp/tok.err)
           if [ "$?" != "0" ] || [ -z "$TOKEN" ]; then
-            echo "::error::Could not get a token for the control plane audience $AUD as the deploy principal (az: $(head -c 300 temp/tok.err))."
-            exit 1
+            skip_pdp "could not get a token for the control plane audience $AUD as the deploy principal (az: $(head -c 300 temp/tok.err))."
           fi
           echo "::add-mask::$TOKEN"
           umask 077
@@ -700,23 +717,22 @@ jobs:
             [ "$CODE" = "200" ] && break
             ERRCODE=$(jq -r '.error.code // ""' temp/pdp-key.json 2> temp/pdp-key.jqerr)
             case "$CODE" in
-              401) echo "::error::The control plane answered 401 for the deploy principal's token (audience $AUD). The token was not accepted: check LOOM_HEALTH_CP_AUDIENCE on loom-health-cp against $AUD."; exit 1 ;;
-              403) echo "::error::The control plane answered 403: the deploy principal lacks the HealthCP role or its client id is not on the caller allowlist. csa-loom-post-deploy-bootstrap grants the CI service principal HealthCP.Admin and allowlists it; run it, then re-run this lane."; exit 1 ;;
+              401) skip_pdp "the control plane answered 401 for the deploy principal's token (audience $AUD): the token was not accepted. Check LOOM_HEALTH_CP_AUDIENCE on loom-health-cp against $AUD." ;;
+              403) skip_pdp "the control plane answered 403: the deploy principal lacks the HealthCP role or its client id is not on the caller allowlist. On a first (greenfield) run csa-loom-post-deploy-bootstrap has not granted the CI service principal HealthCP.Admin yet: run it, then re-run this lane." ;;
             esac
             echo "attempt $i/$KEY_ATTEMPTS: HTTP $CODE ${ERRCODE:+(code $ERRCODE)} (404 = stamp not self-registered yet; 503 = key not readable yet; Front Door applies asynchronously)"
             sleep 15
           done
           if [ "$CODE" != "200" ]; then
-            echo "::error::GET $URL answered HTTP $CODE ${ERRCODE:+(code $ERRCODE)} after $KEY_ATTEMPTS attempts 15s apart (curl: $(head -c 200 temp/pdp-key.err)). Established: the control plane was deployed. NOT established: why. 404 means the stamp is not registered (check the control plane logs for stamp.self_register); 503 bundle_key_unconfigured means LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID is not set on it; 503 bundle_key_unavailable means it could not read the Key Vault key (the identity needs Key Vault Crypto User on lhds-pdp-bundle-sign and a private-endpoint path to the vault)."
-            exit 1
+            skip_pdp "GET $URL answered HTTP $CODE ${ERRCODE:+(code $ERRCODE)} after $KEY_ATTEMPTS attempts 15s apart (curl: $(head -c 200 temp/pdp-key.err)). Established: the control plane was deployed. NOT established: why. 404 means the stamp is not registered (check the control plane logs for stamp.self_register); 503 bundle_key_unconfigured means LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID is not set on it; 503 bundle_key_unavailable means it could not read the Key Vault key (the identity needs Key Vault Crypto User on lhds-pdp-bundle-sign and a private-endpoint path to the vault)."
           fi
           jq -r '.data.publicKeyPem // ""' temp/pdp-key.json > temp/pdp-key.pub
           KEYID=$(jq -r '.data.keyId // ""' temp/pdp-key.json)
-          if [ "$KEYID" != "global" ]; then echo "::error::The control plane reports bundle key id '$KEYID', but the PDP is configured to verify with key id 'global' (engines.bicep). Not deploying a PDP that could never verify a bundle."; exit 1; fi
+          if [ "$KEYID" != "global" ]; then skip_pdp "the control plane reports bundle key id '$KEYID', but the PDP is configured to verify with key id 'global' (engines.bicep): a PDP deployed now could never verify a bundle."; fi
           openssl pkey -pubin -noout -text -in temp/pdp-key.pub > temp/pdp-key.txt 2> temp/pdp-key.oerr
-          if [ "$?" != "0" ]; then echo "::error::The control plane returned something that is not a PEM public key ($(head -c 200 temp/pdp-key.oerr))."; exit 1; fi
-          if ! grep -qE 'prime256v1|P-256' temp/pdp-key.txt; then echo "::error::The control plane's bundle key is not EC P-256; bundle signatures are ES256."; exit 1; fi
-          jq --rawfile pem temp/pdp-key.pub '. + {pdpBundleVerificationPublicKeyPem: $pem}' temp/cp.json > temp/cp.next.json || { echo "::error::could not add the PDP verification key to temp/cp.json"; exit 1; }
+          if [ "$?" != "0" ]; then skip_pdp "the control plane returned something that is not a PEM public key ($(head -c 200 temp/pdp-key.oerr))."; fi
+          if ! grep -qE 'prime256v1|P-256' temp/pdp-key.txt; then skip_pdp "the control plane's bundle key is not EC P-256; bundle signatures are ES256."; fi
+          jq --rawfile pem temp/pdp-key.pub '. + {pdpBundleVerificationPublicKeyPem: $pem}' temp/cp.json > temp/cp.next.json || skip_pdp "could not add the PDP verification key to temp/cp.json."
           mv temp/cp.next.json temp/cp.json
           rm -f temp/pdp-hdr.txt
           echo "fetched=true" >> "$GITHUB_OUTPUT"
@@ -868,40 +884,6 @@ jobs:
             exit 1
           fi
 
-      # STAMP PDP DELIVERY (#5422). health.bicep deploys the PDP's ARM resources and RENDERS its manifest as the
-      # output healthPdpState.manifest (single source of truth: engines.bicep). Nothing in ARM can apply a
-      # manifest here (no deploymentScripts: policy forces storage shared-key off), so it is applied through
-      # `az aks command invoke` by scripts/csa-loom/aks-apply-manifest.sh, which reads every exit code and
-      # waits, bounded, for the Deployment to be Ready. The PDP is not Ready until a SIGNED bundle is active, so
-      # a stamp with no published bundle fails HERE, loudly, and is never reported as deployed.
-      - name: Apply the stamp PDP manifest (az aks command invoke)
-        id: pdpapply
-        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
-        run: |
-          set -uo pipefail
-          set +e
-          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs.json)" != "true" ]; then
-            echo "::notice::The stamp PDP was not deployed by this run ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json)), so there is no manifest to apply."
-            echo "Stamp PDP: NOT deployed ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json))." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          RG=$(jq -r '.healthPdpState.value.resourceGroup // ""' temp/outputs.json)
-          CLUSTER=$(jq -r '.healthPdpState.value.aksClusterName // ""' temp/outputs.json)
-          NS=$(jq -r '.healthPdpState.value.namespace // ""' temp/outputs.json)
-          DEP=$(jq -r '.healthPdpState.value.deploymentName // ""' temp/outputs.json)
-          jq -r '.healthPdpState.value.manifest // ""' temp/outputs.json > temp/pdp-manifest.yaml
-          if [ -z "$RG" ] || [ -z "$CLUSTER" ] || [ -z "$NS" ] || [ -z "$DEP" ] || ! grep -q '^kind: Deployment' temp/pdp-manifest.yaml; then
-            echo "::error::healthPdpState says deployed but lacks what the apply needs (resourceGroup='$RG', cluster='$CLUSTER', namespace='$NS', deployment='$DEP', manifest bytes=$(wc -c < temp/pdp-manifest.yaml)). This is a template defect."
-            exit 1
-          fi
-          bash scripts/csa-loom/aks-apply-manifest.sh --resource-group "$RG" --cluster "$CLUSTER" --namespace "$NS" --deployment "$DEP" --manifest temp/pdp-manifest.yaml
-          RC=$?
-          if [ "$RC" != "0" ]; then
-            echo "::error::The stamp PDP manifest was NOT confirmed applied and Ready (aks-apply-manifest.sh exit $RC: 3 permission, 4 kubectl failure, 5 not Ready in time, 6 outcome unknown, 2 usage). The infrastructure deployment itself succeeded; the cause is in the step output above."
-            exit 1
-          fi
-          echo "Stamp PDP: manifest applied and $NS/$DEP rolled out in $CLUSTER (read back from kubectl)." >> "$GITHUB_STEP_SUMMARY"
-
       # AUTO-BIND (#5346): nothing bound LOOM_HEALTH_CP_URL / LOOM_HEALTH_CP_AUDIENCE /
       # LOOM_HEALTH_DEFAULT_STAMP_ID into the console, so an operator hand-set them in /admin/env-config.
       # The producer binds them here, from what this run just deployed. Read from the deploy outputs, set
@@ -984,3 +966,52 @@ jobs:
             echo "loom-console in $CRG now has LOOM_HEALTH_CP_URL=$URL, LOOM_HEALTH_CP_AUDIENCE=$AUD, LOOM_HEALTH_DEFAULT_STAMP_ID=$STAMP (read back)."
             echo "Bound, NOT verified live. The stamp id is the deployed stamp name; whether the control plane has it registered and healthy is not checked here."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs AFTER the console bind on purpose: the first apply fails at rollout (exit 5) until a signed bundle is
+      # published and the PDP identity is on the allowlist, and that must not skip the console auto-bind (#5346) or anything
+      # else. A failure here still fails the job.
+      # STAMP PDP DELIVERY (#5422). health.bicep deploys the PDP's ARM resources and RENDERS its manifest as the
+      # output healthPdpState.manifest (single source of truth: engines.bicep). Nothing in ARM can apply a
+      # manifest here (no deploymentScripts: policy forces storage shared-key off), so it is applied through
+      # `az aks command invoke` by scripts/csa-loom/aks-apply-manifest.sh, which reads every exit code and
+      # waits, bounded, for the Deployment to be Ready. The PDP is not Ready until a SIGNED bundle is active, so
+      # a stamp with no published bundle fails HERE, loudly, and is never reported as deployed.
+      - name: Apply the stamp PDP manifest (az aks command invoke)
+        id: pdpapply
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::warning::The stamp PDP was not deployed by this run ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json)), so there is no manifest to apply."
+            echo "Stamp PDP: NOT deployed ($(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs.json))." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          RG=$(jq -r '.healthPdpState.value.resourceGroup // ""' temp/outputs.json)
+          CLUSTER=$(jq -r '.healthPdpState.value.aksClusterName // ""' temp/outputs.json)
+          NS=$(jq -r '.healthPdpState.value.namespace // ""' temp/outputs.json)
+          DEP=$(jq -r '.healthPdpState.value.deploymentName // ""' temp/outputs.json)
+          jq -r '.healthPdpState.value.manifest // ""' temp/outputs.json > temp/pdp-manifest.yaml
+          if [ -z "$RG" ] || [ -z "$CLUSTER" ] || [ -z "$NS" ] || [ -z "$DEP" ] || ! grep -q '^kind: Deployment' temp/pdp-manifest.yaml; then
+            echo "::error::healthPdpState says deployed but lacks what the apply needs (resourceGroup='$RG', cluster='$CLUSTER', namespace='$NS', deployment='$DEP', manifest bytes=$(wc -c < temp/pdp-manifest.yaml)). This is a template defect."
+            exit 1
+          fi
+          bash scripts/csa-loom/aks-apply-manifest.sh --resource-group "$RG" --cluster "$CLUSTER" --namespace "$NS" --deployment "$DEP" --manifest temp/pdp-manifest.yaml
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::The stamp PDP manifest was NOT confirmed applied and Ready (aks-apply-manifest.sh exit $RC: 3 permission, 4 kubectl failure, 5 not Ready in time, 6 outcome unknown, 2 usage). The infrastructure deployment itself succeeded; the cause is in the step output above."
+            exit 1
+          fi
+          echo "Stamp PDP: manifest applied and $NS/$DEP rolled out in $CLUSTER (read back from kubectl)." >> "$GITHUB_STEP_SUMMARY"
+
+      # LAST STEP (#5422). TLS phase 2 and the console bind have run by now. If the PDP key could not be fetched the PDP was
+      # not deployed, and this run must not read as a deployed PDP: fail it here with the reason the fetch step recorded.
+      # (A failed manifest apply fails its own step above; this covers the case where there was nothing to apply.)
+      - name: Fail the run when the PDP was not deployed
+        if: ${{ !cancelled() && steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.pdpkey.outputs.fetched == 'false' }}
+        env:
+          PDP_REASON: ${{ steps.pdpkey.outputs.reason }}
+        run: |
+          set -uo pipefail
+          echo "::error::The stamp PDP was NOT deployed: ${PDP_REASON:-no reason recorded}. The rest of the lane (infrastructure, TLS, console bind) completed; re-run after fixing the above."
+          exit 1

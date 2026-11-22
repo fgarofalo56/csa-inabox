@@ -81,6 +81,12 @@ d('the control-plane signature is accepted by a real OPA (v1.9.0)', () => {
 });
 
 describe('opa-backed signing check', () => {
+  // CI (health-pdp-opa.yml) sets REQUIRE_OPA=1 together with OPA: if the binary is ever not wired, this FAILS instead of skipping.
+  // Breaks when REQUIRE_OPA=1 and OPA is unset: the real-OPA tests above would otherwise be silently skipped.
+  it.runIf(process.env.REQUIRE_OPA === '1')('REQUIRE_OPA=1: a real OPA binary must be configured, so the tests above ran', () => {
+    expect(OPA, 'OPA is not set although REQUIRE_OPA=1').not.toBe('');
+  });
+
   it.skipIf(!!OPA)('SKIPPED: set OPA=<path to opa v1.9.0> to run the real-OPA verification above', () => {
     expect(OPA).toBe('');
   });
