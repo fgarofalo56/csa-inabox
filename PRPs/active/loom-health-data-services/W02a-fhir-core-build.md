@@ -109,13 +109,16 @@ Start with the SBOM claim vs `build-fiab-images-acr-tasks.yml`, then W2-2 and W2
 - PRs: #5423, #5425 (+ empty #5426), #5427, #5428, #5429, #5430, #5431, #5432. Follow-ups: #5424.
 - The pdpUrl source is done (`LOOM_HEALTH_CP_PDP_URL`).
 
-**B2 owes** (fresh session):
-- per-tenant HAPI identity bicep (ServiceAccount federation, a PG role-job admin identity);
-- the production `FhirEngineHost` through runCommand, and its `compose.ts` registration;
-- the Dockerfile COPY of `config/application.yaml`;
-- the PG principal job (`pgaadauth_create_principal`).
+**B2 is merged, not deployed (2026-11-22).** Operator decisions 9-11 are on #5422. Each lane had one independent review, with should-fixes taken in the same round:
+- **B2a** #5434 `f779423d0`: a dedicated per-tenant UAMI `id-lhds-<stamp>-<slug>-fhir` with a federated credential for `loom-health:fhir-<slug>` and no role assignment (decision 9). A stamp UAMI `id-lhds-<stamp>-pgadmin` is added as a PG Entra admin, plus the SA `lhds-pg-admin`. `tenant.destroy` deletes the fhir identity.
+- **B2b** #5436 `70e0a92fd`: `application.yaml` COPY, plus azure-identity-extensions 1.3.1 (34 sha256-pinned jars). Link-probed offline against the war's reactor-core 3.7.19.
+- **B2c** #5435 `48dcf74e0`: a runCommand client and the production `FhirEngineHost`. A PG principal Job runs `pgaadauth_create_principal_with_oid` (decision 10). The password role and KV secret are gone.
+- **B2e** #5438 `070a6a3e0` (decision 11): the engine reconciles its own partitions in-process. HAPI's PDP interceptor 401s tokenless partition calls. The engine grants SELECT on `hfj_partition` only; the CP reads it back through the PG Job, and DB rows are authoritative for ids. Real HAPI 8.12 + PG16 probe passed.
+- **B2d** #5437 `bdae9e020`: `LOOM_HEALTH_CP_FHIR_IMAGE` (tag) and `_PG_CLIENT_IMAGE` (digest) are set from bicep. deploy-health imports the PG client image and asserts `loom-health-fhir:<tag>` exists.
 
-Then **B3** (live FHIR `metadata` 200 plus a PDP-allowed create/read). GCC-High: not exercised (#5123).
+The loom-health-cp vitest suite is green locally (579). It runs in no CI (#5396). Follow-ups: #5439.
+
+**B3 owes** (fresh session): wait for build-fiab-images to finish → deploy-health full → bootstrap → CP roll → synthetic tenant create → FHIR `metadata` 200 → PDP-allowed create/read → destroy. GCC-High: not exercised (#5123). B3 watch items are in #5439: reactor-netty linkage, live REVOKE/isolation readback.
 
 Follow-ups: a reserved partition-name deny list; an ensureRole interruption test. | 2026-11-22 |
 | W2-3 PDP + audit interceptors | merged | feat/lhds-w2-3-interceptors | sonnet | #5310 = `da67b2691`, merged, not deployed (wired into an engine only by W2-2). Two review rounds: an update-over-existing bypass was found and fixed, and the plugin CI lane `health-fhir-plugin-test.yml` was added (125 mvn tests). Built against the frozen contract ahead of W2-2; the assumptions are in the PR body. Follow-ups #5316, including the real-JPA hook receipt. 2026-11-16: #5337 = `ecc04ce52` merged, not deployed. Bundle.total is kept only for unconstrained wildcard read scopes. Audit gets a sink-failure counter + an alert, DSYNC, returned/hidden patient ids, and an XFF trusted only from `LOOM_HEALTH_TRUSTED_PROXIES`. The image-contract test is fixed. 138 mvn tests; 8 mutations RED. Remainders: typed `_getpages` is still denied; no real-OPA test yet (#5340). **Operator decision 2026-11-16: audit FAILS CLOSED before real PHI** (#5339); today it is fail-open + alerted, shipped in #5310. | 2026-11-17 |
