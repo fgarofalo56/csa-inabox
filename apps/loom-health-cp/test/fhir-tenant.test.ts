@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   AUDIT_INTERCEPTOR,
+  JDBC_AUTH_PLUGIN,
   PDP_INTERCEPTOR,
   fhirNames,
   poolSizeFor,
@@ -28,26 +29,35 @@ const PG_ID = `/subscriptions/s/resourceGroups/${RG}/providers/Microsoft.DBforPo
 const PG_FQDN = 'pg-dev01.postgres.database.azure.com';
 const PDP = 'http://pdp.lhds.svc.cluster.local:8181';
 const DB = tenantNames(STAMP, SLUG).databaseName;
-const NAMES = fhirNames(SLUG);
+const IDENT = { name: `id-lhds-${STAMP}-${SLUG}-fhir`, clientId: '11111111-2222-3333-4444-555555555555', principalId: 'aaaaaaaa-2222-3333-4444-555555555555' };
 
 const ENGINE_DIR = new URL('../../loom-health-fhir/', import.meta.url);
 const read = (rel: string) => readFileSync(new URL(rel, ENGINE_DIR), 'utf8');
 
-const baseInput = { tenantId: SLUG, stampId: STAMP, postgresFqdn: PG_FQDN, maxRequestsPerMinute: 600, pdpUrl: PDP };
+const baseInput = { tenantId: SLUG, stampId: STAMP, postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP };
 
 describe('renderEngineConfig', () => {
-  it('points the datasource at the tenant OWN database and role, and renders no secret value', () => {
+  it('points the datasource at the tenant OWN database as its FHIR identity, through the JDBC auth plugin, with no credential', () => {
     const c = renderEngineConfig(baseInput);
     // Input that breaks it: a template that used another tenant's database or the server's admin database.
-    expect(c.env.SPRING_DATASOURCE_URL).toBe(`jdbc:postgresql://${PG_FQDN}:5432/${DB}?sslmode=require`);
-    expect(c.env.SPRING_DATASOURCE_USERNAME).toBe(`${DB}_app`);
+    expect(c.env.SPRING_DATASOURCE_URL).toBe(`jdbc:postgresql://${PG_FQDN}:5432/${DB}?sslmode=require&authenticationPluginClassName=${JDBC_AUTH_PLUGIN}`);
+    // The plugin class name is the contract with lane B2b's image: a changed class breaks this literal.
+    expect(JDBC_AUTH_PLUGIN).toBe('com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin');
+    expect(c.env.SPRING_DATASOURCE_USERNAME).toBe(IDENT.name);
     const other = renderEngineConfig({ ...baseInput, tenantId: 'other-co' });
     expect(other.env.SPRING_DATASOURCE_URL).not.toContain(DB);
     expect(other.env.SPRING_DATASOURCE_URL).toContain('/lhds_other_co?');
-    // The password is a NAME in secretRefs and appears in no env value (breaks if a value was inlined).
-    expect(c.secretRefs).toEqual({ SPRING_DATASOURCE_PASSWORD: `t-${SLUG}-fhir-db` });
-    expect(Object.keys(c.env)).not.toContain('SPRING_DATASOURCE_PASSWORD');
+    // Positive pair of the absence checks: a datasource exists and carries a username, so deleting the datasource cannot pass.
+    expect(Object.keys(c.env)).toContain('SPRING_DATASOURCE_USERNAME');
+    expect(Object.keys(c.env).filter((k) => /PASSWORD/i.test(k))).toEqual([]);
+    expect('secretRefs' in c).toBe(false);
     expect(Object.values(c.env).some((v) => /password|secret/i.test(v))).toBe(false);
+  });
+
+  it('refuses a malformed identity and puts the identity in the revision', () => {
+    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, name: "bad name!" } })).toThrow(/invalid name/);
+    // A re-created identity (new client id) must re-apply: equal revisions would leave the old annotation in place.
+    expect(renderEngineConfig({ ...baseInput, identity: { ...IDENT, clientId: '99999999-2222-3333-4444-555555555555' } }).revision).not.toBe(renderEngineConfig(baseInput).revision);
   });
 
   it('database name equals the one tenant.bicep creates (lifted from the bicep source)', () => {
@@ -179,10 +189,10 @@ class FakeHost implements FhirEngineHost {
     this.ensureRoleCalls++;
     this.role = this.roleAfterEnsure(i.databaseName);
   }
-  async readDatabaseRole() {
+  async readDatabaseRole(_tenantId: string, _roleName: string) {
     return structuredClone(this.role);
   }
-  async removeDatabaseRole() {
+  async removeDatabaseRole(_tenantId: string, _roleName: string) {
     this.removeRoleCalls++;
     this.order.push('role');
     if (!this.removeRoleIsNoop) this.role = { exists: false, connectableDatabases: [] };
@@ -212,6 +222,10 @@ class FakeArm implements Partial<TenantArm> {
   stampManifest: Record<string, unknown> = { postgresFqdn: PG_FQDN, postgresServerId: PG_ID };
   databases = new Map<string, string>([[`${PG_ID}/databases/${DB}`, DB]]);
   readError: Error | undefined;
+  tenantManifest: Record<string, unknown> | 'absent' | 'no_outputs' = { fhirIdentity: { id: 'x', ...IDENT } };
+  async getTenantManifest() {
+    return typeof this.tenantManifest === 'string' ? { state: this.tenantManifest } : { state: 'found' as const, value: this.tenantManifest };
+  }
   async getStampManifest() {
     return this.stampState === 'found' ? { state: 'found' as const, value: this.stampManifest } : { state: this.stampState };
   }
@@ -248,7 +262,7 @@ function setup(tenantStatus: TenantDoc['status'] = 'active') {
     await runner.idle();
     return runner.get(job.id);
   };
-  return { arm, host, tenants, runner, run };
+  return { arm, host, stamps, tenants, runner, run };
 }
 
 describe('fhir-tenant.create', () => {
@@ -257,12 +271,14 @@ describe('fhir-tenant.create', () => {
     const job = await run('fhir-tenant.create', 'k1');
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
     expect(host.applyCalls).toHaveLength(1);
+    expect(host.applyCalls[0]?.identity).toEqual(IDENT);
     expect(host.applyCalls[0]?.env.SPRING_DATASOURCE_URL).toContain(`/${DB}?`);
     const steps = job.receipts.map((r) => r.step);
     // Each readback step missing breaks this list: the job must not skip proving what it did.
     expect(steps).toEqual(['database.readback', 'role.ensured', 'role.readback', 'config.applied', 'config.readback', 'engine.probe']);
-    expect(job.receipts.find((r) => r.step === 'role.readback')?.detail).toBe(`role=${DB}_app exists=true databases=1`);
+    expect(job.receipts.find((r) => r.step === 'role.readback')?.detail).toBe(`role=${IDENT.name} exists=true databases=1`);
     expect(JSON.stringify(job.receipts)).not.toMatch(/password|secret|jdbc:/i);
+    expect(job.receipts.find((r) => r.step === 'role.ensured')?.detail).toBe(`role=${IDENT.name} database=${DB}`);
   });
 
   it('is idempotent: a re-run applies nothing (applyCalls stays 1; 2 would mean it re-applied) and keeps the role', async () => {
@@ -403,6 +419,46 @@ describe('fhir-tenant.create', () => {
   });
 });
 
+describe('fhir-tenant identity (from the tenant manifest)', () => {
+  it('a tenant manifest that reads as no usable outputs (B2a: missing or malformed fhirIdentity) fails tenant_manifest_missing and creates nothing', async () => {
+    const { arm, host, run } = setup();
+    arm.tenantManifest = 'no_outputs';
+    const job = await run('fhir-tenant.create', 'k1');
+    expect(job.error?.code).toBe('tenant_manifest_missing');
+    expect(job.error?.message).toContain('fhirIdentity');
+    expect([host.ensureRoleCalls, host.applyCalls.length]).toEqual([0, 0]);
+  });
+
+  it('an absent tenant deployment fails tenant_manifest_missing', async () => {
+    const { arm, run } = setup();
+    arm.tenantManifest = 'absent';
+    expect((await run('fhir-tenant.create', 'k1')).error?.code).toBe('tenant_manifest_missing');
+  });
+
+  it('teardown with unusable tenant outputs skips the principal and says so (does not claim removal)', async () => {
+    const { arm, host, run } = setup('destroying');
+    arm.tenantManifest = 'no_outputs';
+    const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(job.receipts.map((r) => r.step)).toEqual(['engine.removed', 'role.skipped']);
+    expect(job.receipts[1]?.detail).toContain('no usable outputs');
+    expect(host.removeRoleCalls).toBe(0);
+  });
+
+  it('the role.skipped receipt names the cause that was observed: deployment absent, no outputs, or stamp not registered', async () => {
+    const absent = setup('destroying');
+    absent.arm.tenantManifest = 'absent';
+    const a = await absent.run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
+    expect(a.receipts[1]?.detail).toContain(`lhds-tenant-${SLUG} was not found`);
+    expect(a.receipts[1]?.detail).not.toContain('fhirIdentity'); // an absent deployment must not be reported as a missing field
+    const noStamp = setup('destroying');
+    noStamp.stamps.docs.delete(STAMP);
+    const s = await noStamp.run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
+    expect(s.receipts[1]?.detail).toContain('stamp that is not registered');
+    expect(s.receipts[1]?.detail).not.toContain('was not found');
+  });
+});
+
 describe('fhir-tenant.configure', () => {
   it('refuses to create an engine implicitly: no config means engine_not_configured and nothing is applied', async () => {
     const { host, run } = setup();
@@ -508,7 +564,7 @@ describe('fhir-tenant.teardown', () => {
     host.removeRoleIsNoop = true;
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.error?.code).toBe('teardown_incomplete');
-    expect(job.error?.message).toContain(NAMES.roleName);
+    expect(job.error?.message).toContain(IDENT.name);
   });
 
   it('is idempotent: a second teardown of an already-removed engine succeeds', async () => {

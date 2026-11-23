@@ -12,6 +12,7 @@ import { authoredMessage } from './safe-error.js';
 import { DefaultAzureCredential } from '@azure/identity';
 import { loadIngressCertConfig, scheduleIngressCert } from './tls/ingress-cert.js';
 import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
+import { fhirEngineHostFromConfig, loadFhirEngineConfig } from './jobs/fhir-engine-config.js';
 import { loadStampSelfRegistration, scheduleStampSelfRegistration } from './registry/self-register.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
@@ -26,12 +27,14 @@ function main(): void {
   let tenantCfg;
   let tlsCfg;
   let stampCfg;
+  let engineCfg;
   try {
     cfg = loadConfig();
     authCfg = loadAuthServerConfig(cfg.cloud);
     tenantCfg = loadTenantArmConfig(cfg.cloud);
     tlsCfg = loadIngressCertConfig(cfg.cloud);
     stampCfg = loadStampSelfRegistration(cfg.cloud);
+    engineCfg = loadFhirEngineConfig(cfg.cloud);
   } catch (e) {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
@@ -45,6 +48,13 @@ function main(): void {
   }
   const stores = createCosmosStores(cfg);
   const tenantArm = tenantArmFromConfig(tenantCfg, cfg.authorityHost);
+  // W2-2b B2c: the per-tenant FHIR engine host (ARM runCommand). Off without its images AND the PDP url.
+  let fhirEngine;
+  if (engineCfg && cfg.pdpUrl) {
+    fhirEngine = { host: fhirEngineHostFromConfig(engineCfg, tenantCfg, cfg.authorityHost, { stamps: stores.stamps, tenants: stores.tenants, arm: tenantArm }), pdpUrl: cfg.pdpUrl };
+  } else {
+    log('fhir_engine.disabled', { reason: !engineCfg ? 'LOOM_HEALTH_CP_FHIR_IMAGE and LOOM_HEALTH_CP_PG_CLIENT_IMAGE unset' : 'LOOM_HEALTH_CP_PDP_URL unset (an engine without a PDP answers 503)' });
+  }
   const app = compose({
     stores,
     auth: authOptionsFromConfig(cfg),
@@ -54,6 +64,7 @@ function main(): void {
     bundleKey: bundleSigner ? () => verificationKeyPem(bundleSigner) : undefined,
     authServer: authServerInitFromConfig(cfg, authCfg),
     tenantArm,
+    fhirEngine,
     log,
   });
   const server = createServer((req, res) => {

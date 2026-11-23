@@ -8,13 +8,17 @@
 // derived (fhirNames), never typed.
 //
 // What these jobs do NOT do: they never run the engine. The host (container platform) is behind the
-// FhirEngineHost port; its production adapter and its bicep arrive with W2-2b. Until a host is supplied
-// the kinds are not registered (compose.ts), so a submit answers "unknown job kind" rather than pretending.
+// FhirEngineHost port; its production adapter is RunCommandFhirEngineHost (fhir-engine-host.ts, W2-2b B2c), which
+// reaches the private stamp AKS through ARM runCommand. Until a host AND a PDP url are supplied the kinds are not
+// registered (compose.ts), so a submit answers "unknown job kind" rather than pretending.
+//
+// The engine authenticates to PostgreSQL PASSWORDLESS (#5422 decision 9): its own UAMI is a PG Entra principal, so
+// there is no credential role and no Key Vault entry to create or remove.
 
 import { z } from 'zod';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
 import type { Collection } from '../store/types.js';
-import { renderEngineConfig, fhirNames, OverridesSchema, type EngineOverrides, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import { renderEngineConfig, OverridesSchema, type EngineOverrides, type FhirIdentity, type RenderedEngineConfig } from './fhir-tenant-config.js';
 import { classifyArm, stampResourceGroup, tenantNames, type TenantArm } from './tenant-arm.js';
 import { JobFailure, type JobContext, type JobHandler } from './types.js';
 
@@ -28,7 +32,7 @@ export interface AppliedEngineConfig {
 
 export interface RoleReadback {
   exists: boolean;
-  /** Every database the role can CONNECT to. Isolation holds only if this is exactly the tenant's own. */
+  /** Every application database the principal can CONNECT to. Isolation holds only if this is exactly the tenant's own. */
   connectableDatabases: string[];
 }
 
@@ -41,14 +45,19 @@ export interface EngineProbe {
 }
 
 export interface FhirEngineHost {
-  /** Idempotent: create the role if missing, grant CONNECT on `databaseName` only, set its password from the vault secret. */
-  ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string; passwordSecretName: string }): Promise<void>;
-  readDatabaseRole(roleName: string): Promise<RoleReadback>;
-  removeDatabaseRole(roleName: string): Promise<void>;
+  /**
+   * Idempotent: ensure the Entra PostgreSQL principal `roleName` (the tenant FHIR identity's name) exists, grant CONNECT
+   * on `databaseName` only, and the schema privileges the engine needs to create its tables. No credential is involved.
+   * A same-named principal bound to a DIFFERENT Entra object id (a re-created identity) is replaced, never reused.
+   */
+  ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string; principalId: string }): Promise<void>;
+  readDatabaseRole(tenantId: string, roleName: string): Promise<RoleReadback>;
+  removeDatabaseRole(tenantId: string, roleName: string): Promise<void>;
   applyEngineConfig(cfg: RenderedEngineConfig): Promise<void>;
   /** undefined = no engine config exists for the tenant. */
   readEngineConfig(tenantId: string): Promise<AppliedEngineConfig | undefined>;
-  probeEngine(tenantId: string): Promise<EngineProbe>;
+  /** `partitions: true` also lists the partitions; a host that cannot list them throws rather than report none. */
+  probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe>;
   /** Idempotent: create each named partition (facility) if missing. */
   ensurePartitions(tenantId: string, names: string[]): Promise<void>;
   /** Stop and remove the engine workload and its config for the tenant (the database is NOT touched). */
@@ -77,6 +86,8 @@ interface Resolved {
   rg: string;
   postgresFqdn: string;
   postgresServerId: string;
+  /** The tenant's FHIR identity from the tenant deployment (#5422 decision 9). */
+  identity: FhirIdentity;
 }
 
 async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolved> {
@@ -101,7 +112,21 @@ async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolv
   if (!postgresFqdn) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no postgresFqdn (PostgreSQL is not deployed on this stamp); the engine datasource cannot be built');
   const postgresServerId = String(lookup.value.postgresServerId ?? '');
   if (!postgresServerId) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no postgresServerId, so the tenant database cannot be read back');
-  return { tenant, stamp, rg, postgresFqdn, postgresServerId };
+  let tm;
+  try {
+    tm = await deps.arm.getTenantManifest(rg, tenant.id);
+  } catch (e) {
+    throw classifyArm(e);
+  }
+  if (tm.state !== 'found') {
+    throw new JobFailure(
+      'tenant_manifest_missing',
+      `the tenant deployment lhds-tenant-${tenant.id} ${tm.state === 'absent' ? 'was not found' : 'returned no usable outputs (this includes a missing or malformed fhirIdentity, e.g. a tenant deployed before the dedicated FHIR identity)'} in ${rg}; it is the source of the tenant FHIR identity. Run tenant.create for ${tenant.id} first. No role or engine config was created.`,
+    );
+  }
+  const { name, clientId, principalId } = tm.value.fhirIdentity;
+  const identity: FhirIdentity = { name, clientId, principalId };
+  return { tenant, stamp, rg, postgresFqdn, postgresServerId, identity };
 }
 
 /** The tenant database must exist (tenant.create made it); the readback asserts the DERIVED name. */
@@ -125,13 +150,13 @@ async function requireTenantDatabase(ctx: JobContext, deps: FhirTenantJobDeps, r
 
 /** Role + isolation. Re-run safe: an existing, correctly-scoped role is left alone. */
 async function ensureRole(ctx: JobContext, deps: FhirTenantJobDeps, cfg: RenderedEngineConfig): Promise<void> {
-  const want = cfg.names;
-  let have = await deps.engine.readDatabaseRole(want.roleName);
+  const want = { databaseName: cfg.names.databaseName, roleName: cfg.identity.name };
+  let have = await deps.engine.readDatabaseRole(cfg.tenantId, want.roleName);
   const scoped = (rb: typeof have) => rb.exists && rb.connectableDatabases.length === 1 && rb.connectableDatabases[0] === want.databaseName;
   if (!scoped(have)) {
-    await deps.engine.ensureDatabaseRole({ tenantId: cfg.tenantId, databaseName: want.databaseName, roleName: want.roleName, passwordSecretName: want.passwordSecretName });
+    await deps.engine.ensureDatabaseRole({ tenantId: cfg.tenantId, databaseName: want.databaseName, roleName: want.roleName, principalId: cfg.identity.principalId });
     await ctx.receipt('role.ensured', `role=${want.roleName} database=${want.databaseName}`);
-    have = await deps.engine.readDatabaseRole(want.roleName);
+    have = await deps.engine.readDatabaseRole(cfg.tenantId, want.roleName);
   } else {
     await ctx.receipt('role.unchanged', `role=${want.roleName}`);
   }
@@ -181,7 +206,7 @@ async function applyAndVerify(ctx: JobContext, deps: FhirTenantJobDeps, cfg: Ren
   }
   if (partitions.length > 0) {
     await deps.engine.ensurePartitions(cfg.tenantId, partitions);
-    const after = await deps.engine.probeEngine(cfg.tenantId);
+    const after = await deps.engine.probeEngine(cfg.tenantId, { partitions: true });
     const missing = partitions.filter((p) => !after.partitions.includes(p));
     await ctx.receipt('partitions.readback', `wanted=${partitions.length} missing=${missing.length}`);
     if (missing.length > 0) throw new JobFailure('readback_mismatch', `partitions not present after ensure: ${missing.join(', ')}`);
@@ -193,6 +218,7 @@ function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides
     tenantId: r.tenant.id,
     stampId: r.stamp.id,
     postgresFqdn: r.postgresFqdn,
+    identity: r.identity,
     maxRequestsPerMinute: r.tenant.quotas.maxRequestsPerMinute,
     pdpUrl: deps.pdpUrl,
     overrides,
@@ -256,19 +282,39 @@ export function fhirTenantTeardownHandler(deps: FhirTenantJobDeps): JobHandler {
       if (tenant.status !== 'destroying') {
         throw new JobFailure('tenant_not_destroying', `the tenant is ${tenant.status}; an engine is torn down only as part of tenant.destroy, which marks the tenant destroying first. Nothing was changed.`);
       }
-      const names = fhirNames(tenant.id);
       await deps.engine.removeEngine(tenant.id);
       const after = await deps.engine.readEngineConfig(tenant.id);
       await ctx.receipt('engine.removed', `tenant=${tenant.id} configPresent=${after !== undefined}`);
       if (after !== undefined) {
         throw new JobFailure('teardown_incomplete', 'the engine config is still present after removal; the tenant database was NOT touched and the role was kept. Retry the job.');
       }
-      // The role goes only after the engine that used it is gone.
-      await deps.engine.removeDatabaseRole(names.roleName);
-      const role = await deps.engine.readDatabaseRole(names.roleName);
-      await ctx.receipt('role.removed', `role=${names.roleName} exists=${role.exists}`);
+      // The principal goes only after the engine that used it is gone. Its name comes from the tenant manifest; with no
+      // fhirIdentity there (a tenant that never had an engine) nothing is established to remove, and that is said.
+      const stamp = await deps.stamps.get(tenant.stampId);
+      let identity: FhirIdentity | undefined;
+      // The receipt names the cause that was actually observed, never a guess.
+      let skipCause = 'the tenant references a stamp that is not registered';
+      if (stamp) {
+        try {
+          const tm = await deps.arm.getTenantManifest(stampResourceGroup(stamp.id, stamp.region), tenant.id);
+          if (tm.state === 'found') {
+            identity = tm.value.fhirIdentity;
+          } else {
+            skipCause = tm.state === 'absent' ? `the tenant deployment lhds-tenant-${tenant.id} was not found` : `the tenant deployment lhds-tenant-${tenant.id} returned no usable outputs (a missing or malformed fhirIdentity reads this way)`;
+          }
+        } catch (e) {
+          throw classifyArm(e);
+        }
+      }
+      if (!identity) {
+        await ctx.receipt('role.skipped', `${skipCause}; no database principal name was established, so none was removed`);
+        return;
+      }
+      await deps.engine.removeDatabaseRole(tenant.id, identity.name);
+      const role = await deps.engine.readDatabaseRole(tenant.id, identity.name);
+      await ctx.receipt('role.removed', `role=${identity.name} exists=${role.exists}`);
       if (role.exists) {
-        throw new JobFailure('teardown_incomplete', `the role ${names.roleName} still exists after removal; retry the job before tenant.destroy drops the database`);
+        throw new JobFailure('teardown_incomplete', `the role ${identity.name} still exists after removal; retry the job before tenant.destroy drops the database`);
       }
     },
   };

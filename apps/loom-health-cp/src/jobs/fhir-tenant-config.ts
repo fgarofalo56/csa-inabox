@@ -7,11 +7,14 @@
 // interceptor list and the plugin's env. The rendering is a PURE function: the same inputs always give the
 // same output and the same revision hash, which is what makes fhir-tenant.create idempotent.
 //
-// NO SECRET is rendered. The database password is a reference to a Key Vault secret by name; the host
-// adapter injects the value (secretKeyRef-style) and the control plane never holds it.
+// NO SECRET exists to render. The engine reaches PostgreSQL PASSWORDLESS (#5422 decision 9): its pod carries a
+// workload-identity token for the tenant's own UAMI, and the baked azure-identity-extensions JDBC plugin turns that
+// token into the connection credential. The datasource therefore has a username (the UAMI name = the PG Entra
+// principal) and no credential property at all.
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { FhirIdentity as TenantFhirIdentity } from './tenant-arm.js';
 import { JobFailure } from './types.js';
 
 /** Interceptor registration ORDER is the security order: authorize first, then audit what was decided. */
@@ -35,23 +38,35 @@ export type EngineOverrides = z.infer<typeof OverridesSchema>;
 
 export interface FhirNames {
   databaseName: string;
-  /** The PostgreSQL role the engine connects as. One per tenant; granted CONNECT on that tenant's database only. */
-  roleName: string;
-  /** Key Vault secret NAME holding the role's password (never the value). */
-  passwordSecretName: string;
+  /** Kubernetes name of the engine's ServiceAccount, Deployment and Service, in the `loom-health` namespace. */
+  workloadName: string;
 }
 
-/** `lhds_acme_health` (database, same derivation as tenant.bicep) / `lhds_acme_health_app` / `t-acme-health-fhir-db`. */
+/** `lhds_acme_health` (database, same derivation as tenant.bicep) / `fhir-acme-health` (the ServiceAccount the federated credential names). */
 export function fhirNames(slug: string): FhirNames {
-  const db = `lhds_${slug.replaceAll('-', '_')}`;
-  return { databaseName: db, roleName: `${db}_app`, passwordSecretName: `t-${slug}-fhir-db` };
+  return { databaseName: `lhds_${slug.replaceAll('-', '_')}`, workloadName: `fhir-${slug}` };
 }
+
+/**
+ * The tenant's dedicated FHIR identity: the `fhirIdentity` of the tenant manifest (tenant-arm.ts, B2a), which parses it fail-closed
+ * and validates the GUIDs. `name` is both the UAMI name and the PostgreSQL Entra principal name; `clientId` goes on the
+ * ServiceAccount annotation; `principalId` is the Entra object id the PG principal is bound to.
+ */
+export type FhirIdentity = Pick<TenantFhirIdentity, 'name' | 'clientId' | 'principalId'>;
+
+/** Names are interpolated into SQL and shell by the host, so the name shape is re-checked where it is rendered. */
+export const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
+
+/** The datasource plugin baked into the engine image by lane B2b. */
+export const JDBC_AUTH_PLUGIN = 'com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin';
 
 export interface RenderInput {
   tenantId: string;
   stampId: string;
   /** Stamp PostgreSQL server FQDN from the stamp manifest (`postgresFqdn`). */
   postgresFqdn: string;
+  /** The tenant's FHIR identity: the datasource user and the ServiceAccount's workload-identity client id. */
+  identity: FhirIdentity;
   maxRequestsPerMinute: number;
   /** In-cluster PDP decision endpoint base (W1-5). Required: the plugin answers 503 to every request without it. */
   pdpUrl: string;
@@ -62,10 +77,10 @@ export interface RenderedEngineConfig {
   tenantId: string;
   stampId: string;
   names: FhirNames;
-  /** Plain (non-secret) environment for the engine container. */
+  /** The identity the engine pod runs as (workload identity). Part of the revision: a re-created identity re-applies. */
+  identity: FhirIdentity;
+  /** Plain environment for the engine container. Holds no credential and no secret reference. */
   env: Record<string, string>;
-  /** Env var -> Key Vault secret name. The adapter resolves the value. */
-  secretRefs: Record<string, string>;
   overrides: EngineOverrides;
   /** Partition mode is a creation-time property of the database (ADR-003). Always true here. */
   partitioning: true;
@@ -105,6 +120,9 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   if (!/^https?:$/.test(pdp.protocol) || pdp.username || pdp.password || pdp.search || pdp.hash) {
     throw new JobFailure('pdp_url_invalid', 'the PDP url must be http(s) without credentials, query or fragment');
   }
+  if (!IDENTITY_NAME.test(i.identity.name)) {
+    throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name; the engine cannot be bound to it, so no engine is configured');
+  }
   const overrides = OverridesSchema.parse(i.overrides ?? {});
   const maxPage = overrides.maxPageSize ?? BASE_MAX_PAGE_SIZE;
   const defPage = overrides.defaultPageSize ?? Math.min(20, maxPage);
@@ -114,9 +132,10 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   const names = fhirNames(i.tenantId);
   const pool = overrides.poolSize ?? poolSizeFor(i.maxRequestsPerMinute);
   const env: Record<string, string> = {
-    // The tenant's OWN database on the stamp server; sslmode=require as W0 measured.
-    SPRING_DATASOURCE_URL: `jdbc:postgresql://${i.postgresFqdn}:5432/${names.databaseName}?sslmode=require`,
-    SPRING_DATASOURCE_USERNAME: names.roleName,
+    // The tenant's OWN database on the stamp server; sslmode=require as W0 measured. The plugin fetches the Entra
+    // token with the pod's workload identity and presents it as the connection credential; none is configured here.
+    SPRING_DATASOURCE_URL: `jdbc:postgresql://${i.postgresFqdn}:5432/${names.databaseName}?sslmode=require&authenticationPluginClassName=${JDBC_AUTH_PLUGIN}`,
+    SPRING_DATASOURCE_USERNAME: i.identity.name,
     SPRING_DATASOURCE_DRIVERCLASSNAME: 'org.postgresql.Driver',
     SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: 'ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect',
     SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: String(pool),
@@ -131,8 +150,8 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
     LOOM_HEALTH_PDP_URL: pdp.toString().replace(/\/$/, ''),
     LOOM_HEALTH_PDP_TIMEOUT_MS: '1500',
   };
-  const secretRefs = { SPRING_DATASOURCE_PASSWORD: names.passwordSecretName };
-  const body = { tenantId: i.tenantId, stampId: i.stampId, names, env, secretRefs, overrides, partitioning: true as const };
+  const identity = { name: i.identity.name, clientId: i.identity.clientId, principalId: i.identity.principalId };
+  const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const };
   const revision = createHash('sha256').update(canonical(body)).digest('hex');
   return { ...body, revision };
 }
