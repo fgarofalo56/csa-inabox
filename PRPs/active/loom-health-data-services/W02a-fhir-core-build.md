@@ -118,8 +118,28 @@ Start with the SBOM claim vs `build-fiab-images-acr-tasks.yml`, then W2-2 and W2
 
 The loom-health-cp vitest suite is green locally (579). It runs in no CI (#5396). Follow-ups: #5439.
 
-**B3 owes** (fresh session): wait for build-fiab-images to finish → deploy-health full → bootstrap → CP roll → synthetic tenant create → FHIR `metadata` 200 → PDP-allowed create/read → destroy. GCC-High: not exercised (#5123). B3 watch items are in #5439: reactor-netty linkage, live REVOKE/isolation readback.
+**B3 (live receipt) is DEPLOYED and VERIFIED on Commercial dev01 (2026-11-23).**
+- Final chain: deploy-health 45253239164 (operator-dispatched with `override_estate_pause=true`; the estate has been paused since 2026-11-21), then bootstrap 45257740619, then CRUD probe 45264235830 with the operator's publish approval.
+- **All 7 probe steps PASS:**
+  - a: metadata 200;
+  - b: no-token 401;
+  - c: writer create 201;
+  - d: read 200;
+  - e: cross-tenant 403;
+  - f_ctrl: reader search 200;
+  - f: reader write 403 (scope).
+- Cleanup: both synthetic tenants were destroyed and their keys crypto-shredded and read back; both engines and their roles were removed.
+- Live-only defects fixed on the way, all deployed:
+  - #5444: the engine pins its public base (decision 13);
+  - #5445: the manifest reads the top-level `pgAdminIdentity`;
+  - #5446: the AKS `clusterToken` is sent on runCommand;
+  - #5447: no `sed` in the command pod;
+  - #5448: poll a runCommand that az stopped waiting for;
+  - #5449: the PDP url was the full decision endpoint and the plugin appended the path again, so every token-bearing request got a 503.
+  - Together they are the lane-contract class: each side's stubs were green.
+- The reactor-netty watch item (#5439) is answered live: the engine served the full CRUD path.
+- GCC-High is NOT exercised (#5123). IL5 and DoD are supported-in-code only.
 
-Follow-ups: a reserved partition-name deny list; an ensureRole interruption test. | 2026-11-22 |
+Follow-ups: a reserved partition-name deny list; an ensureRole interruption test. | 2026-11-23 |
 | W2-3 PDP + audit interceptors | merged | feat/lhds-w2-3-interceptors | sonnet | #5310 = `da67b2691`, merged, not deployed (wired into an engine only by W2-2). Two review rounds: an update-over-existing bypass was found and fixed, and the plugin CI lane `health-fhir-plugin-test.yml` was added (125 mvn tests). Built against the frozen contract ahead of W2-2; the assumptions are in the PR body. Follow-ups #5316, including the real-JPA hook receipt. 2026-11-16: #5337 = `ecc04ce52` merged, not deployed. Bundle.total is kept only for unconstrained wildcard read scopes. Audit gets a sink-failure counter + an alert, DSYNC, returned/hidden patient ids, and an XFF trusted only from `LOOM_HEALTH_TRUSTED_PROXIES`. The image-contract test is fixed. 138 mvn tests; 8 mutations RED. Remainders: typed `_getpages` is still denied; no real-OPA test yet (#5340). **Operator decision 2026-11-16: audit FAILS CLOSED before real PHI** (#5339); today it is fail-open + alerted, shipped in #5310. | 2026-11-17 |
 | W2-5 log scrubber + sentinel | merged | feat/lhds-w2-5-scrubber | sonnet | #5312 = `ea0098278`, merged, not deployed. Real-HAPI capture fixture; the sentinel is visible unscrubbed in 4 channels and absent after scrubbing (22 tests). Image producer row added. The sidecar wiring beside the engine is NOT built (README). | 2026-11-15 |
