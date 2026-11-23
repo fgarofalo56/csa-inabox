@@ -175,3 +175,50 @@ test('the image is no longer labelled a skeleton, and the build skips plugin tes
   assert.doesNotMatch(dockerfile, /skeleton/i);
   assert.match(stage('tools'), /mvn -B -q -f plugin\/pom\.xml package -DskipTests/);
 });
+
+test('runtime stage COPYs config/application.yaml to the exact path the CP renders (B2b)', () => {
+  // BREAKS when: the COPY is deleted (SPRING_CONFIG_ADDITIONAL_LOCATION is `optional:`, so the engine
+  // would silently boot WITHOUT partition mode), or its destination differs from the path in
+  // fhir-tenant-config.ts. The destination is LIFTED from the CP source, never transcribed.
+  const cp = read(join(ROOT, 'apps/loom-health-cp/src/jobs/fhir-tenant-config.ts'));
+  const loc = cp.match(/SPRING_CONFIG_ADDITIONAL_LOCATION[^\n]*?optional:file:(\/[^'"`\s]+)/);
+  assert.ok(loc, 'could not lift the SPRING_CONFIG_ADDITIONAL_LOCATION path from fhir-tenant-config.ts');
+  assert.equal(loc[1], '/opt/loom/fhir/config/application.yaml');
+  const runtime = stage('runtime');
+  const copy = [...runtime.matchAll(/^COPY (?!--)(\S+) (\S+)$/gm)].find((m) => m[1] === 'config/application.yaml');
+  assert.ok(copy, 'runtime stage must COPY config/application.yaml');
+  assert.equal(copy[2], loc[1], 'COPY destination must equal the path the CP renders');
+  assert.ok(existsSync(join(APP, copy[1])), 'COPY source must exist in the build context');
+});
+
+test('jdbc-auth.lock.tsv pins the Entra plugin and every jar by sha256; the image bakes and probes them (B2b)', () => {
+  // BREAKS when: a row loses its 64-hex sha256 or a non-Central url, the plugin jar leaves the lock,
+  // a jar HAPI already ships (jackson, reactor-core, slf4j, pgjdbc) is baked a second time (a
+  // classpath fork), a non-linux-x86_64 native sneaks in, the runtime stage stops copying
+  // /baked/jdbc-auth into /app/extra-classes, or the build-stage probe is removed.
+  const rows = read(join(APP, 'jdbc-auth.lock.tsv')).split('\n').filter(Boolean).map((l) => l.split('\t'));
+  assert.ok(rows.length >= 10, `expected the plugin + its closure (>=10 jars), got ${rows.length}`);
+  const files = new Set();
+  for (const [g, a, v, file, sha, url] of rows) {
+    assert.match(sha ?? '', /^[0-9a-f]{64}$/, `${file}: sha256 must be 64 lowercase hex`);
+    assert.ok(url?.startsWith('https://repo1.maven.org/maven2/') && url.endsWith(`/${file}`), `${file}: url must be Maven Central and end in the file name`);
+    assert.ok(url.includes(`/${g.replace(/\./g, '/')}/${a}/${v}/`), `${file}: url must embed group/artifact/version`);
+    assert.ok(!files.has(file), `duplicate ${file}`);
+    files.add(file);
+    assert.doesNotMatch(a, /^(jackson-|reactor-core$|reactive-streams$|slf4j-|postgresql$|nimbus-jose-jwt$|json-smart$|jspecify$)/, `${a} is already shipped by HAPI; baking it forks the class path`);
+    assert.doesNotMatch(file, /osx|windows|aarch_64|kqueue/, `${file}: only linux-x86_64 natives belong in this image`);
+  }
+  assert.ok(files.has('azure-identity-extensions-1.3.1.jar'), 'azure-identity-extensions 1.3.1 must be pinned');
+  assert.match(stage('runtime'), /^COPY --from=tools \/baked\/jdbc-auth\/ \/app\/extra-classes\/$/m);
+  assert.match(stage('tools'), /JdbcAuthProbe/);
+  assert.match(stage('tools'), /"loadable":true/);
+  assert.match(read(join(APP, 'scripts/fetch-baked-assets.sh')), /sha256 mismatch/);
+});
+
+test('the hapiwar probe stage uses the same HAPI digest as runtime (B2b)', () => {
+  // BREAKS when: hapiwar and runtime FROM digests diverge, so the build-time probe would test libs the
+  // runtime does not ship.
+  const d = [...dockerfile.matchAll(/^FROM hapiproject\/hapi@(sha256:[0-9a-f]{64}) AS (hapiwar|runtime)$/gm)];
+  assert.equal(d.length, 2, 'expected exactly the hapiwar and runtime stages on the HAPI image');
+  assert.equal(d[0][1], d[1][1]);
+});

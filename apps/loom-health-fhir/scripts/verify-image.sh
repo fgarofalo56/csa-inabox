@@ -25,6 +25,15 @@ EXPECTED=$(grep -cE '^[[:space:]]*svc\.registerInterceptor\(' "$HERE/plugin/src/
 [ "$EXPECTED" -gt 0 ] || { echo "FAIL plugin source registers no interceptor"; exit 1; }
 echo "$OUT" | grep -q "\"interceptors\":$EXPECTED}" || { echo "FAIL plugin probe (expected $EXPECTED interceptors)"; exit 1; }
 
+echo "== Entra JDBC auth plugin probe (loads + constructs against the server's own pgjdbc)"
+JOUT=$(docker run --rm --network none --entrypoint java "$IMG" \
+  --class-path /app/main.war \
+  "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes" \
+  -Dloader.main=ai.loom.health.fhir.JdbcAuthProbe \
+  org.springframework.boot.loader.PropertiesLauncher)
+echo "$JOUT"
+echo "$JOUT" | grep -q '"loadable":true' || { echo "FAIL JDBC auth plugin probe"; exit 1; }
+
 run_validator() { # <fixture>
   # --user 0: the validator takes lock files inside its package cache, which the image
   # owns as root; the server itself never uses this cache.

@@ -33,6 +33,25 @@ Two halves, both measured against the pinned image (8.12.0):
   list (PDP before audit) and the plugin env (`LOOM_HEALTH_TENANT`, `LOOM_HEALTH_PDP_URL`). The database
   password is a Key Vault secret NAME (`t-<slug>-fhir-db`); the value is never rendered.
 
+### Datasource authentication: Entra workload identity, no database password (W2-2b B2b, #5422 decision 3)
+
+The image bakes `com.azure:azure-identity-extensions` **1.3.1** (+ `azure-identity` 1.19.0, azure-core, msal4j,
+netty 4.2.19, reactor-netty 1.3.7 ...; 34 jars, each sha256-pinned in `jdbc-auth.lock.tsv`) into
+`/app/extra-classes`, and `config/application.yaml` into `/opt/loom/fhir/config/application.yaml` (the path the CP
+renders; `optional:` would otherwise drop the file silently). Jars the server already ships (jackson, reactor-core,
+slf4j, pgjdbc 42.7.12, nimbus) are deliberately NOT baked again. The build fails unless the plugin class loads and
+implements pgjdbc's `AuthenticationPlugin` against the pinned server's own libs (`JdbcAuthProbe`; `verify-image.sh` re-runs it).
+
+Env contract (no password anywhere):
+
+    SPRING_DATASOURCE_URL=jdbc:postgresql://<fqdn>:5432/<db>?sslmode=require&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin
+    SPRING_DATASOURCE_USERNAME=<UAMI name, the Entra principal name created in PostgreSQL>
+    AZURE_CLIENT_ID=<injected by the workload identity webhook>
+
+Not verified here: a token exchange against a real Entra-only PostgreSQL (that is B3, on the stamp).
+Bump = edit the version in a scratch pom, regenerate `jdbc-auth.lock.tsv` (jars only, linux-x86_64 natives, minus what
+the HAPI `main.war` ships), rebuild.
+
 Lifecycle jobs (`fhir-tenant.create|configure|teardown`, `fhir-tenant-jobs.ts`) apply it through a
 `FhirEngineHost` port and read every step back. **Not wired**: no host adapter exists yet (W2-2b), so
 `compose.ts` does not register the kinds.

@@ -24,11 +24,15 @@
 # PropertiesLauncher with /app/extra-classes on loader.path). Configuration is
 # environment-only and arrives in W2-2; nothing tenant-specific is baked in.
 
+# ---- hapiwar stage: the pinned server, only so the tools stage can probe against its real libs.
+# Digest MUST equal the runtime stage's (tests/image-contract.test.mjs).
+FROM hapiproject/hapi@sha256:0ff86aac4c7bd13a1ee226444a70263bb46ed1c28ef543c30a44f865b80ca04e AS hapiwar
+
 # ---- tools stage: fetch + verify assets, build the plugin, run the baked check
 FROM maven:3.9.9-eclipse-temurin-21 AS tools
 WORKDIR /build
 
-COPY validator.lock otel-agent.lock packages.lock.tsv ./
+COPY validator.lock otel-agent.lock packages.lock.tsv jdbc-auth.lock.tsv ./
 COPY scripts/fetch-baked-assets.sh ./scripts/fetch-baked-assets.sh
 RUN sh ./scripts/fetch-baked-assets.sh /build /baked
 
@@ -48,6 +52,15 @@ RUN set -eu; \
     mvn -B -q -f plugin/pom.xml dependency:build-classpath -Dmdep.outputFile=/tmp/plugin-cp.txt; \
     java -cp "plugin/target/loom-health-fhir-plugin.jar:$(cat /tmp/plugin-cp.txt)" ai.loom.health.fhir.LoomPlugin | tee /tmp/plugin-load.json; \
     grep -q "\"interceptors\":$EXPECTED}" /tmp/plugin-load.json
+
+# JDBC auth plugin probe, at BUILD time: the baked Entra plugin jars + the pgjdbc/jackson/reactor/slf4j
+# that the pinned HAPI main.war really ships (same digest as the runtime stage, asserted by the contract
+# test). A plugin that cannot load, or does not implement pgjdbc's AuthenticationPlugin, fails the build.
+COPY --from=hapiwar /app/main.war /hapi/main.war
+RUN set -eu; mkdir -p /hapi/lib && cd /hapi/lib && jar xf /hapi/main.war WEB-INF/lib && \
+    java -cp "/build/plugin/target/loom-health-fhir-plugin.jar:/baked/jdbc-auth/*:/hapi/lib/WEB-INF/lib/*" \
+      ai.loom.health.fhir.JdbcAuthProbe | tee /tmp/jdbc-auth-load.json; \
+    grep -q '"loadable":true' /tmp/jdbc-auth-load.json
 
 COPY check ./check
 RUN sh ./check/check-validator.sh /baked/validator/validator_cli.jar /baked/home /build/check
@@ -78,6 +91,11 @@ RUN set -eu; \
 FROM hapiproject/hapi@sha256:0ff86aac4c7bd13a1ee226444a70263bb46ed1c28ef543c30a44f865b80ca04e AS runtime
 
 COPY --from=tools /build/plugin/target/loom-health-fhir-plugin.jar /app/extra-classes/loom-health-fhir-plugin.jar
+# Entra JDBC auth plugin + its closure (jdbc-auth.lock.tsv), loaded via PropertiesLauncher loader.path.
+COPY --from=tools /baked/jdbc-auth/ /app/extra-classes/
+# Per-tenant policy; the CP renders SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:<this path>
+# (apps/loom-health-cp/src/jobs/fhir-tenant-config.ts). `optional:` drops a missing file SILENTLY.
+COPY config/application.yaml /opt/loom/fhir/config/application.yaml
 COPY --from=tools /baked/packages /opt/loom/fhir/packages
 COPY --from=tools /baked/validator /opt/loom/fhir/validator
 COPY --from=tools /baked/home /opt/loom/fhir/home
