@@ -110,7 +110,7 @@ class FakeArm implements TenantArm {
       keyIds: n.keyNames.map((k) => id('Microsoft.KeyVault/vaults', 'kv') + `/keys/${k}`),
       keyNames: n.keyNames,
     };
-    for (const [, rid] of [['p', m.pixelAccountId], ['a', m.auditAccountId], ['d', m.databaseId], ['e', m.eventHubId], ['i', m.identityId], ['q', m.capacityAlertId], ...m.keyIds.map((k) => ['k', k])] as [string, string][]) {
+    for (const [, rid] of [['p', m.pixelAccountId], ['a', m.auditAccountId], ['d', m.databaseId], ['e', m.eventHubId], ['i', m.identityId], ['f', m.fhirIdentity.id], ['q',m.capacityAlertId], ...m.keyIds.map((k) => ['k', k])] as [string, string][]) {
       const name = rid.split('/').pop() as string;
       this.resources.set(rid, this.renameOnDeploy && rid.endsWith(this.renameOnDeploy.suffix) ? this.renameOnDeploy.to : name);
     }
@@ -239,8 +239,8 @@ describe('tenant.create', () => {
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
     expect(tenants.docs.get(SLUG)?.status).toBe('active');
     const readbacks = job.receipts.filter((r) => r.step === 'readback');
-    // 5 fixed resources + database + 4 keys = 10; fewer means a resource was skipped.
-    expect(readbacks).toHaveLength(10);
+    // 6 fixed resources (incl. the fhir identity) + database + 4 keys = 11; fewer means a resource was skipped.
+    expect(readbacks).toHaveLength(11);
     // Private endpoints are not tenant.bicep outputs and create does not read them back (destroy derives them).
     for (const rid of arm.resources.keys()) if (!rid.includes('/privateEndpoints/')) expect(readbacks.some((r) => r.detail.includes(rid)), rid).toBe(true);
     expect(job.receipts.filter((r) => r.step === 'key.state').map((r) => r.detail)).toEqual(
@@ -367,6 +367,19 @@ describe('tenant.destroy', () => {
     for (const r of shred) expect(r.detail).toMatch(/live=false deletedDate=2026-10-26T00:00:00\.000Z scheduledPurgeDate=2027-01-24/);
   });
 
+  it('deletes the dedicated FHIR identity (manifest path) and reads it back as gone', async () => {
+    const { arm, run } = await created();
+    const fhirId = [...arm.resources.keys()].find((k) => k.endsWith(`/userAssignedIdentities/${tenantNames(STAMP, SLUG).fhirIdentityName}`)) as string;
+    expect(fhirId, 'fake registered the fhir identity').toBeDefined();
+    const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    // Breaks if expectedResources omits fhirIdentity: the id is then absent from deleteCalls and still in arm.resources
+    // (a live federated credential would survive a "successful" destroy).
+    expect(arm.deleteCalls).toContain(fhirId);
+    expect(arm.resources.has(fhirId)).toBe(false);
+    expect(job.receipts.some((r) => r.step === 'resource.deleted' && r.detail.startsWith(`identity.fhir id=${fhirId}`))).toBe(true);
+  });
+
   it('absent deployment record: fails naming 404, deletes and shreds nothing', async () => {
     const { arm, run } = await created();
     arm.tenantState = 'absent';
@@ -386,7 +399,8 @@ describe('tenant.destroy', () => {
     expect(job.receipts.some((r) => r.step === 'manifest.derived')).toBe(true);
     // Everything but the retained audit account: 5 resources + 2 PEs + 4 keys, the hash-named pixel account included.
     expect([...arm.resources.keys()]).toEqual([AUDIT_ID]);
-    expect(arm.deleteCalls).toHaveLength(7); // 6 would mean a PE was not derived from the tag-found account
+    expect(arm.deleteCalls).toHaveLength(8); // 7 would mean the fhir identity or a PE was not derived; 6 both
+    expect(arm.deleteCalls.some((id) => id.endsWith(`/userAssignedIdentities/${tenantNames(STAMP, SLUG).fhirIdentityName}`))).toBe(true);
     expect(arm.deleteCalls).not.toContain(AUDIT_ID);
     expect(job.receipts.find((r) => r.step === 'storage.audit.retained')?.detail).toContain(`id=${AUDIT_ID}`);
     expect(arm.deleteCalls.some((id) => id.endsWith(`/eventhubs/eh-t-${SLUG}`))).toBe(true);
@@ -421,7 +435,7 @@ describe('tenant.destroy', () => {
     const allowed = await run('tenant.destroy', 'd2', { confirmTenantId: SLUG, allowMissingStorage: true });
     expect(allowed.state, JSON.stringify(allowed.error)).toBe('succeeded');
     expect(allowed.receipts.find((r) => r.step === 'manifest.derived')?.detail).toContain('found=[] skipped=[storage.pixel,storage.audit]');
-    expect(arm.deleteCalls).toHaveLength(4); // the 4 non-storage resources; the 2 skipped accounts are never touched
+    expect(arm.deleteCalls).toHaveLength(5); // the 5 non-storage resources; the 2 skipped accounts are never touched
   });
 
   it('does NOT shred any key while a resource survives the delete', async () => {

@@ -610,7 +610,9 @@ export class RestTenantArm implements TenantArm {
       m = manifestFromOutputs((r.json?.properties as Json | undefined)?.outputs as Json | undefined);
     } catch (e) {
       // Read-only lookup (tenant.destroy): a pre-B2a record has no fhirIdentity, and destroy derives every name it
-      // needs, so it must stay possible. Only the fhirIdentity refusal is absorbed; deployTenant still fails closed.
+      // needs, so it must stay possible. This absorbs a MALFORMED fhirIdentity as well as an absent one: acceptable
+      // for destroy ONLY, because destroy never reads the identity's clientId/principalId (it deletes by derived id).
+      // Only the fhirIdentity refusals are absorbed; deployTenant (create) still fails closed on both.
       if (e instanceof JobFailure && e.code.startsWith('tenant_manifest_fhir_identity_')) return { state: 'no_outputs' };
       throw e;
     }

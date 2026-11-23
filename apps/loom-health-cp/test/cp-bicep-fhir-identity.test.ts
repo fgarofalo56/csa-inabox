@@ -65,10 +65,13 @@ describe('tenant.bicep: dedicated FHIR identity (decision 9)', () => {
     expect(t.parameters.fhirNamespace?.defaultValue).toBe('loom-health');
   });
 
-  it('the FHIR identity has NO role assignment (the CP RBAC-Admin grant is ABAC-limited to 4 role ids)', () => {
-    // Breaks if any roleAssignment names the fhir identity in its principalId, name or dependsOn: that would be a 5th
-    // grant the control plane's conditioned RBAC Administrator would refuse, failing tenant.create.
-    const fhirName = String(fhir?.name);
+  it('the FHIR identity has NO role assignment (least privilege, decision 9)', () => {
+    // Guards least privilege: the FHIR identity holds only its federated credential. Breaks if any roleAssignment
+    // references the fhir identity (principalId, name or dependsOn). It does NOT claim tenant.create would fail:
+    // reusing one of the 4 ABAC-allowed role ids would still pass the CP condition, so this test is the guard.
+    // The name is stripped of its ARM brackets because inside a role assignment it appears nested in
+    // reference(resourceId(..., format(...))), unbracketed; a bracketed needle would never match.
+    const fhirName = String(fhir?.name).replace(/^\[|\]$/g, '');
     const touching = ofType(t, ROLE).filter((r) => JSON.stringify(r).includes(fhirName));
     expect(touching.map((r) => String(r.name))).toEqual([]);
     // Positive pair: the tenant identity still has its role assignments, so the filter above is looking at real ones.

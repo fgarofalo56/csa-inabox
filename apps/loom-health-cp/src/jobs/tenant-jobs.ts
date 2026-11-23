@@ -112,6 +112,8 @@ function expectedResources(m: TenantManifest, stampName: string, slug: string): 
   out.push(
     ['eventhub', m.eventHubId, n.eventHubName],
     ['identity', m.identityId, n.identityName],
+    // The dedicated FHIR identity holds a live federated credential: it must not outlive the tenant.
+    ['identity.fhir', m.fhirIdentity.id, n.fhirIdentityName],
     ['alert.capacity', m.capacityAlertId, n.alertName],
   );
   if (m.databaseId) out.push(['database', m.databaseId, n.databaseName]);
@@ -322,7 +324,7 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         dataResources.push([kind, `${scope}/providers/Microsoft.Network/privateEndpoints/${privateEndpointName(lastSegment(accountId))}`, '']);
       }
       // Order: a PE before its account; consumers of the identity and keys before the identity itself.
-      const order = ['database', 'eventhub', 'pe.pixel', 'pe.audit', 'storage.pixel', 'alert.capacity', 'identity'];
+      const order = ['database', 'eventhub', 'pe.pixel', 'pe.audit', 'storage.pixel', 'alert.capacity', 'identity.fhir', 'identity'];
       dataResources.sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
       for (const [kind, id] of dataResources) {
         try {
