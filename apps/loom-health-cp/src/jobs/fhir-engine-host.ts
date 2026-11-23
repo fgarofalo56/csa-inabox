@@ -164,7 +164,10 @@ function assertPgNames(principal: string, db?: string): void {
 /**
  * Create-if-missing, then CONNECT on the tenant database only. Isolation: PUBLIC's default CONNECT is revoked on every
  * `lhds_*` database (the principal inherits PUBLIC, so a role-level grant alone cannot confine it) and the stamp admin
- * group keeps its own access. `pgaadauth_create_principal` errors when the role exists, so it is guarded.
+ * group keeps its own access. The create is `pg_catalog.pgaadauth_create_principal_with_oid`, bound to the exact object id (no by-name directory lookup, which can be
+ * ambiguous and needs Graph egress); it errors when the role exists, so it is guarded.
+ * Role bindings are recorded as `SECURITY LABEL FOR "pgaadauth" ON ROLE ... IS 'aadauth,oid=<objectId>,type=<objectType>[,admin]'`
+ * (https://learn.microsoft.com/azure/postgresql/security/security-manage-entra-users).
  */
 export function ensurePrincipalSteps(principal: string, db: string, principalId: string): PgStep[] {
   assertPgNames(principal, db);
@@ -177,7 +180,7 @@ export function ensurePrincipalSteps(principal: string, db: string, principalId:
         // same name and a new object id). Replace it: DROP ROLE refuses while the role owns or is granted anything, so a live
         // role that was misread as stale fails closed with psql's own message instead of losing data.
         `DO $do$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}') AND NOT EXISTS (SELECT 1 FROM pg_seclabels WHERE provider = 'pgaadauth' AND objtype = 'role' AND objname = '${principal}' AND label LIKE '%oid=${principalId.toLowerCase()}%') THEN DROP ROLE "${principal}"; END IF; END $do$;`,
-        `DO $do$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}') THEN PERFORM pgaadauth_create_principal('${principal}', false, false); END IF; END $do$;`,
+        `DO $do$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}') THEN PERFORM pg_catalog.pgaadauth_create_principal_with_oid('${principal}', '${principalId.toLowerCase()}', 'service', false, false); END IF; END $do$;`,
         `DO $do$ DECLARE d text; BEGIN FOR d IN SELECT datname FROM pg_database WHERE datname LIKE 'lhds\\_%' LOOP EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', d); EXECUTE format('GRANT CONNECT ON DATABASE %I TO azure_pg_admin', d); END LOOP; END $do$;`,
         `GRANT CONNECT ON DATABASE "${db}" TO "${principal}";`,
       ].join('\n'),

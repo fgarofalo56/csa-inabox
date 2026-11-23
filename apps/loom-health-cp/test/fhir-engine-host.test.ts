@@ -20,7 +20,7 @@ import {
   type EngineTarget,
 } from '../src/jobs/fhir-engine-host.js';
 import { loadFhirEngineConfig } from '../src/jobs/fhir-engine-config.js';
-import { JDBC_AUTH_PLUGIN, fhirIdentityOf, renderEngineConfig } from '../src/jobs/fhir-tenant-config.js';
+import { JDBC_AUTH_PLUGIN, renderEngineConfig } from '../src/jobs/fhir-tenant-config.js';
 import { fhirTenantHandlers } from '../src/jobs/fhir-tenant-jobs.js';
 import { JobRunner } from '../src/jobs/runner.js';
 import type { TenantArm } from '../src/jobs/tenant-arm.js';
@@ -185,11 +185,15 @@ describe('PostgreSQL principal Job', () => {
     const [admin, tenantDb] = ensurePrincipalSteps(IDENT.name, DB, PID);
     const sql = admin?.sql ?? '';
     const guard = sql.indexOf(`IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${IDENT.name}')`);
-    const create = sql.indexOf(`pgaadauth_create_principal('${IDENT.name}', false, false)`);
+    const create = sql.indexOf('pgaadauth_create_principal_with_oid(');
     // The create call must come AFTER the guard: a bare create fails on the second run (breaks if the guard is dropped).
     expect(guard).toBeGreaterThanOrEqual(0);
     expect(create).toBeGreaterThan(guard);
     expect(sql).toContain(`GRANT CONNECT ON DATABASE "${DB}" TO "${IDENT.name}"`);
+    // Create is bound to the exact object id and the 'service' type (not a by-name directory lookup): a name-based
+    // pgaadauth_create_principal, another id, or 'user' breaks this literal.
+    expect(sql).toContain(`pg_catalog.pgaadauth_create_principal_with_oid('${IDENT.name}', '${PID}', 'service', false, false)`);
+    expect(sql).not.toMatch(/pgaadauth_create_principal\(/);
     expect(sql).toContain('REVOKE CONNECT ON DATABASE %I FROM PUBLIC');
     expect(admin?.db).toBe('postgres');
     expect(tenantDb).toEqual({ db: DB, sql: `GRANT USAGE, CREATE ON SCHEMA public TO "${IDENT.name}";` });
@@ -239,13 +243,6 @@ describe('small parsers', () => {
     const body = JSON.stringify({ resourceType: 'Parameters', parameter: [{ name: 'partition', part: [{ name: 'id', valueInteger: 3 }, { name: 'name', valueCode: 'site-a' }] }, { name: 'x' }] });
     expect(parsePartitions(body)).toEqual([{ id: 3, name: 'site-a' }]);
     expect(parsePartitions('not json')).toEqual([]);
-  });
-
-  it('fhirIdentityOf accepts a full identity and rejects a missing, non-GUID or injection-shaped one', () => {
-    expect(fhirIdentityOf({ fhirIdentity: { id: 'i', ...IDENT } })).toEqual(IDENT);
-    expect(fhirIdentityOf({})).toBeUndefined();
-    expect(fhirIdentityOf({ fhirIdentity: { name: IDENT.name, clientId: 'nope', principalId: PID } })).toBeUndefined();
-    expect(fhirIdentityOf({ fhirIdentity: { name: "a'b", clientId: IDENT.clientId, principalId: PID } })).toBeUndefined();
   });
 });
 

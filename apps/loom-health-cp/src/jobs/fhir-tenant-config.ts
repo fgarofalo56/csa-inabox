@@ -14,6 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { FhirIdentity as TenantFhirIdentity } from './tenant-arm.js';
 import { JobFailure } from './types.js';
 
 /** Interceptor registration ORDER is the security order: authorize first, then audit what was decided. */
@@ -47,29 +48,14 @@ export function fhirNames(slug: string): FhirNames {
 }
 
 /**
- * The tenant's dedicated FHIR identity (`fhirIdentity` output of tenant.bicep, #5422 decision 9). `name` is both the
- * UAMI name and the PostgreSQL Entra principal name; `clientId` goes on the ServiceAccount annotation.
+ * The tenant's dedicated FHIR identity: the `fhirIdentity` of the tenant manifest (tenant-arm.ts, B2a), which parses it fail-closed
+ * and validates the GUIDs. `name` is both the UAMI name and the PostgreSQL Entra principal name; `clientId` goes on the
+ * ServiceAccount annotation; `principalId` is the Entra object id the PG principal is bound to.
  */
-export interface FhirIdentity {
-  name: string;
-  clientId: string;
-  /** Entra object id of the UAMI: what the PG principal is bound to (a re-created identity has a new one). */
-  principalId: string;
-}
+export type FhirIdentity = Pick<TenantFhirIdentity, 'name' | 'clientId' | 'principalId'>;
 
+/** Names are interpolated into SQL and shell by the host, so the name shape is re-checked where it is rendered. */
 export const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Read `fhirIdentity` off a tenant manifest. Lane B2a adds the field to TenantManifest (tenant-arm.ts); this accessor
- * takes `unknown` so it compiles and behaves the same before and after that lands. undefined = absent or malformed.
- */
-export function fhirIdentityOf(manifest: unknown): FhirIdentity | undefined {
-  const v = (manifest as { fhirIdentity?: { name?: unknown; clientId?: unknown; principalId?: unknown } } | null | undefined)?.fhirIdentity;
-  if (!v || typeof v.name !== 'string' || typeof v.clientId !== 'string' || typeof v.principalId !== 'string') return undefined;
-  if (!IDENTITY_NAME.test(v.name) || !GUID.test(v.clientId) || !GUID.test(v.principalId)) return undefined;
-  return { name: v.name, clientId: v.clientId, principalId: v.principalId };
-}
 
 /** The datasource plugin baked into the engine image by lane B2b. */
 export const JDBC_AUTH_PLUGIN = 'com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin';
@@ -134,8 +120,8 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   if (!/^https?:$/.test(pdp.protocol) || pdp.username || pdp.password || pdp.search || pdp.hash) {
     throw new JobFailure('pdp_url_invalid', 'the PDP url must be http(s) without credentials, query or fragment');
   }
-  if (!IDENTITY_NAME.test(i.identity.name) || !GUID.test(i.identity.clientId) || !GUID.test(i.identity.principalId)) {
-    throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name, client id or principal id; the engine cannot be bound to it, so no engine is configured');
+  if (!IDENTITY_NAME.test(i.identity.name)) {
+    throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name; the engine cannot be bound to it, so no engine is configured');
   }
   const overrides = OverridesSchema.parse(i.overrides ?? {});
   const maxPage = overrides.maxPageSize ?? BASE_MAX_PAGE_SIZE;

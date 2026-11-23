@@ -18,7 +18,7 @@
 import { z } from 'zod';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
 import type { Collection } from '../store/types.js';
-import { renderEngineConfig, fhirIdentityOf, OverridesSchema, type EngineOverrides, type FhirIdentity, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import { renderEngineConfig, OverridesSchema, type EngineOverrides, type FhirIdentity, type RenderedEngineConfig } from './fhir-tenant-config.js';
 import { classifyArm, stampResourceGroup, tenantNames, type TenantArm } from './tenant-arm.js';
 import { JobFailure, type JobContext, type JobHandler } from './types.js';
 
@@ -121,16 +121,11 @@ async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolv
   if (tm.state !== 'found') {
     throw new JobFailure(
       'tenant_manifest_missing',
-      `the tenant deployment lhds-tenant-${tenant.id} ${tm.state === 'absent' ? 'was not found' : 'returned no outputs'} in ${rg}; it is the source of the tenant FHIR identity. Run tenant.create for ${tenant.id} first. No role or engine config was created.`,
+      `the tenant deployment lhds-tenant-${tenant.id} ${tm.state === 'absent' ? 'was not found' : 'returned no usable outputs (this includes a missing or malformed fhirIdentity, e.g. a tenant deployed before the dedicated FHIR identity)'} in ${rg}; it is the source of the tenant FHIR identity. Run tenant.create for ${tenant.id} first. No role or engine config was created.`,
     );
   }
-  const identity = fhirIdentityOf(tm.value);
-  if (!identity) {
-    throw new JobFailure(
-      'fhir_identity_missing',
-      `the tenant manifest of ${tenant.id} has no valid fhirIdentity output (name and client id). Established: the field is absent or malformed. Not established: why; the tenant may predate the per-tenant FHIR identity (#5422), in which case re-running tenant.create redeploys tenant.bicep. No role or engine config was created.`,
-    );
-  }
+  const { name, clientId, principalId } = tm.value.fhirIdentity;
+  const identity: FhirIdentity = { name, clientId, principalId };
   return { tenant, stamp, rg, postgresFqdn, postgresServerId, identity };
 }
 
@@ -303,10 +298,9 @@ export function fhirTenantTeardownHandler(deps: FhirTenantJobDeps): JobHandler {
         try {
           const tm = await deps.arm.getTenantManifest(stampResourceGroup(stamp.id, stamp.region), tenant.id);
           if (tm.state === 'found') {
-            identity = fhirIdentityOf(tm.value);
-            skipCause = 'the tenant manifest has no valid fhirIdentity output (absent or malformed)';
+            identity = tm.value.fhirIdentity;
           } else {
-            skipCause = tm.state === 'absent' ? `the tenant deployment lhds-tenant-${tenant.id} was not found` : `the tenant deployment lhds-tenant-${tenant.id} returned no outputs`;
+            skipCause = tm.state === 'absent' ? `the tenant deployment lhds-tenant-${tenant.id} was not found` : `the tenant deployment lhds-tenant-${tenant.id} returned no usable outputs (a missing or malformed fhirIdentity reads this way)`;
           }
         } catch (e) {
           throw classifyArm(e);

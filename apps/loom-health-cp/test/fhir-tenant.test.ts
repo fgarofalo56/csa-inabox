@@ -55,8 +55,7 @@ describe('renderEngineConfig', () => {
   });
 
   it('refuses a malformed identity and puts the identity in the revision', () => {
-    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, name: "bad name!" } })).toThrow(/invalid name, client id or principal id/);
-    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, clientId: "not-a-guid" } })).toThrow(/invalid name, client id or principal id/);
+    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, name: "bad name!" } })).toThrow(/invalid name/);
     // A re-created identity (new client id) must re-apply: equal revisions would leave the old annotation in place.
     expect(renderEngineConfig({ ...baseInput, identity: { ...IDENT, clientId: '99999999-2222-3333-4444-555555555555' } }).revision).not.toBe(renderEngineConfig(baseInput).revision);
   });
@@ -223,9 +222,9 @@ class FakeArm implements Partial<TenantArm> {
   stampManifest: Record<string, unknown> = { postgresFqdn: PG_FQDN, postgresServerId: PG_ID };
   databases = new Map<string, string>([[`${PG_ID}/databases/${DB}`, DB]]);
   readError: Error | undefined;
-  tenantManifest: Record<string, unknown> | 'absent' = { fhirIdentity: { id: 'x', ...IDENT } };
+  tenantManifest: Record<string, unknown> | 'absent' | 'no_outputs' = { fhirIdentity: { id: 'x', ...IDENT } };
   async getTenantManifest() {
-    return this.tenantManifest === 'absent' ? { state: 'absent' as const } : { state: 'found' as const, value: this.tenantManifest };
+    return typeof this.tenantManifest === 'string' ? { state: this.tenantManifest } : { state: 'found' as const, value: this.tenantManifest };
   }
   async getStampManifest() {
     return this.stampState === 'found' ? { state: 'found' as const, value: this.stampManifest } : { state: this.stampState };
@@ -421,12 +420,12 @@ describe('fhir-tenant.create', () => {
 });
 
 describe('fhir-tenant identity (from the tenant manifest)', () => {
-  it('a tenant manifest with no fhirIdentity fails fhir_identity_missing and creates nothing', async () => {
+  it('a tenant manifest that reads as no usable outputs (B2a: missing or malformed fhirIdentity) fails tenant_manifest_missing and creates nothing', async () => {
     const { arm, host, run } = setup();
-    arm.tenantManifest = { identityId: 'only-the-old-one' };
+    arm.tenantManifest = 'no_outputs';
     const job = await run('fhir-tenant.create', 'k1');
-    expect(job.error?.code).toBe('fhir_identity_missing');
-    expect(job.error?.message).toContain('Not established');
+    expect(job.error?.code).toBe('tenant_manifest_missing');
+    expect(job.error?.message).toContain('fhirIdentity');
     expect([host.ensureRoleCalls, host.applyCalls.length]).toEqual([0, 0]);
   });
 
@@ -436,13 +435,13 @@ describe('fhir-tenant identity (from the tenant manifest)', () => {
     expect((await run('fhir-tenant.create', 'k1')).error?.code).toBe('tenant_manifest_missing');
   });
 
-  it('teardown with no fhirIdentity skips the principal and says so (does not claim removal)', async () => {
+  it('teardown with unusable tenant outputs skips the principal and says so (does not claim removal)', async () => {
     const { arm, host, run } = setup('destroying');
-    arm.tenantManifest = {};
+    arm.tenantManifest = 'no_outputs';
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
     expect(job.receipts.map((r) => r.step)).toEqual(['engine.removed', 'role.skipped']);
-    expect(job.receipts[1]?.detail).toContain('no valid fhirIdentity output');
+    expect(job.receipts[1]?.detail).toContain('no usable outputs');
     expect(host.removeRoleCalls).toBe(0);
   });
 
