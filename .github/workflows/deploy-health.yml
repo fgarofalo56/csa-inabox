@@ -1053,7 +1053,7 @@ jobs:
           RC=$?
           case "$RC" in
             0) ;;
-            3) echo "::error::MISSING: the registry answered and loom-health-fhir:$FHIR_TAG is not in it (the Trivy gate untags refused images). The first fhir-tenant.* job would hit ImagePullBackOff. Build it: full-app-deploy-commercial.yml (Commercial) or gov-provision-dataplane-images.yml with apply=true (GCC-High)."; exit 1 ;;
+            3) echo "::error::MISSING: the registry answered and loom-health-fhir:$FHIR_TAG is not in it (the Trivy gate untags refused images). The first fhir-tenant.* job would hit ImagePullBackOff. Build it: build-fiab-images-acr-tasks.yml with boundary set to this estate (the only producer of loom-health-fhir in both clouds)."; exit 1 ;;
             4) echo "::error::UNPROVEN: the registry could not be read, so whether loom-health-fhir:$FHIR_TAG exists is unknown. This is not a claim that it is missing; re-run."; exit 1 ;;
             5) echo "::error::loom-health-fhir:$FHIR_TAG was verified present but re-locking the registry firewall is unproven; check the registry network rules before continuing."; exit 1 ;;
             *) echo "::error::assert-acr-image-tags.sh exited $RC (usage or unclassified)."; exit 1 ;;
