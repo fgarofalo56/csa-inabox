@@ -26,7 +26,7 @@ import { JDBC_AUTH_PLUGIN, renderEngineConfig } from '../src/jobs/fhir-tenant-co
 import { fhirTenantHandlers } from '../src/jobs/fhir-tenant-jobs.js';
 import { JobRunner } from '../src/jobs/runner.js';
 import type { TenantArm } from '../src/jobs/tenant-arm.js';
-import type { JobDoc } from '../src/jobs/types.js';
+import { JobFailure, type JobDoc } from '../src/jobs/types.js';
 import type { StampDoc, TenantDoc } from '../src/registry/types.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, memoryStores, testKeyResolver } from './helpers.js';
 
@@ -81,10 +81,31 @@ describe('RestAksRunCommand', () => {
     expect(out).toEqual({ exitCode: 0, logs: 'deployment.apps/x configured' });
     const base = `${ARM}/subscriptions/${SUB}/resourceGroups/rg-x/providers/Microsoft.ContainerService/managedClusters/aks-x`;
     expect(calls[0]).toMatchObject({ method: 'POST', url: `${base}/runCommand?api-version=${RUN_COMMAND_API}`, auth: `Bearer tok:${ARM}/.default` });
-    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ command: 'kubectl get ns' });
+    // Breaks if clusterToken is dropped (live: HTTP 400 MissingAADClusterToken) or issued for the wrong audience
+    // (e.g. the ARM scope instead of the AKS server app): the literal GUID below is Learn's, not the source constant.
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ command: 'kubectl get ns', clusterToken: 'tok:6dae42f8-4368-4678-94ff-3960e28e3630/.default' });
     // The poll goes to the id the POST returned; a poll of any other id breaks this.
     expect(calls[1]).toMatchObject({ method: 'GET', url: `${base}/commandResults/cmd-0123456789abcdef?api-version=${RUN_COMMAND_API}` });
     expect(calls).toHaveLength(3);
+  });
+
+  it('no cluster token means no request: a retryable failure that names the AKS server app, and zero calls', async () => {
+    // Breaks if a token failure is swallowed and the POST goes out without clusterToken (calls would be 1), or if the
+    // failure is labelled as a cause nobody measured (code would not be 'transient').
+    const calls: unknown[] = [];
+    const rc = new RestAksRunCommand({
+      armEndpoint: ARM,
+      subscriptionId: SUB,
+      token: async (scope) => { if (scope.startsWith('6dae42f8')) throw new Error('no token'); return 'arm'; },
+      fetchFn: (async () => { calls.push(1); return res(500, undefined); }) as unknown as typeof fetch,
+      sleep: async () => {},
+      log: () => {},
+    });
+    const err = await rc.run(T, 'kubectl get ns').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JobFailure);
+    expect((err as JobFailure).code).toBe('transient');
+    expect((err as JobFailure).message).toContain('6dae42f8-4368-4678-94ff-3960e28e3630');
+    expect(calls).toHaveLength(0);
   });
 
   it('a non-zero kubectl exit is RETURNED, not retried (one POST only; 2 would mean it re-ran a command that answered)', async () => {
