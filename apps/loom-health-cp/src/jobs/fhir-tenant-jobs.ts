@@ -259,6 +259,7 @@ function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides
     pgAdminName: r.pgAdminName,
     tenantId: r.tenant.id,
     stampId: r.stamp.id,
+    stampBaseUrl: r.stamp.baseUrl,
     postgresFqdn: r.postgresFqdn,
     identity: r.identity,
     maxRequestsPerMinute: r.tenant.quotas.maxRequestsPerMinute,

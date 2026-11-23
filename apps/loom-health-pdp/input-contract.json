@@ -19,7 +19,7 @@
           "description": "fhir: read|vread|history|search|create|update|patch|delete|operation. dicom: wado|qido|stow|delete. Keys of data.lhds.interactions."
         },
         "tenant": { "type": "string", "description": "Tenant slug resolved from the URL or host by the interceptor, never from the body. Compared to the tenant claim exactly (no case-folding or trimming)." },
-        "base": { "type": "string", "description": "Base URL of the request as received (the audience the token must name). Must be one of the tenant's bases in data.lhds.stamp." },
+        "base": { "type": "string", "description": "The tenant public FHIR base (the engine configured server address, hapi.fhir.server_address = <stampBaseUrl>/<tenant>/fhir): no facility-partition segment, no trailing slash. NOT the URL as received. It is the audience the token must name. Must be one of the tenant's bases in data.lhds.stamp." },
         "resource_type": { "type": "string", "description": "fhir only, required: FHIR resource type of the target." },
         "op": { "type": "string", "description": "fhir interaction=operation only: e.g. $export. Gated by lhds_roles via the role-scope map." },
         "patient_compartment": {

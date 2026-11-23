@@ -73,7 +73,7 @@ class InterceptorTest {
     assertEquals("acme", in.get("tenant").asText(), "tenant sent to the PDP must be the engine's tenant");
     assertEquals("read", in.get("interaction").asText());
     assertEquals("Patient", in.get("resource_type").asText());
-    assertEquals(engine.base, in.get("base").asText(), "base is the URL as received");
+    assertEquals(engine.base, in.get("base").asText(), "base is the server public base: no partition segment, no trailing slash (decision 13)");
     assertEquals(1, engine.handlerCalls.get(), "the engine ran exactly once");
   }
 

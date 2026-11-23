@@ -44,7 +44,7 @@ const PG_IMAGE = `acrx.azurecr.io/postgres@sha256:${'a'.repeat(64)}`;
 const TARGET: EngineTarget = { resourceGroup: 'rg-csa-loom-health-dev01-eastus2', cluster: 'aks-lhds-dev01', postgresFqdn: PG_FQDN, pgAdminName: 'id-lhds-dev01-pgadmin' };
 
 const cfgFor = (over: Partial<Parameters<typeof renderEngineConfig>[0]> = {}) =>
-  renderEngineConfig({ tenantId: SLUG, stampId: 'dev01', postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: TARGET.pgAdminName, ...over });
+  renderEngineConfig({ tenantId: SLUG, stampId: 'dev01', stampBaseUrl: 'https://x.example', postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: TARGET.pgAdminName, ...over });
 
 // ────────────────────────────────────────────────────────────── runCommand client
 

@@ -38,7 +38,8 @@ const ENGINE_DIR = new URL('../../loom-health-fhir/', import.meta.url);
 const read = (rel: string) => readFileSync(new URL(rel, ENGINE_DIR), 'utf8');
 
 const PG_ADMIN = `id-lhds-${STAMP}-pgadmin`;
-const baseInput = { tenantId: SLUG, stampId: STAMP, postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: PG_ADMIN };
+const STAMP_BASE = 'https://x.example';
+const baseInput = { tenantId: SLUG, stampId: STAMP, stampBaseUrl: STAMP_BASE, postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: PG_ADMIN };
 
 describe('renderEngineConfig', () => {
   it('points the datasource at the tenant OWN database as its FHIR identity, through the JDBC auth plugin, with no credential', () => {

@@ -18,8 +18,16 @@ export interface PdpStampInputs {
 /** Path-prefix service bases (ADR-006): <stampBaseUrl>/<tenant>/fhir and /dicomweb. */
 export const tenantBases = (stampBaseUrl: string, tenantSlug: string): string[] => {
   const root = stampBaseUrl.replace(/\/+$/, '');
-  return [`${root}/${tenantSlug}/fhir`, `${root}/${tenantSlug}/dicomweb`];
+  return [tenantFhirBase(stampBaseUrl, tenantSlug), `${root}/${tenantSlug}/dicomweb`];
 };
+
+/**
+ * The tenant's public FHIR base: the ONE derivation of the string a token `aud` must equal, a bundle `bases` entry holds, and the FHIR
+ * engine pins as its server address (#5422 decision 13). Everything that must agree byte-for-byte calls this; none re-derives it.
+ */
+export function tenantFhirBase(stampBaseUrl: string, tenantSlug: string): string {
+  return `${stampBaseUrl.replace(/\/+$/, '')}/${tenantSlug}/fhir`;
+}
 
 export function buildPdpStampInputs(
   stampId: string,

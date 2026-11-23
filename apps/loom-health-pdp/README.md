@@ -21,7 +21,7 @@ POST /v1/data/lhds/authz/decision
 
 Input shape: `input-contract.json`. The PDP verifies the token itself (ES384
 against `data.lhds.config.jwks`); the interceptor passes the RAW token and the
-request facts (`tenant` from the route, `base` as received, `interaction`,
+request facts (`tenant` from the route, `base` the tenant public FHIR base (the engine server address, no facility partition), `interaction`,
 `resource_type`, `op`, engine-resolved `patient_compartment`, `categories`).
 
 Reasons, in evaluation order: `invalid-input`, `token-invalid` (signature, alg

@@ -279,7 +279,7 @@ half-implemented delegation from being honoured.
 
 **Request-side inputs the PDP needs.** The interceptor contract is owned by
 W1-5 and listed here only so the claims above are sufficient: `tenant` (from
-the URL), `base` (the base URL as received), `interaction`
+the URL), `base` (the tenant public FHIR base, the engine configured server address without the facility partition; not the URL as received, #5422 decision 13), `interaction`
 (`read|vread|search|create|update|patch|delete|history|operation`), `type`,
 `id`, `op`, search params, and for patient-compartment checks the resource's
 patient-compartment owners as resolved by the engine (ADR-011:12-15).
