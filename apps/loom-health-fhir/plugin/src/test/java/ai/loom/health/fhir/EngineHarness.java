@@ -72,6 +72,12 @@ final class EngineHarness implements AutoCloseable {
   }
 
   EngineHarness(PdpClient pdp, boolean registerPlugin, PluginConfig cfg, String contextPath) throws Exception {
+    this(pdp, registerPlugin, cfg, contextPath, rs -> { });
+  }
+
+  /** {@code serverSetup} runs inside initialize(), e.g. to pin a server address or turn on URL-base partitioning. */
+  EngineHarness(PdpClient pdp, boolean registerPlugin, PluginConfig cfg, String contextPath,
+      java.util.function.Consumer<RestfulServer> serverSetup) throws Exception {
     store.put("o1", obs("o1", "p1", "vital-signs"));
     store.put("o2", obs("o2", "p2", "vital-signs"));
     store.put("o3", obs("o3", "p1", "laboratory"));
@@ -93,6 +99,7 @@ final class EngineHarness implements AutoCloseable {
         setPagingProvider(new ca.uhn.fhir.rest.server.FifoMemoryPagingProvider(100));
         svc = new InterceptorService();
         setInterceptorService(svc);
+        serverSetup.accept(this);
         if (registerPlugin) {
           LoomPlugin.register(svc, pdp, cfg, sink);
         }

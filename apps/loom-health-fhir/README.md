@@ -30,7 +30,7 @@ Two halves, both measured against the pinned image (8.12.0):
 - **Per tenant**: rendered by `apps/loom-health-cp/src/jobs/fhir-tenant-config.ts` as environment
   variables: the datasource (the tenant's own database and its own role, `sslmode=require`), pool size
   from the request quota, page/binary caps (these may only lower the file's ceiling), the interceptor
-  list (PDP before audit) and the plugin env (`LOOM_HEALTH_TENANT`, `LOOM_HEALTH_PDP_URL`). The database
+  list (PDP before audit), `HAPI_FHIR_SERVER_ADDRESS` (the tenant public FHIR base `<stampBaseUrl>/<tenant>/fhir`; the plugin sends it as the PDP `base`, so it must equal the token `aud` and the bundle base, #5422 decision 13; an engine without it sends an empty base and every token is denied) and the plugin env (`LOOM_HEALTH_TENANT`, `LOOM_HEALTH_PDP_URL`). The database
   password is a Key Vault secret NAME (`t-<slug>-fhir-db`); the value is never rendered.
 
 ### Datasource authentication: Entra workload identity, no database password (W2-2b B2b, #5422 decision 3)

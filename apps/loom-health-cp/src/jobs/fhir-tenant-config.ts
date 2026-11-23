@@ -14,6 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { tenantFhirBase } from '../pdp/pdp-stamp-data.js';
 import type { FhirIdentity as TenantFhirIdentity } from './tenant-arm.js';
 import { JobFailure } from './types.js';
 
@@ -129,6 +130,11 @@ export interface RenderInput {
   /** The tenant's FHIR identity: the datasource user and the ServiceAccount's workload-identity client id. */
   identity: FhirIdentity;
   maxRequestsPerMinute: number;
+  /**
+   * The stamp's public base URL (the registry's `stamp.baseUrl`, the value the routing map and the PDP bundle's `bases` are built from).
+   * The engine pins `<stampBaseUrl>/<tenant>/fhir` as its server address so the base it sends the PDP equals the token `aud` (decision 13).
+   */
+  stampBaseUrl: string;
   /** In-cluster PDP decision endpoint base (W1-5). Required: the plugin answers 503 to every request without it. */
   pdpUrl: string;
   overrides?: EngineOverrides;
@@ -187,6 +193,15 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   if (!/^https?:$/.test(pdp.protocol) || pdp.username || pdp.password || pdp.search || pdp.hash) {
     throw new JobFailure('pdp_url_invalid', 'the PDP url must be http(s) without credentials, query or fragment');
   }
+  let stampBase: URL;
+  try {
+    stampBase = new URL(i.stampBaseUrl);
+  } catch {
+    throw new JobFailure('stamp_base_url_invalid', `the stamp ${i.stampId} has no usable base URL (got ${i.stampBaseUrl ? 'a value that is not a URL' : 'nothing'}); the engine cannot be told its public FHIR base, so every token would be refused and no engine is configured. Set the stamp baseUrl (PATCH /api/health/stamps/${i.stampId}) and re-run`);
+  }
+  if (stampBase.protocol !== 'https:' || stampBase.username || stampBase.hash || stampBase.search || stampBase.href.includes('@')) {
+    throw new JobFailure('stamp_base_url_invalid', `the stamp ${i.stampId} base URL must be https without credentials, query or fragment; no engine is configured`);
+  }
   if (!IDENTITY_NAME.test(i.identity.name)) {
     throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name; the engine cannot be bound to it, so no engine is configured');
   }
@@ -218,6 +233,9 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
     HAPI_FHIR_DEFAULT_PAGE_SIZE: String(defPage),
     HAPI_FHIR_MAX_BINARY_SIZE: String(overrides.maxBinaryBytes ?? MAX_BINARY_BYTES_CEILING),
     HAPI_FHIR_CUSTOM_INTERCEPTOR_CLASSES: `${PDP_INTERCEPTOR},${AUDIT_INTERCEPTOR}`,
+    // Decision 13: the engine's PUBLIC base, byte-for-byte the bundle base and the token aud. The HAPI jpaserver-starter turns
+    // hapi.fhir.server_address into a HardcodedServerAddressStrategy; the plugin sends that base (minus the facility partition) as `base`.
+    HAPI_FHIR_SERVER_ADDRESS: tenantFhirBase(i.stampBaseUrl, i.tenantId),
     LOOM_HEALTH_TENANT: i.tenantId,
     LOOM_HEALTH_PDP_URL: pdp.toString().replace(/\/$/, ''),
     LOOM_HEALTH_PDP_TIMEOUT_MS: '1500',
