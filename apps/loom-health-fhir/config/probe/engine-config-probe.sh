@@ -16,6 +16,8 @@
 #   C7 history is bounded           statements for a 40-version history read - for a 5-version one <= BOUND
 #   C8 multi-delete / expunge off   DELETE /Patient?... is rejected; $expunge is rejected
 #   C9 env caps bind over the file  restart with max 5 / default 3 (file: 200 / 20) -> 5 / 3 entries
+#   C10 plugin partition reconcile  (B2e) loads the plugin jar; LOOM_HEALTH_PARTITIONS created in-process, a role gets SELECT on
+#                                   hfj_partition ONLY (hfj_resource denied), a same-id-other-name entry stops the engine
 # Controls (each makes a check able to fail): C3b, C4b, C5b, C6-control (50 unconditional creates -> 50),
 # C7-fixture (history really has 40 versions), C7-control (counter sees 35 extra reads), C9-control (file default 20).
 # KNOWN BLIND ARM: conditional_create_duplicate_identifiers_enabled=true does NOT turn C6 red (measured in a
@@ -161,6 +163,42 @@ M=$(curl -s "$A/Patient?_count=50" | grep -c '"fullUrl"' || true)
 [ "$Dbefore" = 20 ] && pass "C9-control file default page = 20 before the env cap" || fail "C9-control default page was $Dbefore, expected 20: the file default is not what C9a is compared against"
 [ "$D" = 3 ] && pass "C9a default page = 3 (HAPI_FHIR_DEFAULT_PAGE_SIZE bound)" || fail "C9a default page returned $D entries, expected 3 (env cap not applied)"
 [ "$M" = 5 ] && pass "C9b _count=50 capped to 5 (HAPI_FHIR_MAX_PAGE_SIZE bound)" || fail "C9b _count=50 returned $M entries, expected 5 (env cap not applied)"
+
+# C10 (W2-2b B2e, #5422 decision 11): the plugin reconciles the desired partitions IN-PROCESS at startup and grants SELECT on
+# hfj_partition only. Needs the plugin jar (built here with the pinned maven image unless LHDS_PLUGIN_JAR points at one).
+# Partitions site-a (1) and site-b (2) already exist from the checks above, so "existing untouched" is real.
+PLUGIN_JAR="${LHDS_PLUGIN_JAR:-}"
+if [ -z "$PLUGIN_JAR" ]; then
+  PLUGIN_DIR="$(cd "$HERE/../../plugin" && pwd)"
+  docker run --rm -v "$PLUGIN_DIR:/p" -v lhds-m2:/root/.m2 -w /p maven:3-eclipse-temurin-21 mvn -B -q package -DskipTests >/dev/null 2>&1 || { fail "C10 could not build the plugin jar"; echo "RESULT failures=$FAILS"; exit 1; }
+  PLUGIN_JAR="$PLUGIN_DIR/target/loom-health-fhir-plugin.jar"
+fi
+ROLE=lhds_pgadmin
+psql_as() { docker exec -e PGPASSWORD=probe-admin "$PG" psql -X -At -h localhost -U "$ROLE" -d lhds_probe -c "$1" 2>&1 || true; }
+docker exec "$PG" psql -X -U postgres -d lhds_probe -c "CREATE ROLE $ROLE LOGIN PASSWORD 'probe-admin'" >/dev/null
+# Control: before the plugin has run, the role can read nothing (so a later success is the grant, not default privileges).
+case "$(psql_as 'SELECT count(*) FROM hfj_partition')" in *"permission denied"*) pass "C10-control role has no access to hfj_partition before the reconcile";; *) fail "C10-control role could already read hfj_partition: the grant check below proves nothing";; esac
+WANT='[{"id":1,"name":"site-a"},{"id":2,"name":"site-b"},{"id":3,"name":"site-c"}]'
+start_hapi -v "$PLUGIN_JAR:/app/extra-classes/loom-health-fhir-plugin.jar:ro" -e LOOM_HEALTH_PARTITIONS="$WANT" -e LOOM_HEALTH_PG_ADMIN_ROLE="$ROLE"
+if docker logs "$HAPI" 2>&1 | grep -q '"event":"partitions.reconciled","desired":3,"created":1,"unchanged":2'; then pass "C10a partitions.reconciled logged: 3 desired, 1 created, 2 untouched"; else fail "C10a no partitions.reconciled line with created=1 unchanged=2 (plugin not loaded by the starter, or created the wrong set)"; fi
+ROWS=$(psql_as 'SELECT part_id || chr(58) || part_name FROM hfj_partition ORDER BY part_id' | tr '\n' ' ')
+[ "$ROWS" = "1:site-a 2:site-b 3:site-c " ] && pass "C10b the role reads hfj_partition: $ROWS" || fail "C10b role read [$ROWS], expected rows 1:site-a 2:site-b 3:site-c (table or columns differ, or the grant is missing)"
+case "$(psql_as 'SELECT count(*) FROM hfj_resource')" in *"permission denied"*) pass "C10c the grant is partition-table only: hfj_resource is denied";; *) fail "C10c role can read hfj_resource: the grant is wider than hfj_partition";; esac
+c=$(code "$BASE/site-c/Patient")
+[ "$c" = 200 ] && pass "C10d the in-process-created partition serves requests (site-c -> 200)" || fail "C10d GET /site-c/Patient returned $c, expected 200"
+# Conflict: id 1 is site-a. Desired id 1 under another name must stop the engine from starting, loudly, and change nothing.
+docker rm -f "$HAPI" >/dev/null 2>&1 || true
+docker run -d --name "$HAPI" --network "$NET" -v "$CONF:/opt/loom/fhir/config:ro" -v "$PLUGIN_JAR:/app/extra-classes/loom-health-fhir-plugin.jar:ro" \
+  -e SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/opt/loom/fhir/config/application.yaml \
+  -e SPRING_DATASOURCE_URL="jdbc:postgresql://$PG:5432/lhds_probe" -e SPRING_DATASOURCE_USERNAME=postgres -e SPRING_DATASOURCE_PASSWORD=probe \
+  -e SPRING_DATASOURCE_DRIVERCLASSNAME=org.postgresql.Driver -e SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT=ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect \
+  -e LOOM_HEALTH_PARTITIONS='[{"id":1,"name":"site-z"}]' -e LOOM_HEALTH_PG_ADMIN_ROLE="$ROLE" "$IMAGE" >/dev/null
+for _ in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Running}}' "$HAPI")" = false ] && break; sleep 3; done
+EXITED=$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "$HAPI")
+case "$EXITED" in "false "[1-9]*) pass "C10e a conflicting desired partition stops the engine (exit ${EXITED#false })";; *) fail "C10e engine state was [$EXITED], expected exited non-zero on a same-id-other-name conflict";; esac
+if docker logs "$HAPI" 2>&1 | grep -q 'partitions.conflict'; then pass "C10f named log line partitions.conflict"; else fail "C10f no partitions.conflict line in the engine log"; fi
+ROWS2=$(psql_as 'SELECT part_id || chr(58) || part_name FROM hfj_partition ORDER BY part_id' | tr '\n' ' ')
+[ "$ROWS2" = "$ROWS" ] && pass "C10g the conflict changed nothing (no rename, no delete)" || fail "C10g rows changed after the conflict: [$ROWS2] vs [$ROWS]"
 
 echo "RESULT failures=$FAILS"
 [ "$FAILS" = 0 ]

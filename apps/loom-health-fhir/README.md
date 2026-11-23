@@ -52,6 +52,27 @@ Not verified here: a token exchange against a real Entra-only PostgreSQL (that i
 Bump = edit the version in a scratch pom, regenerate `jdbc-auth.lock.tsv` (jars only, linux-x86_64 natives, minus what
 the HAPI `main.war` ships), rebuild.
 
+### The engine reconciles its own partitions (W2-2b B2e, #5422 decision 11)
+
+The control plane does **not** create partitions over HTTP: the PDP interceptor answers 401 to everything except
+`/metadata`, and no exemption exists for `$partition-management-*`. Instead:
+
+- The CP assigns ids (existing ids never change, nothing is dropped) and renders the desired list as canonical JSON
+  in `LOOM_HEALTH_PARTITIONS` (`[{"id":1,"name":"site-a"}]`, sorted by id; part of the config revision, so a change
+  rolls the pod) plus `LOOM_HEALTH_PG_ADMIN_ROLE` (the stamp PG administrator role).
+- The plugin (`plugin/.../partition/`, a Spring configuration registered through
+  `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`) runs in a
+  `SmartInitializingSingleton`: after the JPA schema exists and before the web server accepts a connection. It
+  creates each missing partition **in-process** through HAPI's `IPartitionLookupSvc.createPartition`
+  (HAPI 8.12), never deletes or renames, and **fails startup** with a `partitions.conflict` log line when a
+  desired id/name collides with an existing row. It refuses `DEFAULT`, id 0, names outside
+  `^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$`, and a malformed role.
+- Then it runs exactly one statement, `GRANT SELECT ON TABLE hfj_partition TO "<role>"` (the partition table of
+  HAPI 8.12, `PartitionEntity` `HFJ_PARTITION`, non-PHI), and logs `partitions.reconciled`. Nothing else is granted.
+- Both variables unset: skipped with a `partitions.reconcile.skipped` warning. Exactly one set: startup fails.
+- The CP reads the table back through the PG admin Job and fails closed on any desired partition that is missing
+  or disagrees. `/metadata` stays the only probe over HTTP.
+
 Lifecycle jobs (`fhir-tenant.create|configure|teardown`, `fhir-tenant-jobs.ts`) apply it through a
 `FhirEngineHost` port and read every step back. **Not wired**: no host adapter exists yet (W2-2b), so
 `compose.ts` does not register the kinds.
@@ -70,9 +91,11 @@ It runs the config against the real engine and checks: partition mode on, no-par
 validation on write 422 (with a valid-body control), referential integrity on create and on delete,
 50 parallel conditional creates give exactly 1 resource (with a 50-resource unconditional control),
 a history read's SELECT count does not scale with versions (with a counter-sees-scaling control),
-multi-delete and `$expunge` refused, and the env caps bind over the file. Not verified: the plugin
-interceptors on top of this config (the plugin jar is not loaded by the probe), a Postgres per-tenant role,
-and anything on a stamp.
+multi-delete and `$expunge` refused, and the env caps bind over the file. C10 loads the plugin jar and
+checks the partition reconcile: created/untouched counts, a role that could not read `hfj_partition`
+before can read it after (and still cannot read `hfj_resource`), and a same-id-other-name desired partition
+stops the engine with `partitions.conflict` and changes nothing. Not verified: the PDP/audit interceptors on
+top of this config, the Entra JDBC auth plugin, a per-tenant role, and anything on a stamp.
 
 ## Interceptors (W2-3)
 

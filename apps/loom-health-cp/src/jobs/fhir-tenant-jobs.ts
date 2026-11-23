@@ -18,7 +18,16 @@
 import { z } from 'zod';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
 import type { Collection } from '../store/types.js';
-import { renderEngineConfig, OverridesSchema, type EngineOverrides, type FhirIdentity, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import {
+  renderEngineConfig,
+  mergePartitions,
+  OverridesSchema,
+  PARTITION_NAME,
+  type EngineOverrides,
+  type FhirIdentity,
+  type PartitionSpec,
+  type RenderedEngineConfig,
+} from './fhir-tenant-config.js';
 import { classifyArm, stampResourceGroup, tenantNames, type TenantArm } from './tenant-arm.js';
 import { JobFailure, type JobContext, type JobHandler } from './types.js';
 
@@ -28,6 +37,8 @@ export interface AppliedEngineConfig {
   overrides: EngineOverrides;
   /** Partition mode of the running engine/database. Cannot be enabled later (ADR-003). */
   partitioning: boolean;
+  /** The desired partitions the running Deployment was rendered with (its `loom.health/partitions` annotation); [] when it carries none. */
+  partitions: PartitionSpec[];
 }
 
 export interface RoleReadback {
@@ -56,10 +67,13 @@ export interface FhirEngineHost {
   applyEngineConfig(cfg: RenderedEngineConfig): Promise<void>;
   /** undefined = no engine config exists for the tenant. */
   readEngineConfig(tenantId: string): Promise<AppliedEngineConfig | undefined>;
-  /** `partitions: true` also lists the partitions; a host that cannot list them throws rather than report none. */
+  /** `partitions: true` also lists the partitions, read from the tenant database (never over HTTP); a host that cannot read them throws rather than report none. */
   probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe>;
-  /** Idempotent: create each named partition (facility) if missing. */
-  ensurePartitions(tenantId: string, names: string[]): Promise<void>;
+  /**
+   * The engine creates its own partitions at startup from the rendered config (#5422 decision 11); nothing is created here.
+   * This waits for the rollout, reads the tenant database back, and throws unless every desired partition is present with the desired id and name.
+   */
+  ensurePartitions(tenantId: string, desired: PartitionSpec[]): Promise<void>;
   /** Stop and remove the engine workload and its config for the tenant (the database is NOT touched). */
   removeEngine(tenantId: string): Promise<void>;
 }
@@ -77,14 +91,18 @@ export function fhirTenantHandlers(deps: FhirTenantJobDeps): JobHandler[] {
   return [fhirTenantCreateHandler(deps), fhirTenantConfigureHandler(deps), fhirTenantTeardownHandler(deps)];
 }
 
-const PARTITION_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
-const PartitionsSchema = z.array(z.string().regex(PARTITION_NAME)).max(200);
+// DEFAULT is HAPI's built-in partition; a tenant partition named it (any case) is refused at the door, not at the engine.
+const PartitionsSchema = z
+  .array(z.string().regex(PARTITION_NAME).refine((n) => n.toLowerCase() !== 'default', 'DEFAULT is reserved'))
+  .max(200);
 
 interface Resolved {
   tenant: TenantDoc;
   stamp: StampDoc;
   rg: string;
   postgresFqdn: string;
+  /** The stamp PG administrator role (stamp manifest `pgAdminIdentity.name`); the engine grants it SELECT on its partition table. */
+  pgAdminName: string;
   postgresServerId: string;
   /** The tenant's FHIR identity from the tenant deployment (#5422 decision 9). */
   identity: FhirIdentity;
@@ -110,6 +128,8 @@ async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolv
   }
   const postgresFqdn = String(lookup.value.postgresFqdn ?? '');
   if (!postgresFqdn) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no postgresFqdn (PostgreSQL is not deployed on this stamp); the engine datasource cannot be built');
+  const pgAdmin = lookup.value.pgAdminIdentity as { name?: unknown } | undefined;
+  const pgAdminName = typeof pgAdmin?.name === 'string' ? pgAdmin.name : '';
   const postgresServerId = String(lookup.value.postgresServerId ?? '');
   if (!postgresServerId) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no postgresServerId, so the tenant database cannot be read back');
   let tm;
@@ -126,7 +146,7 @@ async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolv
   }
   const { name, clientId, principalId } = tm.value.fhirIdentity;
   const identity: FhirIdentity = { name, clientId, principalId };
-  return { tenant, stamp, rg, postgresFqdn, postgresServerId, identity };
+  return { tenant, stamp, rg, postgresFqdn, pgAdminName, postgresServerId, identity };
 }
 
 /** The tenant database must exist (tenant.create made it); the readback asserts the DERIVED name. */
@@ -175,7 +195,7 @@ async function ensureRole(ctx: JobContext, deps: FhirTenantJobDeps, cfg: Rendere
 }
 
 /** Apply if the running config differs, then read it back and probe the engine. */
-async function applyAndVerify(ctx: JobContext, deps: FhirTenantJobDeps, cfg: RenderedEngineConfig, partitions: string[]): Promise<void> {
+async function applyAndVerify(ctx: JobContext, deps: FhirTenantJobDeps, cfg: RenderedEngineConfig): Promise<void> {
   const current = await deps.engine.readEngineConfig(cfg.tenantId);
   if (current && !current.partitioning) {
     throw new JobFailure(
@@ -204,17 +224,20 @@ async function applyAndVerify(ctx: JobContext, deps: FhirTenantJobDeps, cfg: Ren
   if (probe.fhirVersion !== '4.0.1') {
     throw new JobFailure('readback_mismatch', `the engine reports FHIR version ${probe.fhirVersion ?? 'none'}, expected 4.0.1`);
   }
-  if (partitions.length > 0) {
-    await deps.engine.ensurePartitions(cfg.tenantId, partitions);
+  if (cfg.partitions.length > 0) {
+    // The engine created these itself at startup; this only waits for it and reads the database back.
+    await deps.engine.ensurePartitions(cfg.tenantId, cfg.partitions);
     const after = await deps.engine.probeEngine(cfg.tenantId, { partitions: true });
-    const missing = partitions.filter((p) => !after.partitions.includes(p));
-    await ctx.receipt('partitions.readback', `wanted=${partitions.length} missing=${missing.length}`);
+    const missing = cfg.partitions.map((p) => p.name).filter((p) => !after.partitions.includes(p));
+    await ctx.receipt('partitions.readback', `wanted=${cfg.partitions.length} missing=${missing.length}`);
     if (missing.length > 0) throw new JobFailure('readback_mismatch', `partitions not present after ensure: ${missing.join(', ')}`);
   }
 }
 
-function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides | undefined): RenderedEngineConfig {
+function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides | undefined, partitions: PartitionSpec[]): RenderedEngineConfig {
   return renderEngineConfig({
+    partitions,
+    pgAdminName: r.pgAdminName,
     tenantId: r.tenant.id,
     stampId: r.stamp.id,
     postgresFqdn: r.postgresFqdn,
@@ -236,9 +259,9 @@ export function fhirTenantCreateHandler(deps: FhirTenantJobDeps): JobHandler {
       await requireTenantDatabase(ctx, deps, r);
       // Self-heal: an engine that already carries overrides keeps them across a re-run of create.
       const existing = await deps.engine.readEngineConfig(r.tenant.id);
-      const cfg = render(deps, r, existing?.overrides);
+      const cfg = render(deps, r, existing?.overrides, mergePartitions(existing?.partitions ?? [], (ctx.input.partitions as string[] | undefined) ?? []));
       await ensureRole(ctx, deps, cfg);
-      await applyAndVerify(ctx, deps, cfg, (ctx.input.partitions as string[] | undefined) ?? []);
+      await applyAndVerify(ctx, deps, cfg);
     },
   };
 }
@@ -261,9 +284,9 @@ export function fhirTenantConfigureHandler(deps: FhirTenantJobDeps): JobHandler 
       }
       const { partitions, ...patch } = ctx.input as EngineOverrides & { partitions?: string[] };
       const merged: EngineOverrides = { ...existing.overrides, ...patch };
-      const cfg = render(deps, r, merged);
+      const cfg = render(deps, r, merged, mergePartitions(existing.partitions, partitions ?? []));
       await ensureRole(ctx, deps, cfg);
-      await applyAndVerify(ctx, deps, cfg, partitions ?? []);
+      await applyAndVerify(ctx, deps, cfg);
     },
   };
 }

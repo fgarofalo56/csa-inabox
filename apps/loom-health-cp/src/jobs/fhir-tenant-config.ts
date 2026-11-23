@@ -60,6 +60,50 @@ export const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
 /** The datasource plugin baked into the engine image by lane B2b. */
 export const JDBC_AUTH_PLUGIN = 'com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin';
 
+/**
+ * A facility partition the engine must hold (ADR-003, #5422 decision 11). The control plane ASSIGNS the id; the engine creates the row in-process
+ * at startup (plugin `ai.loom.health.fhir.partition`), so id and name are both part of the engine's config revision.
+ */
+export interface PartitionSpec {
+  id: number;
+  name: string;
+}
+
+/** Shared by the job input schema, the renderer and (identically) the plugin's DesiredPartitions.NAME. */
+export const PARTITION_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
+/** HAPI's built-in default partition is id 0 named DEFAULT; a tenant partition may be neither. */
+export const RESERVED_PARTITION_NAME = 'default';
+
+/** Strict validation of the list that is rendered into the engine's environment. Throws before anything is rendered. */
+export function assertPartitions(list: PartitionSpec[]): void {
+  const ids = new Set<number>();
+  const names = new Set<string>();
+  for (const p of list) {
+    if (!Number.isInteger(p.id) || p.id < 1 || p.id > 2_147_483_647) {
+      throw new JobFailure('bad_partition', `refusing partition id ${String(p.id)}: ids are integers from 1 (0 is the engine's default partition); nothing was rendered`);
+    }
+    if (typeof p.name !== 'string' || !PARTITION_NAME.test(p.name) || p.name.toLowerCase() === RESERVED_PARTITION_NAME) {
+      throw new JobFailure('bad_partition', 'refusing a partition name that does not match the facility name pattern or is the reserved default; nothing was rendered');
+    }
+    if (ids.has(p.id) || names.has(p.name)) throw new JobFailure('bad_partition', 'refusing a partition list that repeats an id or a name; nothing was rendered');
+    ids.add(p.id);
+    names.add(p.name);
+  }
+}
+
+/**
+ * The desired list for a tenant: what the running engine already carries (ids never change, nothing is ever dropped, the engine cannot
+ * delete or rename) plus any requested name not yet present, which takes the next free id.
+ */
+export function mergePartitions(existing: PartitionSpec[], requested: string[]): PartitionSpec[] {
+  const out = existing.map((p) => ({ id: p.id, name: p.name }));
+  let next = out.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+  for (const name of requested) {
+    if (!out.some((p) => p.name === name)) out.push({ id: next++, name });
+  }
+  return out;
+}
+
 export interface RenderInput {
   tenantId: string;
   stampId: string;
@@ -71,6 +115,10 @@ export interface RenderInput {
   /** In-cluster PDP decision endpoint base (W1-5). Required: the plugin answers 503 to every request without it. */
   pdpUrl: string;
   overrides?: EngineOverrides;
+  /** The partitions the engine must hold. Never shrinks (see mergePartitions). */
+  partitions?: PartitionSpec[];
+  /** The stamp PG administrator role (`pgAdminIdentity.name`): the engine grants it SELECT on the partition table, nothing else. */
+  pgAdminName: string;
 }
 
 export interface RenderedEngineConfig {
@@ -84,6 +132,8 @@ export interface RenderedEngineConfig {
   overrides: EngineOverrides;
   /** Partition mode is a creation-time property of the database (ADR-003). Always true here. */
   partitioning: true;
+  /** Desired partitions, sorted by id. Rendered into LOOM_HEALTH_PARTITIONS, so a change is a new revision and rolls the pod. */
+  partitions: PartitionSpec[];
   /** sha256 of the canonical JSON of everything above: the revision the readback compares. */
   revision: string;
 }
@@ -123,6 +173,11 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   if (!IDENTITY_NAME.test(i.identity.name)) {
     throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name; the engine cannot be bound to it, so no engine is configured');
   }
+  if (!IDENTITY_NAME.test(i.pgAdminName)) {
+    throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no valid pgAdminIdentity.name (lane B2a output); the engine cannot be told which role may read its partition table, so no engine is configured');
+  }
+  const partitions = [...(i.partitions ?? [])].map((p) => ({ id: p.id, name: p.name })).sort((a, b) => a.id - b.id);
+  assertPartitions(partitions);
   const overrides = OverridesSchema.parse(i.overrides ?? {});
   const maxPage = overrides.maxPageSize ?? BASE_MAX_PAGE_SIZE;
   const defPage = overrides.defaultPageSize ?? Math.min(20, maxPage);
@@ -149,9 +204,13 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
     LOOM_HEALTH_TENANT: i.tenantId,
     LOOM_HEALTH_PDP_URL: pdp.toString().replace(/\/$/, ''),
     LOOM_HEALTH_PDP_TIMEOUT_MS: '1500',
+    // Decision 11: the engine reconciles its own partitions at startup (in-process, no HTTP, no auth exemption) and then grants SELECT on
+    // hfj_partition to this role. Canonical JSON, keys id then name, sorted by id: the same list is always the same bytes.
+    LOOM_HEALTH_PARTITIONS: JSON.stringify(partitions),
+    LOOM_HEALTH_PG_ADMIN_ROLE: i.pgAdminName,
   };
   const identity = { name: i.identity.name, clientId: i.identity.clientId, principalId: i.identity.principalId };
-  const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const };
+  const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const, partitions };
   const revision = createHash('sha256').update(canonical(body)).digest('hex');
   return { ...body, revision };
 }

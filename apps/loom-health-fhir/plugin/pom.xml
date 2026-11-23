@@ -32,6 +32,13 @@
       <version>${hapi.version}</version>
       <scope>provided</scope>
     </dependency>
+    <!-- IPartitionLookupSvc (the in-process partition service, W2-2b B2e). Provided: the server image ships it. -->
+    <dependency>
+      <groupId>ca.uhn.hapi.fhir</groupId>
+      <artifactId>hapi-fhir-jpaserver-base</artifactId>
+      <version>${hapi.version}</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>jakarta.servlet</groupId>
       <artifactId>jakarta.servlet-api</artifactId>

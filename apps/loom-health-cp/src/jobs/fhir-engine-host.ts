@@ -10,7 +10,7 @@
 // established; output is excerpted, masked and bounded before it reaches a job message.
 
 import { randomBytes } from 'node:crypto';
-import { fhirNames, IDENTITY_NAME, type EngineOverrides, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import { assertPartitions, fhirNames, IDENTITY_NAME, type EngineOverrides, type PartitionSpec, type RenderedEngineConfig } from './fhir-tenant-config.js';
 import type { AppliedEngineConfig, EngineProbe, FhirEngineHost, RoleReadback } from './fhir-tenant-jobs.js';
 import type { AksRunCommand, AksTarget, RunCommandResult } from './aks-run-command.js';
 import { classifyArm, stampResourceGroup, type TenantArm } from './tenant-arm.js';
@@ -26,6 +26,10 @@ export const SERVICE_PORT = 80;
 export const ANN_REVISION = 'loom.health/engine-revision';
 export const ANN_OVERRIDES = 'loom.health/engine-overrides';
 export const ANN_PARTITIONING = 'loom.health/partitioning';
+/** The desired partition list the Deployment was rendered with (canonical JSON): what readEngineConfig hands back so a re-run never shrinks it. */
+export const ANN_PARTITIONS = 'loom.health/partitions';
+/** HAPI 8.12 `PartitionEntity` is `@Table(name = "HFJ_PARTITION")` with columns PART_ID / PART_NAME (measured by config/probe/engine-config-probe.sh); PostgreSQL folds them to lower case. */
+export const PARTITION_TABLE = 'hfj_partition';
 const DEFAULT_ROLLOUT_SECONDS = 240;
 
 /** Everything about the stamp the host needs that the job port does not carry. */
@@ -48,8 +52,6 @@ export function assertEngineImagePinned(image: string): void {
     throw new JobFailure('fhir_image_unpinned', 'the FHIR engine image must carry an explicit tag other than latest, or a digest; an untagged or :latest reference can change under a running tenant');
   }
 }
-
-const PARTITION = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
 
 export interface RunCommandHostOptions {
   run: AksRunCommand;
@@ -108,7 +110,7 @@ export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: stri
           name,
           namespace: o.namespace,
           labels,
-          annotations: { [ANN_REVISION]: cfg.revision, [ANN_OVERRIDES]: JSON.stringify(cfg.overrides), [ANN_PARTITIONING]: String(cfg.partitioning) },
+          annotations: { [ANN_REVISION]: cfg.revision, [ANN_OVERRIDES]: JSON.stringify(cfg.overrides), [ANN_PARTITIONING]: String(cfg.partitioning), [ANN_PARTITIONS]: JSON.stringify(cfg.partitions) },
         },
         spec: {
           replicas: 1,
@@ -301,24 +303,41 @@ function applyCommand(manifest: string, extra = ''): string {
   return `set -e\nkubectl apply -f - <<'${delim}'\n${manifest}\n${delim}\necho LOOM_APPLIED=1${extra ? `\n${extra}` : ''}`;
 }
 
-/** Partitions (id, name) out of a `$partition-management-list-partitions` Parameters body. */
-export function parsePartitions(json: string): Array<{ id: number; name: string }> {
-  let v: unknown;
-  try {
-    v = JSON.parse(json);
-  } catch {
-    return [];
-  }
-  const out: Array<{ id: number; name: string }> = [];
-  const params = (v as { parameter?: unknown[] } | null)?.parameter;
-  for (const p of Array.isArray(params) ? params : []) {
-    const parts = (p as { part?: Array<Record<string, unknown>> }).part ?? [];
-    const name = parts.find((x) => x.name === 'name');
-    const id = parts.find((x) => x.name === 'id');
-    const n = name?.valueCode ?? name?.valueString;
-    if (typeof n === 'string' && typeof id?.valueInteger === 'number') out.push({ id: id.valueInteger, name: n });
-  }
+/**
+ * Read the tenant database's partition table. HAPI creates it in the tenant's OWN database; the engine grants SELECT on it (and only it) to the
+ * stamp PG administrator at startup (#5422 decision 11), which is who the Job connects as. No HTTP is involved: the engine's PDP answers 401 to
+ * anything but /metadata, and that is not changed.
+ */
+export function readPartitionSteps(db: string): PgStep[] {
+  if (!DB_NAME.test(db)) throw new JobFailure('bad_database_name', 'refusing a malformed tenant database name; nothing was sent');
+  return [{ db, sql: `SELECT 'LOOM_PARTITION=' || part_id || ':' || part_name FROM ${PARTITION_TABLE} ORDER BY part_id;` }];
+}
+
+/** `LOOM_PARTITION=<id>:<name>` lines of the Job's output. Anything else is ignored (it is not a partition row). */
+export function parsePartitionRows(logs: string): PartitionSpec[] {
+  const out: PartitionSpec[] = [];
+  for (const m of logs.matchAll(/^LOOM_PARTITION=(\d+):(\S+)$/gm)) out.push({ id: Number(m[1]), name: m[2] as string });
   return out;
+}
+
+export interface PartitionComparison {
+  /** Desired, and no row has that name or that id. */
+  missing: PartitionSpec[];
+  /** Desired, but a row has the same name under another id, or the same id under another name. */
+  conflicting: Array<{ want: PartitionSpec; found: PartitionSpec }>;
+}
+
+/** Every desired partition must exist with the desired id AND name. Extra rows are not a mismatch: the engine never deletes one. */
+export function comparePartitions(desired: PartitionSpec[], found: PartitionSpec[]): PartitionComparison {
+  const missing: PartitionSpec[] = [];
+  const conflicting: PartitionComparison['conflicting'] = [];
+  for (const want of desired) {
+    if (found.some((f) => f.id === want.id && f.name === want.name)) continue;
+    const clash = found.find((f) => f.id === want.id || f.name === want.name);
+    if (clash) conflicting.push({ want, found: clash });
+    else missing.push(want);
+  }
+  return { missing, conflicting };
 }
 
 // ── the host ─────────────────────────────────────────────────────────────────
@@ -440,7 +459,7 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async readEngineConfig(tenantId: string): Promise<AppliedEngineConfig | undefined> {
     const t = await this.resolve(tenantId);
     const name = fhirNames(tenantId).workloadName;
-    const jp = `'FOUND={.metadata.name}{"\\n"}REV={.metadata.annotations.loom\\.health/engine-revision}{"\\n"}PART={.metadata.annotations.loom\\.health/partitioning}{"\\n"}OVR={.metadata.annotations.loom\\.health/engine-overrides}{"\\n"}'`;
+    const jp = `'FOUND={.metadata.name}{"\\n"}REV={.metadata.annotations.loom\\.health/engine-revision}{"\\n"}PART={.metadata.annotations.loom\\.health/partitioning}{"\\n"}OVR={.metadata.annotations.loom\\.health/engine-overrides}{"\\n"}PARTS={.metadata.annotations.loom\\.health/partitions}{"\\n"}'`;
     const r = await this.o.run.run(t, `kubectl get deployment/${name} -n ${this.ns} --ignore-not-found -o jsonpath=${jp}`);
     if (r.exitCode !== 0) throw this.failure('engine_read_failed', `reading deployment/${name} failed`, r);
     if (!/^FOUND=\S+$/m.test(r.logs)) return undefined;
@@ -457,7 +476,18 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
         throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_OVERRIDES} annotation; nothing was changed`);
       }
     }
-    return { revision: rev, overrides, partitioning: /^PART=true$/m.test(r.logs) };
+    // No annotation = a Deployment rendered before the list existed: it carries no partitions.
+    let partitions: PartitionSpec[] = [];
+    const parts = /^PARTS=(.*)$/m.exec(r.logs)?.[1] ?? '';
+    if (parts) {
+      try {
+        partitions = JSON.parse(parts) as PartitionSpec[];
+        assertPartitions(partitions);
+      } catch {
+        throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_PARTITIONS} annotation; nothing was changed, because re-rendering from it could drop a partition`);
+      }
+    }
+    return { revision: rev, overrides, partitioning: /^PART=true$/m.test(r.logs), partitions };
   }
 
   async probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe> {
@@ -471,13 +501,7 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
       `grep -q '"resourceType" *: *"CapabilityStatement"' /tmp/m.json && echo LOOM_CAPABILITY=1`,
       `grep -o '"fhirVersion" *: *"[^"]*"' /tmp/m.json | head -n 1 | sed 's/.*: *"\\(.*\\)"/LOOM_FHIR_VERSION=\\1/'`,
     ];
-    if (opts?.partitions) {
-      lines.push(
-        `kubectl get --raw '${base}/DEFAULT/$partition-management-list-partitions' > /tmp/p.json 2> /tmp/p.err; PRC=$?`,
-        'echo "LOOM_PARTITIONS_RC=$PRC"',
-        'if [ "$PRC" -ne 0 ]; then head -c 400 /tmp/p.err; else echo "LOOM_PARTITIONS_JSON=$(tr -d \'\\r\\n\' < /tmp/p.json | head -c 200000)"; fi',
-      );
-    }
+    // /metadata is the only path the engine answers without a bearer token. Partitions are NOT read over HTTP: see readPartitions().
     const r = await this.o.run.run(t, lines.join('\n'));
     if (r.exitCode !== 0) throw this.failure('engine_probe_failed', `probing ${fhirNames(tenantId).workloadName} through the API server proxy failed`, r);
     const rc = /^LOOM_PROBE_RC=(\d+)$/m.exec(r.logs)?.[1];
@@ -488,47 +512,40 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     }
     const ready = /^LOOM_CAPABILITY=1$/m.test(r.logs);
     const fhirVersion = /^LOOM_FHIR_VERSION=(\S+)$/m.exec(r.logs)?.[1];
-    let partitions: string[] = [];
-    if (opts?.partitions) {
-      const prc = /^LOOM_PARTITIONS_RC=(\d+)$/m.exec(r.logs)?.[1];
-      if (prc !== '0') {
-        throw new JobFailure(
-          'partitions_unreadable',
-          `listing partitions through the API server proxy did not succeed (${prc === undefined ? 'no exit marker' : `kubectl exit ${prc}`}): ${excerpt(r.logs.split('LOOM_PARTITIONS_RC')[1] ?? '', 300) || 'no output'}. Established only that the list request failed; whether the partitions exist is NOT established.`,
-        );
-      }
-      partitions = parsePartitions(/^LOOM_PARTITIONS_JSON=(.*)$/m.exec(r.logs)?.[1] ?? '').map((p) => p.name);
-    }
+    const partitions = opts?.partitions ? (await this.readPartitions(tenantId)).map((p) => p.name) : [];
     return { ready, ...(fhirVersion ? { fhirVersion } : {}), partitions };
   }
 
-  async ensurePartitions(tenantId: string, names: string[]): Promise<void> {
+  /** The tenant database's partition rows, through the PG admin Job (B2c pattern). Throws when the table cannot be read; never reports "none" for a failed read. */
+  private async readPartitions(tenantId: string): Promise<PartitionSpec[]> {
+    const logs = await this.runPgJob(tenantId, readPartitionSteps(fhirNames(tenantId).databaseName));
+    return parsePartitionRows(logs);
+  }
+
+  /**
+   * The engine creates its own partitions at startup (#5422 decision 11); there is no create here and no `$partition-management-*` call.
+   * Wait for the rollout, read the tenant database back, and fail closed on any desired partition that is missing or disagrees.
+   */
+  async ensurePartitions(tenantId: string, desired: PartitionSpec[]): Promise<void> {
     const t = await this.resolve(tenantId);
-    for (const n of names) if (!PARTITION.test(n)) throw new JobFailure('bad_partition_name', 'refusing a malformed partition name; nothing was sent');
-    const base = `/api/v1/namespaces/${this.ns}/services/${fhirNames(tenantId).workloadName}:${SERVICE_PORT}/proxy/fhir`;
-    const list = await this.o.run.run(t, `kubectl get --raw '${base}/DEFAULT/$partition-management-list-partitions'`);
-    if (list.exitCode !== 0) throw this.failure('partitions_unreadable', `listing partitions of ${tenantId} before creating any failed`, list);
-    const have = parsePartitions(list.logs);
-    const missing = names.filter((n) => !have.some((p) => p.name === n));
-    if (missing.length === 0) return;
-    let next = have.reduce((m, p) => Math.max(m, p.id), 0) + 1;
-    const cmds = ['set -e'];
-    for (const [i, n] of missing.entries()) {
-      const body = JSON.stringify({ resourceType: 'Parameters', parameter: [{ name: 'id', valueInteger: next++ }, { name: 'name', valueCode: n }] });
-      // create-partition is NOT idempotent, and runCommand may re-send a command whose outcome ARM did not report, so each
-      // create re-lists first and skips a partition that already exists. That makes the whole command safe to re-send.
-      cmds.push(
-        `printf '%s' '${body}' > /tmp/part${i}.json`,
-        `if ! kubectl get --raw '${base}/DEFAULT/$partition-management-list-partitions' | grep -q '"valueCode" *: *"${n}"'; then kubectl create --raw '${base}/DEFAULT/$partition-management-create-partition' -f /tmp/part${i}.json; fi`,
-      );
+    assertPartitions(desired);
+    const name = fhirNames(tenantId).workloadName;
+    const secs = this.o.rolloutSeconds ?? DEFAULT_ROLLOUT_SECONDS;
+    const roll = await this.o.run.run(t, `kubectl rollout status deployment/${name} -n ${this.ns} --timeout=${secs}s`);
+    if (roll.exitCode !== 0) {
+      throw this.failure('engine_rollout_failed', `deployment/${name} is not rolled out, so its partitions cannot have been reconciled; the cause is NOT established`, roll);
     }
-    const r = await this.o.run.run(t, cmds.join('\n'));
-    if (r.exitCode !== 0) throw this.failure('partition_create_failed', `creating partition(s) ${missing.join(', ')} for ${tenantId} failed`, r);
-    // Read back what was done: the job's own readback is a second, independent probe.
-    const after = await this.o.run.run(t, `kubectl get --raw '${base}/DEFAULT/$partition-management-list-partitions'`);
-    if (after.exitCode !== 0) throw this.failure('partitions_unreadable', `reading the partitions of ${tenantId} back after creating them failed`, after);
-    const still = missing.filter((n) => !parsePartitions(after.logs).some((p) => p.name === n));
-    if (still.length > 0) throw new JobFailure('readback_mismatch', `partitions not present after ensure: ${still.join(', ')}`);
+    const found = await this.readPartitions(tenantId);
+    const cmp = comparePartitions(desired, found);
+    if (cmp.missing.length === 0 && cmp.conflicting.length === 0) return;
+    const parts = [
+      ...cmp.missing.map((p) => `${p.name} (id ${p.id}) is absent`),
+      ...cmp.conflicting.map((c) => `${c.want.name} (id ${c.want.id}) disagrees with the row ${c.found.name} (id ${c.found.id})`),
+    ];
+    throw new JobFailure(
+      'readback_mismatch',
+      `the tenant database ${fhirNames(tenantId).databaseName} does not hold the desired partitions: ${parts.join('; ')}. Established: the rows read from ${PARTITION_TABLE} (${found.length}). Not established: why. The engine creates its partitions at startup and logs partitions.reconciled or partitions.conflict.`,
+    );
   }
 
   async removeEngine(tenantId: string): Promise<void> {

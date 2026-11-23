@@ -6,6 +6,8 @@ import {
   PDP_INTERCEPTOR,
   fhirNames,
   poolSizeFor,
+  mergePartitions,
+  PARTITION_NAME,
   renderEngineConfig,
   type RenderedEngineConfig,
 } from '../src/jobs/fhir-tenant-config.js';
@@ -34,7 +36,8 @@ const IDENT = { name: `id-lhds-${STAMP}-${SLUG}-fhir`, clientId: '11111111-2222-
 const ENGINE_DIR = new URL('../../loom-health-fhir/', import.meta.url);
 const read = (rel: string) => readFileSync(new URL(rel, ENGINE_DIR), 'utf8');
 
-const baseInput = { tenantId: SLUG, stampId: STAMP, postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP };
+const PG_ADMIN = `id-lhds-${STAMP}-pgadmin`;
+const baseInput = { tenantId: SLUG, stampId: STAMP, postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: PG_ADMIN };
 
 describe('renderEngineConfig', () => {
   it('points the datasource at the tenant OWN database as its FHIR identity, through the JDBC auth plugin, with no credential', () => {
@@ -95,6 +98,45 @@ describe('renderEngineConfig', () => {
     // Unset tenant or PDP url makes the plugin answer 503 to everything (README): both must be rendered.
     expect(rendered).toEqual(expect.arrayContaining(['LOOM_HEALTH_TENANT', 'LOOM_HEALTH_PDP_URL']));
     expect(c.env.LOOM_HEALTH_TENANT).toBe(SLUG);
+  });
+
+  it('renders the desired partitions as canonical JSON into the engine env, and the revision changes when the list changes (the pod rolls)', () => {
+    const one = renderEngineConfig({ ...baseInput, partitions: [{ id: 1, name: 'site-a' }] });
+    const two = renderEngineConfig({ ...baseInput, partitions: [{ id: 2, name: 'site-b' }, { id: 1, name: 'site-a' }] });
+    // Input that breaks it: a renderer that leaves the list out of env/revision (both literals below would differ or be undefined).
+    expect(one.env.LOOM_HEALTH_PARTITIONS).toBe('[{"id":1,"name":"site-a"}]');
+    expect(two.env.LOOM_HEALTH_PARTITIONS).toBe('[{"id":1,"name":"site-a"},{"id":2,"name":"site-b"}]'); // sorted by id, input order irrelevant
+    expect(two.revision).not.toBe(one.revision);
+    // Same list, same bytes, same revision (positive pair: the difference above is the list, not noise).
+    expect(renderEngineConfig({ ...baseInput, partitions: [{ id: 1, name: 'site-a' }] }).revision).toBe(one.revision);
+    expect(renderEngineConfig(baseInput).env.LOOM_HEALTH_PARTITIONS).toBe('[]');
+    // The grantee is the stamp PG admin: a different admin is a different revision, and its name is rendered verbatim.
+    expect(one.env.LOOM_HEALTH_PG_ADMIN_ROLE).toBe(PG_ADMIN);
+    expect(renderEngineConfig({ ...baseInput, pgAdminName: 'id-lhds-dev02-pgadmin' }).revision).not.toBe(renderEngineConfig(baseInput).revision);
+  });
+
+  it('refuses a partition list the plugin would refuse, before rendering: reserved, malformed, id 0, repeats; and a missing PG admin name', () => {
+    const bad: Array<Array<{ id: number; name: string }>> = [
+      [{ id: 1, name: 'DEFAULT' }],
+      [{ id: 1, name: 'default' }],
+      [{ id: 1, name: 'Site_A' }],
+      [{ id: 1, name: 'a' }],
+      [{ id: 1, name: 'site-a"; DROP' }],
+      [{ id: 0, name: 'site-a' }],
+      [{ id: 1.5, name: 'site-a' }],
+      [{ id: 1, name: 'site-a' }, { id: 2, name: 'site-a' }],
+      [{ id: 1, name: 'site-a' }, { id: 1, name: 'site-b' }],
+    ];
+    for (const partitions of bad) expect(() => renderEngineConfig({ ...baseInput, partitions }), JSON.stringify(partitions)).toThrow(/bad_partition|refusing a partition|refusing partition id/i);
+    expect(() => renderEngineConfig({ ...baseInput, partitions: [{ id: 1, name: 'site-a' }] })).not.toThrow(); // positive control
+    expect(() => renderEngineConfig({ ...baseInput, pgAdminName: '' })).toThrow(/pgAdminIdentity/);
+  });
+
+  it('mergePartitions keeps existing ids, appends new names with the next free id, and never drops one', () => {
+    expect(mergePartitions([{ id: 7, name: 'site-a' }], ['site-a', 'site-b'])).toEqual([{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }]);
+    expect(mergePartitions([{ id: 7, name: 'site-a' }], [])).toEqual([{ id: 7, name: 'site-a' }]);
+    expect(mergePartitions([], ['x1', 'x2'])).toEqual([{ id: 1, name: 'x1' }, { id: 2, name: 'x2' }]);
+    expect(PARTITION_NAME.test('site-a')).toBe(true);
   });
 
   it('revision is stable for equal input and changes when any rendered value changes', () => {
@@ -199,7 +241,7 @@ class FakeHost implements FhirEngineHost {
   }
   async applyEngineConfig(cfg: RenderedEngineConfig) {
     this.applyCalls.push(cfg);
-    this.config = { revision: this.reportRevision ? this.reportRevision(cfg.revision) : cfg.revision, overrides: cfg.overrides, partitioning: cfg.partitioning };
+    this.config = { revision: this.reportRevision ? this.reportRevision(cfg.revision) : cfg.revision, overrides: cfg.overrides, partitioning: cfg.partitioning, partitions: cfg.partitions };
   }
   async readEngineConfig() {
     return this.config ? structuredClone(this.config) : undefined;
@@ -207,7 +249,8 @@ class FakeHost implements FhirEngineHost {
   async probeEngine(): Promise<EngineProbe> {
     return { ready: this.ready, ...(this.fhirVersion ? { fhirVersion: this.fhirVersion } : {}), partitions: [...this.partitionsHave] };
   }
-  async ensurePartitions(_t: string, names: string[]) {
+  async ensurePartitions(_t: string, desired: Array<{ id: number; name: string }>) {
+    const names = desired.map((d) => d.name);
     if (!this.ensurePartitionsDropsAll) for (const n of names) this.partitionsHave.add(n);
   }
   async removeEngine() {
@@ -219,7 +262,7 @@ class FakeHost implements FhirEngineHost {
 
 class FakeArm implements Partial<TenantArm> {
   stampState: 'absent' | 'no_outputs' | 'found' = 'found';
-  stampManifest: Record<string, unknown> = { postgresFqdn: PG_FQDN, postgresServerId: PG_ID };
+  stampManifest: Record<string, unknown> = { postgresFqdn: PG_FQDN, postgresServerId: PG_ID, pgAdminIdentity: { name: PG_ADMIN } };
   databases = new Map<string, string>([[`${PG_ID}/databases/${DB}`, DB]]);
   readError: Error | undefined;
   tenantManifest: Record<string, unknown> | 'absent' | 'no_outputs' = { fhirIdentity: { id: 'x', ...IDENT } };
@@ -306,7 +349,7 @@ describe('fhir-tenant.create', () => {
     await run('fhir-tenant.create', 'k1');
     expect((await run('fhir-tenant.configure', 'c1', { maxPageSize: 50 })).state).toBe('succeeded');
     host.config = undefined;
-    host.config = { revision: 'x', overrides: { maxPageSize: 50 }, partitioning: true };
+    host.config = { revision: 'x', overrides: { maxPageSize: 50 }, partitioning: true, partitions: [] };
     await run('fhir-tenant.create', 'k3');
     expect(host.applyCalls.at(-1)?.env.HAPI_FHIR_MAX_PAGE_SIZE).toBe('50'); // 200 would mean the override was dropped
   });
@@ -344,7 +387,7 @@ describe('fhir-tenant.create', () => {
   it('will not touch an engine that is running with partition mode OFF (cannot be enabled later)', async () => {
     const { host, run } = setup();
     host.role = { exists: true, connectableDatabases: [DB] };
-    host.config = { revision: 'old', overrides: {}, partitioning: false };
+    host.config = { revision: 'old', overrides: {}, partitioning: false, partitions: [] };
     const job = await run('fhir-tenant.create', 'k1');
     expect(job.error?.code).toBe('partition_mode_immutable');
     expect(job.error?.message).toContain('partition mode OFF');
@@ -385,6 +428,26 @@ describe('fhir-tenant.create', () => {
     const bad = await run('fhir-tenant.create', 'k2', { partitions: ['site-c'] });
     expect(bad.error?.code).toBe('readback_mismatch');
     expect(bad.error?.message).toContain('site-c');
+  });
+
+  it('assigns partition ids in the job, keeps them across a configure, and a configure that adds one re-renders (new revision)', async () => {
+    const { host, run } = setup();
+    expect((await run('fhir-tenant.create', 'k1', { partitions: ['site-a'] })).state).toBe('succeeded');
+    expect(host.applyCalls[0]?.partitions).toEqual([{ id: 1, name: 'site-a' }]);
+    expect((await run('fhir-tenant.configure', 'c1', { partitions: ['site-b'] })).state).toBe('succeeded');
+    // Input that breaks it: a configure that re-numbers or drops site-a (ids [2] or a list without site-a).
+    expect(host.applyCalls[1]?.partitions).toEqual([{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }]);
+    expect(host.applyCalls[1]?.revision).not.toBe(host.applyCalls[0]?.revision);
+    // An override-only configure carries the list forward unchanged (it must not roll the engine with an empty list).
+    expect((await run('fhir-tenant.configure', 'c2', { maxPageSize: 50 })).state).toBe('succeeded');
+    expect(host.applyCalls[2]?.partitions).toEqual([{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }]);
+  });
+
+  it('refuses the reserved DEFAULT partition name at the door', async () => {
+    const { run } = setup();
+    for (const n of ['DEFAULT', 'default']) {
+      await expect(run('fhir-tenant.create', `k-${n}`, { partitions: [n] })).rejects.toThrow();
+    }
   });
 
   it('names the PostgreSQL gap instead of guessing when the stamp has none', async () => {
@@ -523,7 +586,7 @@ describe('fhir-tenant.configure', () => {
 describe('fhir-tenant.teardown', () => {
   it('removes the engine BEFORE the role, and reads both back', async () => {
     const { host, run } = setup('destroying');
-    host.config = { revision: 'r', overrides: {}, partitioning: true };
+    host.config = { revision: 'r', overrides: {}, partitioning: true, partitions: [] };
     host.role = { exists: true, connectableDatabases: [DB] };
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
@@ -534,7 +597,7 @@ describe('fhir-tenant.teardown', () => {
 
   it('refuses a tenant that is not destroying and removes nothing', async () => {
     const { host, run } = setup('active');
-    host.config = { revision: 'r', overrides: {}, partitioning: true };
+    host.config = { revision: 'r', overrides: {}, partitioning: true, partitions: [] };
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.error?.code).toBe('tenant_not_destroying');
     expect(job.error?.message).toContain('is active');
@@ -551,7 +614,7 @@ describe('fhir-tenant.teardown', () => {
 
   it('an engine whose config is still present after removal fails and the role is NOT removed', async () => {
     const { host, run } = setup('destroying');
-    host.config = { revision: 'r', overrides: {}, partitioning: true };
+    host.config = { revision: 'r', overrides: {}, partitioning: true, partitions: [] };
     host.removeEngineIsNoop = true;
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.error?.code).toBe('teardown_incomplete');
@@ -569,7 +632,7 @@ describe('fhir-tenant.teardown', () => {
 
   it('is idempotent: a second teardown of an already-removed engine succeeds', async () => {
     const { host, run } = setup('destroying');
-    host.config = { revision: 'r', overrides: {}, partitioning: true };
+    host.config = { revision: 'r', overrides: {}, partitioning: true, partitions: [] };
     host.role = { exists: true, connectableDatabases: [DB] };
     expect((await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG })).state).toBe('succeeded');
     const again = await run('fhir-tenant.teardown', 't2', { confirmTenantId: SLUG });
