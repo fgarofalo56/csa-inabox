@@ -68,6 +68,12 @@ const HASH_LEN = 6;
 
 export interface HealthResource { kind: string; id: string; name: string }
 
+/**
+ * The tenant's FHIR engine (#5442). `ready` = the fhir-tenant.create job succeeded; `provisioning` / `failed` follow that job;
+ * `unavailable` = the control plane has no engine host + PDP url configured (it answered "unknown job kind"), re-asked on every ensure.
+ */
+export interface HealthEngine { status: 'ready' | 'provisioning' | 'failed' | 'unavailable'; jobId?: string }
+
 export interface HealthBinding {
   /** Control-plane tenant id (slug). */
   tenantId: string;
@@ -81,6 +87,7 @@ export interface HealthBinding {
   boundAt?: string;
   verifiedAt?: string;
   resources: HealthResource[];
+  engine?: HealthEngine;
   lastError?: { code: string; message: string };
 }
 
@@ -246,6 +253,7 @@ export async function ensureHealthTenant(input: EnsureInput, deps: EnsureDeps): 
       boundAt: prior?.boundAt,
       verifiedAt: prior?.verifiedAt,
       resources: prior?.resources ?? [],
+      engine: prior?.engine,
     };
 
     // Decide whether a job is needed. A fresh tenant, an unverified one, or one past the TTL needs the
@@ -254,7 +262,10 @@ export async function ensureHealthTenant(input: EnsureInput, deps: EnsureDeps): 
     const verifiedMs = prior?.verifiedAt ? Date.parse(prior.verifiedAt) : NaN;
     const stale = !Number.isFinite(verifiedMs) || deps.now().getTime() - verifiedMs > VERIFY_TTL_MS;
     if (!fresh && !stale && tenant.status === 'active') {
-      return { phase: 'bound', binding: seed, tenant, steps, created: false };
+      // Self-healing (#5442): a verified tenant whose engine is not known to be ready (created before the engine was
+      // chained, a failed engine job, or an engine host configured since) gets fhir-tenant.create re-submitted.
+      if (prior?.engine?.status === 'ready') return { phase: 'bound', binding: seed, tenant, steps, created: false };
+      return await settleEngine(deps, seed, tenant, createKey(tenant), input.retry === true, steps, false);
     }
 
     const key = fresh ? createKey(tenant) : `verify-${dayKey(deps.now())}`;
@@ -287,8 +298,9 @@ export async function ensureHealthTenant(input: EnsureInput, deps: EnsureDeps): 
     }
     const nowIso = deps.now().toISOString();
     const bound: HealthBinding = { ...seed, status: 'bound', resources, verifiedAt: job.finishedAt ?? nowIso, boundAt: prior?.boundAt ?? nowIso, lastError: undefined };
-    await persist(deps, bound, steps);
-    return { phase: 'bound', binding: bound, tenant: finalTenant, steps, created: !prior };
+    // tenant.create chains the engine itself with key `engine-<this key>`; submitting the same key here is the
+    // runner's dedup (same job), and the re-submit that heals a chain that was lost.
+    return await settleEngine(deps, bound, finalTenant, key, input.retry === true, steps, !prior);
   } catch (e) {
     if (e instanceof CpNotConfiguredError) {
       return { phase: 'unconfigured', gateId: HEALTH_GATE.controlPlane, missing: e.missing, message: e.message, steps };
@@ -298,6 +310,53 @@ export async function ensureHealthTenant(input: EnsureInput, deps: EnsureDeps): 
     }
     return { phase: 'cp-error', code: 'unexpected', message: (e as Error)?.message ?? String(e), steps };
   }
+}
+
+/** An unregistered job kind is the control plane saying it has no engine host / PDP url (jobs/runner.ts submit). */
+function isUnknownKind(e: unknown): boolean {
+  return e instanceof CpError && e.status === 400 && /unknown job kind/i.test(e.message);
+}
+
+/**
+ * Bind the tenant's FHIR engine after the tenant itself is bound: submit fhir-tenant.create under `engine-<parentKey>` (the key
+ * tenant.create chains with, so the control plane answers with the SAME job), then report where it stands. A running engine job is
+ * `provisioning` with THAT job, so the editor shows its receipts on the real surface (rule section 4). Persists the binding.
+ */
+async function settleEngine(
+  deps: EnsureDeps, bound: HealthBinding, tenant: CpTenant, parentKey: string, retry: boolean, steps: string[], created: boolean,
+): Promise<EnsureOutcome> {
+  let job: CpJob | undefined;
+  try {
+    job = await deps.cp.submitJob({ kind: 'fhir-tenant.create', subjectType: 'tenant', subjectId: bound.tenantId, idempotencyKey: `engine-${parentKey}` });
+    if (job.state === 'failed' && retry) {
+      job = await deps.cp.retryJob(job.id);
+      steps.push(`Retried failed engine job ${job.id}.`);
+    }
+  } catch (e) {
+    if (!isUnknownKind(e)) throw e;
+    job = undefined;
+  }
+  if (!job) {
+    steps.push('The control plane has no FHIR engine host and PDP url configured, so no engine was created for this tenant.');
+    const next = { ...bound, engine: { status: 'unavailable' as const } };
+    await persist(deps, next, steps);
+    return { phase: 'bound', binding: next, tenant, steps, created };
+  }
+  if (job.state === 'queued' || job.state === 'running') {
+    const next = { ...bound, engine: { status: 'provisioning' as const, jobId: job.id } };
+    await persist(deps, next, steps);
+    return { phase: 'provisioning', binding: next, job, steps };
+  }
+  if (job.state === 'failed' || job.state === 'cancelled') {
+    const code = job.error?.code ?? job.state;
+    const message = `FHIR engine: ${job.error?.message ?? `the fhir-tenant.create job was ${job.state}`}`;
+    const next = { ...bound, engine: { status: 'failed' as const, jobId: job.id } };
+    await persist(deps, next, steps);
+    return { phase: 'failed', binding: { ...next, status: 'failed', lastError: { code, message } }, job, code, message, steps };
+  }
+  const next = { ...bound, engine: { status: 'ready' as const, jobId: job.id } };
+  await persist(deps, next, steps);
+  return { phase: 'bound', binding: next, tenant, steps, created };
 }
 
 async function persist(deps: EnsureDeps, binding: HealthBinding, steps: string[]): Promise<void> {
@@ -398,7 +457,7 @@ export function toProvisionResult(o: EnsureOutcome): ProvisionResult {
         status: 'created',
         resourceId: o.binding.tenantId,
         secondaryIds: { tenantId: o.binding.tenantId, stampId: o.binding.stampId, jobId: o.job.id },
-        steps: [...o.steps, `tenant.create job ${o.job.id} is ${o.job.state}; the editor shows its progress.`],
+        steps: [...o.steps, `${o.job.kind} job ${o.job.id} is ${o.job.state}; the editor shows its progress.`],
       };
     case 'bound':
       return {

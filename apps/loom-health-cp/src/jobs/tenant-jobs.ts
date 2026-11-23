@@ -27,7 +27,19 @@ import {
   type TenantArm,
   type TenantManifest,
 } from './tenant-arm.js';
+import { publicErrorMessage } from '../safe-error.js';
 import { JobFailure, type JobContext, type JobHandler } from './types.js';
+
+/**
+ * The FHIR engine half of a tenant (#5442, auto-bind-by-default). Supplied by compose.ts ONLY when the fhir-tenant.*
+ * kinds are registered (FhirEngineHost + pdpUrl); without it tenant.create/destroy still succeed and say so in a receipt.
+ */
+export interface FhirChain {
+  /** Submit fhir-tenant.create through the JobRunner (its job id is derived from kind+subject+key, so a repeat is the same job). */
+  submitCreate(tenantId: string, idempotencyKey: string): Promise<{ jobId: string; created: boolean }>;
+  /** The body of fhir-tenant.teardown, run inside the destroy job so the engine is gone before the database and identity are. */
+  teardown(ctx: JobContext): Promise<void>;
+}
 
 export interface TenantJobDeps {
   stamps: Collection<StampDoc>;
@@ -39,6 +51,8 @@ export interface TenantJobDeps {
   /** Shred read-back: reads per key, and the wait between rounds (#5392). Defaults SHRED_READS / SHRED_POLL_MS. */
   shredReads?: number;
   shredPollMs?: number;
+  /** Chain the FHIR engine to create/destroy. Absent = engine kinds are not registered on this control plane. */
+  fhir?: FhirChain;
 }
 
 /**
@@ -221,8 +235,27 @@ export function tenantCreateHandler(deps: TenantJobDeps): JobHandler {
         await deps.registry.updateTenant(r.tenant.id, { status: 'active' }, 'job:tenant.create');
         await ctx.receipt('tenant.active', `tenant=${r.tenant.id}`);
       }
+      if (r.tenant.status === 'creating' || r.tenant.status === 'active') await chainEngine(ctx, deps, r.tenant.id);
     },
   };
+}
+
+/**
+ * After the tenant is active (readback passed): bind its FHIR engine. The key is derived from THIS job's key, so the
+ * first create (`create-<incarnation>`) and each daily verify (`verify-<day>`) get their own engine job, and a repeat of
+ * either dedups in the runner. Never fails the tenant: the stamp resources are already read back and true.
+ */
+async function chainEngine(ctx: JobContext, deps: TenantJobDeps, tenantId: string): Promise<void> {
+  if (!deps.fhir) {
+    await ctx.receipt('engine.not_chained', 'fhir-tenant.create was NOT submitted: this control plane has no FHIR engine host and PDP url configured, so the fhir-tenant kinds are not registered');
+    return;
+  }
+  try {
+    const { jobId, created } = await deps.fhir.submitCreate(tenantId, `engine-${ctx.job.idempotencyKey}`.slice(0, 80));
+    await ctx.receipt('engine.chained', `fhir-tenant.create job=${jobId} created=${created}`);
+  } catch (e) {
+    await ctx.receipt('engine.chain_failed', publicErrorMessage(e, 'fhir-tenant.create could not be submitted; the next ensure re-submits it'));
+  }
 }
 
 export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
@@ -259,6 +292,13 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
       }
       if (settle.state === 'terminal') {
         await ctx.receipt('deployment.settled', `deployment=lhds-tenant-${r.tenant.id} provisioningState=${settle.provisioningState} reads=${settle.polls}`);
+      }
+
+      // The engine goes BEFORE the database, identity and keys it uses. Fails closed: a leaked engine is the defect.
+      if (deps.fhir) {
+        await deps.fhir.teardown(ctx);
+      } else {
+        await ctx.receipt('engine.teardown_skipped', 'no FHIR engine host is configured on this control plane, so no engine was removed or looked for');
       }
 
       let lookup;

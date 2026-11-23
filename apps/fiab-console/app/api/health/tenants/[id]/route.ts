@@ -50,7 +50,9 @@ export const GET = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async
   let liveError: { code: string; message: string } | null = null;
   try {
     tenant = await cp.getTenant(binding.tenantId);
-    if (binding.createJobId) job = await cp.getJob(binding.createJobId);
+    // While the FHIR engine rolls out (#5442) the live job to follow is the engine's, so the editor shows its receipts.
+    const followId = binding.engine?.status === 'provisioning' && binding.engine.jobId ? binding.engine.jobId : binding.createJobId;
+    if (followId) job = await cp.getJob(followId);
   } catch (e) {
     if (e instanceof CpNotConfiguredError) {
       return apiHonestGateError('health-control-plane', { missing: e.missing, message: e.message });

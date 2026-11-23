@@ -62,6 +62,8 @@ function fake(opts: {
   tenants?: Record<string, CpTenant>;
   stamps?: CpStamp[];
   job?: CpJob;
+  /** Per-submit override (e.g. a different answer for the engine kind); return an Error to have submitJob throw it. */
+  submit?: (b: { kind: string }) => CpJob | Error | undefined;
   getTenantThrows?: Error;
   configured?: boolean;
   defaultStampId?: string;
@@ -89,7 +91,12 @@ function fake(opts: {
         tenants[b.id] = t;
         return t;
       },
-      submitJob: async (b: any) => { calls.submitJob.push(b); return opts.job ?? job('queued'); },
+      submitJob: async (b: any) => {
+        calls.submitJob.push(b);
+        const o = opts.submit?.(b);
+        if (o instanceof Error) throw o;
+        return o ?? opts.job ?? job('queued');
+      },
       retryJob: async (id: string) => { calls.retryJob.push(id); return job('queued', { id }); },
       getJob: async () => opts.job ?? job('queued'),
     } as unknown as EnsureDeps['cp'],
@@ -104,6 +111,7 @@ const BOUND: HealthBinding = {
   tenantId: 'mercy-general', sourceName: 'Mercy General', tenantIdSanitized: true, stampId: 'east-s1',
   createJobId: 'job-aaaa', status: 'bound', boundAt: '2026-10-25T00:00:00.000Z', verifiedAt: NOW.toISOString(),
   resources: [{ kind: 'database', id: '/x/databases/lhds_mercy_general', name: 'lhds_mercy_general' }],
+  engine: { status: 'ready', jobId: 'job-engine' },
 };
 
 describe('healthTenantSlugFor', () => {
@@ -347,5 +355,82 @@ describe('toProvisionResult', () => {
   });
   it('maps a control-plane error to failed, never to remediation (it is not a missing prerequisite)', () => {
     expect(toProvisionResult({ phase: 'cp-error', code: 'unreachable', message: 'x', steps: [] }).status).toBe('failed');
+  });
+});
+
+describe('FHIR engine auto-bind (#5442)', () => {
+  const ENGINE_KIND = 'fhir-tenant.create';
+  const engineJob = (state: CpJob['state'], over: Partial<CpJob> = {}) => job(state, { id: 'job-engine', kind: ENGINE_KIND, ...over });
+  const unknownKind = () => new CpError(400, 'bad_request', 'unknown job kind');
+  const OLD = { ...BOUND, engine: undefined as undefined }; // a tenant bound before the engine was chained
+  const submitsOf = (f: Fake, kind: string) => f.calls.submitJob.filter((b) => b.kind === kind);
+
+  it('a freshly succeeded create job is followed by fhir-tenant.create under the key tenant.create chains with', async () => {
+    const f = fake({
+      tenants: { 'mercy-general': tenant() },
+      job: job('succeeded', { finishedAt: NOW.toISOString(), receipts: [RB('database', '/s/pg/databases/lhds_mercy_general')] }),
+      submit: (b) => (b.kind === ENGINE_KIND ? engineJob('running') : undefined),
+    });
+    const o = await ensureHealthTenant(input(), f.deps);
+    const [e] = submitsOf(f, ENGINE_KIND);
+    // Breaks if the engine submit is dropped (e is undefined) or keyed differently from the CP chain (`engine-` + create key).
+    expect(e).toMatchObject({ subjectType: 'tenant', subjectId: 'mercy-general' });
+    expect(e.idempotencyKey).toBe(`engine-${f.calls.submitJob[0].idempotencyKey}`);
+    expect(o.phase).toBe('provisioning');
+    // The editor follows THIS job: its receipts are the progress on the real surface.
+    if (o.phase === 'provisioning') expect(o.job.id).toBe('job-engine');
+    expect(f.calls.persist.at(-1)?.engine).toEqual({ status: 'provisioning', jobId: 'job-engine' });
+    expect(f.calls.persist.at(-1)?.status).toBe('bound');
+  });
+
+  it('SELF-HEAL: a verified, bound tenant with NO engine record gets fhir-tenant.create re-submitted (and nothing else)', async () => {
+    const f = fake({ tenants: { 'mercy-general': tenant() }, submit: (b) => (b.kind === ENGINE_KIND ? engineJob('succeeded') : undefined) });
+    const o = await ensureHealthTenant(input({ healthTenant: OLD }), f.deps);
+    expect(f.calls.submitJob.map((b) => b.kind)).toEqual([ENGINE_KIND]); // tenant.create is NOT re-run: it is verified and fresh
+    expect(o.phase).toBe('bound');
+    expect(f.calls.persist.at(-1)?.engine).toEqual({ status: 'ready', jobId: 'job-engine' });
+  });
+
+  it('a bound tenant whose engine is ready submits nothing (the control: no extra job per open)', async () => {
+    const f = fake({ tenants: { 'mercy-general': tenant() } });
+    const o = await ensureHealthTenant(input({ healthTenant: BOUND }), f.deps);
+    expect(o.phase).toBe('bound');
+    expect(f.calls.submitJob).toHaveLength(0); // 1 would mean every open re-submits
+  });
+
+  it('an unknown job kind (no engine host or PDP url on the control plane) is NOT an error: tenant stays bound, engine unavailable, and it says why', async () => {
+    const f = fake({ tenants: { 'mercy-general': tenant() }, submit: (b) => (b.kind === ENGINE_KIND ? unknownKind() : undefined) });
+    const o = await ensureHealthTenant(input({ healthTenant: OLD }), f.deps);
+    expect(o.phase).toBe('bound');
+    expect(o.steps.join(' ')).toMatch(/no FHIR engine host and PDP url configured/);
+    expect(f.calls.persist.at(-1)?.engine).toEqual({ status: 'unavailable' });
+    // Re-asked on the next ensure, so configuring the engine later binds it with no operator step.
+    await ensureHealthTenant(input({ healthTenant: f.calls.persist.at(-1) }), f.deps);
+    expect(submitsOf(f, ENGINE_KIND)).toHaveLength(2);
+  });
+
+  it('any OTHER engine submit failure is reported as a cp-error with its code, never swallowed as "unavailable"', async () => {
+    const f = fake({ tenants: { 'mercy-general': tenant() }, submit: (b) => (b.kind === ENGINE_KIND ? new CpError(502, 'unreachable', 'down') : undefined) });
+    const o = await ensureHealthTenant(input({ healthTenant: OLD }), f.deps);
+    expect(o).toMatchObject({ phase: 'cp-error', code: 'unreachable' });
+  });
+
+  it('a failed engine job is surfaced with the engine job code (tenant record intact); retry:true retries THAT job', async () => {
+    const failedEngine = engineJob('failed', { error: { code: 'engine_not_ready', message: 'no /metadata yet' } });
+    const f = fake({ tenants: { 'mercy-general': tenant() }, submit: (b) => (b.kind === ENGINE_KIND ? failedEngine : undefined) });
+    const o = await ensureHealthTenant(input({ healthTenant: OLD }), f.deps);
+    expect(o).toMatchObject({ phase: 'failed', code: 'engine_not_ready', message: 'FHIR engine: no /metadata yet' });
+    expect(f.calls.retryJob).toHaveLength(0);
+    expect(f.calls.persist.at(-1)).toMatchObject({ status: 'bound', engine: { status: 'failed', jobId: 'job-engine' } });
+    const f2 = fake({ tenants: { 'mercy-general': tenant() }, submit: (b) => (b.kind === ENGINE_KIND ? failedEngine : undefined) });
+    await ensureHealthTenant(input({ healthTenant: OLD }, { retry: true }), f2.deps);
+    expect(f2.calls.retryJob).toEqual(['job-engine']);
+  });
+
+  it('a daily verify re-submits the engine under the matching verify key (a missing engine is rebuilt within a day)', async () => {
+    const old = { ...BOUND, verifiedAt: new Date(NOW.getTime() - VERIFY_TTL_MS - 60_000).toISOString() };
+    const f = fake({ tenants: { 'mercy-general': tenant() }, job: job('succeeded', { finishedAt: NOW.toISOString(), receipts: [RB('database', '/s/pg/databases/lhds_mercy_general')] }), submit: (b) => (b.kind === ENGINE_KIND ? engineJob('succeeded') : undefined) });
+    await ensureHealthTenant(input({ healthTenant: old }), f.deps);
+    expect(f.calls.submitJob.map((b) => b.idempotencyKey)).toEqual(['verify-20261026', 'engine-verify-20261026']);
   });
 });
