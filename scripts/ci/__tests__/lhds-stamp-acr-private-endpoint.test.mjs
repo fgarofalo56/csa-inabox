@@ -359,7 +359,9 @@ test('B2d step script: a MISSING digest key in the PG spec fails the step too (j
 test('B2d step script: a PG import that fails after a good PDP import is NOT swallowed (exit 1, PG named)', () => {
   const r = runStep({ resolveSeq: [`0 ${D}`], pgSeq: ['3 x'], importRc: 9 });
   assert.equal(r.status, 1, r.out);
-  assert.match(r.out, new RegExp(`import of ${pgSpec.source.replace(/\./g, '\\.')}@${pgSpec.digest} into acrtest exited 9`));
+  // Exact substring, no regex: breaks if the PG source/digest is not named or the import rc is not surfaced.
+  const want = `import of ${pgSpec.source}@${pgSpec.digest} into acrtest exited 9`;
+  assert.ok(r.out.includes(want), `expected "${want}" in:\n${r.out}`);
 });
 
 test('B2d health: the control plane gets the FHIR image TAG-pinned to the CP tag and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
