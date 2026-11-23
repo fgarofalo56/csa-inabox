@@ -53,14 +53,21 @@ class PartitionReconcilerTest {
   /** Real JdbcPartitionGrant over a recording DataSource: the SQL text that reaches the driver is what is asserted. */
   static final class RecordingDs {
     final List<String> sql = new ArrayList<>();
+    /** Connection/statement calls in order: autocommit settings and executes. */
+    final List<String> events = new ArrayList<>();
     final DataSource ds = (DataSource) Proxy.newProxyInstance(
         DataSource.class.getClassLoader(), new Class<?>[] {DataSource.class}, (p, m, a) -> {
           if (m.getName().equals("getConnection")) {
             return Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[] {Connection.class}, (cp, cm, ca) -> {
+              if (cm.getName().equals("setAutoCommit")) {
+                events.add("autocommit=" + ca[0]);
+                return null;
+              }
               if (cm.getName().equals("createStatement")) {
                 return Proxy.newProxyInstance(Statement.class.getClassLoader(), new Class<?>[] {Statement.class}, (sp, sm, sa) -> {
                   if (sm.getName().startsWith("execute")) {
                     sql.add((String) sa[0]);
+                    events.add("execute");
                     return false;
                   }
                   return sm.getName().equals("close") ? null : null;
@@ -132,6 +139,15 @@ class PartitionReconcilerTest {
     RecordingDs db = new RecordingDs();
     new PartitionReconciler(store, new JdbcPartitionGrant(db.ds), s -> {}).reconcile(List.of(p(1, "site-a"), p(2, "site-b")), ROLE);
     assertEquals(List.of("GRANT SELECT ON TABLE hfj_partition TO \"" + ROLE + "\""), db.sql);
+  }
+
+  @Test
+  void theGrantRunsInAutocommitModeSetBeforeTheStatement() {
+    // BREAKS when: setAutoCommit(true) is removed (events would be just [execute]) or is called after the GRANT
+    // (a pooled connection with autocommit off would leave the GRANT in an open transaction, never committed).
+    RecordingDs db = new RecordingDs();
+    new JdbcPartitionGrant(db.ds).grantSelect("hfj_partition", ROLE);
+    assertEquals(List.of("autocommit=true", "execute"), db.events);
   }
 
   @Test

@@ -28,6 +28,8 @@ public final class JdbcPartitionGrant implements PartitionGrant {
   public void grantSelect(String table, String role) {
     String sql = sql(table, role);
     try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
+      // A pooled connection may have been handed out with autocommit off: the GRANT must not be left in an open transaction.
+      c.setAutoCommit(true);
       s.execute(sql);
     } catch (SQLException e) {
       throw new IllegalStateException("partitions.grant.failed: " + sql + " -> " + e.getMessage(), e);

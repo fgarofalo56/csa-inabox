@@ -7,6 +7,7 @@ import {
   fhirNames,
   poolSizeFor,
   mergePartitions,
+  reconcileExisting,
   PARTITION_NAME,
   renderEngineConfig,
   type RenderedEngineConfig,
@@ -222,6 +223,11 @@ class FakeHost implements FhirEngineHost {
   ready = true;
   fhirVersion: string | undefined = '4.0.1';
   partitionsHave = new Set<string>();
+  /** Rows of hfj_partition as the database holds them; undefined = unreadable (fresh tenant). */
+  dbRows: Array<{ id: number; name: string }> | undefined;
+  async readPartitionRows() {
+    return this.dbRows ? structuredClone(this.dbRows) : undefined;
+  }
   ensurePartitionsDropsAll = false;
   reportRevision: ((real: string) => string) | undefined;
   removeEngineIsNoop = false;
@@ -441,6 +447,34 @@ describe('fhir-tenant.create', () => {
     // An override-only configure carries the list forward unchanged (it must not roll the engine with an empty list).
     expect((await run('fhir-tenant.configure', 'c2', { maxPageSize: 50 })).state).toBe('succeeded');
     expect(host.applyCalls[2]?.partitions).toEqual([{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }]);
+  });
+
+  it('self-heals ids from the DATABASE when the Deployment annotation is gone: site-a=1 and site-b=2 exist, [site-b] keeps id 2, a new name takes 3', async () => {
+    const { host, run } = setup();
+    host.dbRows = [{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }];
+    expect(host.config).toBeUndefined(); // no Deployment, so no annotation
+    const job = await run('fhir-tenant.create', 'k1', { partitions: ['site-b', 'site-c'] });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    // Input that breaks it: ids taken from the annotation alone would give site-b=1 (a plugin conflict) and no site-a row.
+    expect(host.applyCalls[0]?.partitions).toEqual([{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }, { id: 3, name: 'site-c' }]);
+    expect(job.receipts.find((r) => r.step === 'partitions.ids')?.detail ?? JSON.stringify(job.receipts)).toContain('source=database');
+  });
+
+  it('with the table unreadable the annotation is used and the receipt says so', async () => {
+    const { host, run } = setup();
+    host.dbRows = undefined;
+    const job = await run('fhir-tenant.create', 'k1', { partitions: ['site-b'] });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(host.applyCalls[0]?.partitions).toEqual([{ id: 1, name: 'site-b' }]);
+    expect(JSON.stringify(job.receipts)).toContain('source=annotation');
+    expect(JSON.stringify(job.receipts)).not.toContain('source=database');
+  });
+
+  it('reconcileExisting: the row wins over the annotation, an annotation id taken by another row is reassigned, an annotation-only entry is kept', () => {
+    const r = reconcileExisting([{ id: 1, name: 'site-b' }, { id: 2, name: 'site-c' }, { id: 9, name: 'site-d' }], [{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }]);
+    expect(r.existing).toEqual([{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }, { id: 9, name: 'site-d' }]);
+    expect(r.reassign).toEqual(['site-c']);
+    expect(mergePartitions(r.existing, r.reassign)).toEqual([...r.existing, { id: 10, name: 'site-c' }]); // clears the highest id anywhere
   });
 
   it('refuses the reserved DEFAULT partition name at the door', async () => {

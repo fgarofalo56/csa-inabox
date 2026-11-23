@@ -320,6 +320,8 @@ export function parsePartitionRows(logs: string): PartitionSpec[] {
   return out;
 }
 
+const hfjRead = (n: number): string => `${PARTITION_TABLE} was read (${n} row${n === 1 ? '' : 's'})`;
+
 export interface PartitionComparison {
   /** Desired, and no row has that name or that id. */
   missing: PartitionSpec[];
@@ -522,6 +524,16 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     return parsePartitionRows(logs);
   }
 
+  async readPartitionRows(tenantId: string): Promise<PartitionSpec[] | undefined> {
+    try {
+      return await this.readPartitions(tenantId);
+    } catch (e) {
+      if (!(e instanceof JobFailure)) throw e;
+      this.log('fhir_engine.partition_rows_unreadable', { tenant: tenantId, code: e.code });
+      return undefined;
+    }
+  }
+
   /**
    * The engine creates its own partitions at startup (#5422 decision 11); there is no create here and no `$partition-management-*` call.
    * Wait for the rollout, read the tenant database back, and fail closed on any desired partition that is missing or disagrees.
@@ -533,7 +545,16 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     const secs = this.o.rolloutSeconds ?? DEFAULT_ROLLOUT_SECONDS;
     const roll = await this.o.run.run(t, `kubectl rollout status deployment/${name} -n ${this.ns} --timeout=${secs}s`);
     if (roll.exitCode !== 0) {
-      throw this.failure('engine_rollout_failed', `deployment/${name} is not rolled out, so its partitions cannot have been reconciled; the cause is NOT established`, roll);
+      // The usual cause of a crash-looping engine here is partitions.conflict. Name it only if the table can be read and shows one.
+      const rows = await this.readPartitionRows(tenantId);
+      const cmp = rows ? comparePartitions(desired, rows) : undefined;
+      const clash = cmp && cmp.conflicting.length > 0 ? cmp.conflicting.map((c) => `${c.want.name} (id ${c.want.id}) disagrees with the row ${c.found.name} (id ${c.found.id})`).join('; ') : '';
+      const cause = clash
+        ? `the tenant database holds rows that conflict with the desired partitions (${clash}); the engine refuses to start on such a conflict (partitions.conflict) and never renames or deletes, so this is the likely cause, but the engine log was not read`
+        : rows
+          ? `${hfjRead(rows.length)} and none conflicts with the desired partitions, so a partition conflict is ruled out; the cause is NOT established`
+          : `${PARTITION_TABLE} could not be read; the cause is NOT established`;
+      throw this.failure('engine_rollout_failed', `deployment/${name} is not rolled out, so its partitions cannot have been reconciled; ${cause}`, roll);
     }
     const found = await this.readPartitions(tenantId);
     const cmp = comparePartitions(desired, found);

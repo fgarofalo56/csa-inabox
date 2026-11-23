@@ -573,7 +573,8 @@ describe('RunCommandFhirEngineHost', () => {
     const a = new FakeCluster();
     a.rolloutExit = 1;
     await expect(hostOver(a).ensurePartitions(SLUG, WANT)).rejects.toMatchObject({ code: 'engine_rollout_failed' });
-    expect(a.jobsApplied).toEqual([]); // no PG job was sent for an engine that never rolled out
+    expect(a.jobsApplied.length).toBe(1); // exactly one PG job: the read-only cause lookup (it never creates anything)
+    expect(a.lastJobEnv.LOOM_SQL_1).toMatch(/^SELECT .* FROM hfj_partition/);
     const b = new FakeCluster();
     b.partitionsDenied = true;
     b.jobFails = false;
@@ -581,6 +582,36 @@ describe('RunCommandFhirEngineHost', () => {
     // The Job's own psql output is passed through; the host does not guess why the table is unreadable.
     expect(err.code).toBe('pg_job_failed');
     expect(err.message).toContain('permission denied for table hfj_partition');
+  });
+
+  it('a failed rollout names a partition conflict only when the table shows one; otherwise it says what was ruled out or that the cause is NOT established', async () => {
+    const conflict = new FakeCluster();
+    conflict.rolloutExit = 1;
+    conflict.partitions = [{ id: 7, name: 'site-x' }, { id: 8, name: 'site-b' }]; // id 7 is taken by another name
+    const e1 = (await hostOver(conflict).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error & { code: string };
+    expect(e1.code).toBe('engine_rollout_failed');
+    expect(e1.message).toContain('site-a (id 7) disagrees with the row site-x (id 7)');
+    expect(e1.message).toContain('partitions.conflict');
+    const clean = new FakeCluster();
+    clean.rolloutExit = 1;
+    clean.partitions = [{ id: 7, name: 'site-a' }];
+    const e2 = (await hostOver(clean).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error;
+    expect(e2.message).toContain('a partition conflict is ruled out');
+    expect(e2.message).not.toContain('disagrees');
+    const unreadable = new FakeCluster();
+    unreadable.rolloutExit = 1;
+    unreadable.partitionsDenied = true;
+    const e3 = (await hostOver(unreadable).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error;
+    expect(e3.message).toContain('hfj_partition could not be read; the cause is NOT established');
+    expect(e3.message).not.toContain('ruled out');
+  });
+
+  it('readPartitionRows returns the rows, and undefined (not an empty list) when the table cannot be read', async () => {
+    const c = new FakeCluster();
+    c.partitions = [{ id: 1, name: 'site-a' }];
+    expect(await hostOver(c).readPartitionRows(SLUG)).toEqual([{ id: 1, name: 'site-a' }]);
+    c.partitionsDenied = true;
+    expect(await hostOver(c).readPartitionRows(SLUG)).toBeUndefined();
   });
 
   it('NO command the host sends ever touches $partition-management-* (the engine answers 401 there); the positive controls are the PG job and /metadata', async () => {
@@ -600,7 +631,7 @@ describe('RunCommandFhirEngineHost', () => {
     c.partitions = [{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }];
     expect(await hostOver(c).probeEngine(SLUG, { partitions: true })).toEqual({ ready: true, fhirVersion: '4.0.1', partitions: ['site-a', 'site-b'] });
     c.partitionsDenied = true;
-    await expect(hostOver(c).probeEngine(SLUG, { partitions: true })).rejects.toThrow(); // an unreadable table is never reported as "no partitions"
+    await expect(hostOver(c).probeEngine(SLUG, { partitions: true })).rejects.toMatchObject({ code: 'pg_job_failed' }); // an unreadable table is never reported as "no partitions"
   });
 
   it('removeEngine deletes the three objects by name and fails teardown_incomplete when one is still listed', async () => {

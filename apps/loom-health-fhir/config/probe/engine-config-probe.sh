@@ -65,7 +65,7 @@ start_hapi() { # extra `-e K=V` args follow; the file policy is the same each ti
 start_hapi
 
 # C1
-if docker logs "$HAPI" 2>&1 | grep -q 'Database Partition Mode Enabled: true'; then pass "C1 partition mode on"; else fail "C1 engine did not log 'Database Partition Mode Enabled: true' (key misplaced or ignored)"; fi
+if grep -q 'Database Partition Mode Enabled: true' <<<"$(docker logs "$HAPI" 2>&1)"; then pass "C1 partition mode on"; else fail "C1 engine did not log 'Database Partition Mode Enabled: true' (key misplaced or ignored)"; fi
 
 # create the two facility partitions the checks use
 for p in "1 site-a" "2 site-b"; do
@@ -180,7 +180,7 @@ docker exec "$PG" psql -X -U postgres -d lhds_probe -c "CREATE ROLE $ROLE LOGIN 
 case "$(psql_as 'SELECT count(*) FROM hfj_partition')" in *"permission denied"*) pass "C10-control role has no access to hfj_partition before the reconcile";; *) fail "C10-control role could already read hfj_partition: the grant check below proves nothing";; esac
 WANT='[{"id":1,"name":"site-a"},{"id":2,"name":"site-b"},{"id":3,"name":"site-c"}]'
 start_hapi -v "$PLUGIN_JAR:/app/extra-classes/loom-health-fhir-plugin.jar:ro" -e LOOM_HEALTH_PARTITIONS="$WANT" -e LOOM_HEALTH_PG_ADMIN_ROLE="$ROLE"
-if docker logs "$HAPI" 2>&1 | grep -q '"event":"partitions.reconciled","desired":3,"created":1,"unchanged":2'; then pass "C10a partitions.reconciled logged: 3 desired, 1 created, 2 untouched"; else fail "C10a no partitions.reconciled line with created=1 unchanged=2 (plugin not loaded by the starter, or created the wrong set)"; fi
+if grep -q '"event":"partitions.reconciled","desired":3,"created":1,"unchanged":2' <<<"$(docker logs "$HAPI" 2>&1)"; then pass "C10a partitions.reconciled logged: 3 desired, 1 created, 2 untouched"; else fail "C10a no partitions.reconciled line with created=1 unchanged=2 (plugin not loaded by the starter, or created the wrong set)"; fi
 ROWS=$(psql_as 'SELECT part_id || chr(58) || part_name FROM hfj_partition ORDER BY part_id' | tr '\n' ' ')
 [ "$ROWS" = "1:site-a 2:site-b 3:site-c " ] && pass "C10b the role reads hfj_partition: $ROWS" || fail "C10b role read [$ROWS], expected rows 1:site-a 2:site-b 3:site-c (table or columns differ, or the grant is missing)"
 case "$(psql_as 'SELECT count(*) FROM hfj_resource')" in *"permission denied"*) pass "C10c the grant is partition-table only: hfj_resource is denied";; *) fail "C10c role can read hfj_resource: the grant is wider than hfj_partition";; esac
@@ -196,7 +196,7 @@ docker run -d --name "$HAPI" --network "$NET" -v "$CONF:/opt/loom/fhir/config:ro
 for _ in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Running}}' "$HAPI")" = false ] && break; sleep 3; done
 EXITED=$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "$HAPI")
 case "$EXITED" in "false "[1-9]*) pass "C10e a conflicting desired partition stops the engine (exit ${EXITED#false })";; *) fail "C10e engine state was [$EXITED], expected exited non-zero on a same-id-other-name conflict";; esac
-if docker logs "$HAPI" 2>&1 | grep -q 'partitions.conflict'; then pass "C10f named log line partitions.conflict"; else fail "C10f no partitions.conflict line in the engine log"; fi
+if grep -q 'partitions.conflict' <<<"$(docker logs "$HAPI" 2>&1)"; then pass "C10f named log line partitions.conflict"; else fail "C10f no partitions.conflict line in the engine log"; fi
 ROWS2=$(psql_as 'SELECT part_id || chr(58) || part_name FROM hfj_partition ORDER BY part_id' | tr '\n' ' ')
 [ "$ROWS2" = "$ROWS" ] && pass "C10g the conflict changed nothing (no rename, no delete)" || fail "C10g rows changed after the conflict: [$ROWS2] vs [$ROWS]"
 

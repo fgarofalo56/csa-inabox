@@ -21,6 +21,7 @@ import type { Collection } from '../store/types.js';
 import {
   renderEngineConfig,
   mergePartitions,
+  reconcileExisting,
   OverridesSchema,
   PARTITION_NAME,
   type EngineOverrides,
@@ -69,6 +70,8 @@ export interface FhirEngineHost {
   readEngineConfig(tenantId: string): Promise<AppliedEngineConfig | undefined>;
   /** `partitions: true` also lists the partitions, read from the tenant database (never over HTTP); a host that cannot read them throws rather than report none. */
   probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe>;
+  /** The tenant database's `hfj_partition` rows, or undefined when they cannot be read (a fresh tenant: no table yet; or a failed read). Never throws for that. */
+  readPartitionRows(tenantId: string): Promise<PartitionSpec[] | undefined>;
   /**
    * The engine creates its own partitions at startup from the rendered config (#5422 decision 11); nothing is created here.
    * This waits for the rollout, reads the tenant database back, and throws unless every desired partition is present with the desired id and name.
@@ -234,6 +237,22 @@ async function applyAndVerify(ctx: JobContext, deps: FhirTenantJobDeps, cfg: Ren
   }
 }
 
+/**
+ * The desired list: existing ids (database authoritative over the annotation) plus the requested names. The database is read only when a name
+ * is requested (only then is an id issued); if it cannot be read the annotation is used and the receipt says so.
+ */
+async function desiredPartitions(ctx: JobContext, deps: FhirTenantJobDeps, tenantId: string, annotation: PartitionSpec[], requested: string[]): Promise<PartitionSpec[]> {
+  if (requested.length === 0) return mergePartitions(annotation, []);
+  const db = await deps.engine.readPartitionRows(tenantId);
+  if (!db) {
+    await ctx.receipt('partitions.ids', `source=annotation rows=${annotation.length} (hfj_partition could not be read; a fresh tenant has no table yet)`);
+    return mergePartitions(annotation, requested);
+  }
+  const { existing, reassign } = reconcileExisting(annotation, db);
+  await ctx.receipt('partitions.ids', `source=database rows=${db.length} annotation=${annotation.length} reassigned=${reassign.length}`);
+  return mergePartitions(existing, [...reassign, ...requested]);
+}
+
 function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides | undefined, partitions: PartitionSpec[]): RenderedEngineConfig {
   return renderEngineConfig({
     partitions,
@@ -259,7 +278,7 @@ export function fhirTenantCreateHandler(deps: FhirTenantJobDeps): JobHandler {
       await requireTenantDatabase(ctx, deps, r);
       // Self-heal: an engine that already carries overrides keeps them across a re-run of create.
       const existing = await deps.engine.readEngineConfig(r.tenant.id);
-      const cfg = render(deps, r, existing?.overrides, mergePartitions(existing?.partitions ?? [], (ctx.input.partitions as string[] | undefined) ?? []));
+      const cfg = render(deps, r, existing?.overrides, await desiredPartitions(ctx, deps, r.tenant.id, existing?.partitions ?? [], (ctx.input.partitions as string[] | undefined) ?? []));
       await ensureRole(ctx, deps, cfg);
       await applyAndVerify(ctx, deps, cfg);
     },
@@ -284,7 +303,7 @@ export function fhirTenantConfigureHandler(deps: FhirTenantJobDeps): JobHandler 
       }
       const { partitions, ...patch } = ctx.input as EngineOverrides & { partitions?: string[] };
       const merged: EngineOverrides = { ...existing.overrides, ...patch };
-      const cfg = render(deps, r, merged, mergePartitions(existing.partitions, partitions ?? []));
+      const cfg = render(deps, r, merged, await desiredPartitions(ctx, deps, r.tenant.id, existing.partitions, partitions ?? []));
       await ensureRole(ctx, deps, cfg);
       await applyAndVerify(ctx, deps, cfg);
     },

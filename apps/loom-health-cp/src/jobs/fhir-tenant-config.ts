@@ -92,6 +92,23 @@ export function assertPartitions(list: PartitionSpec[]): void {
 }
 
 /**
+ * The partitions a tenant is known to hold, DATABASE authoritative over the Deployment annotation (auto-bind-by-default section 3: a lost or
+ * pre-existing Deployment must not make ids be reissued over rows that exist). Every database row is kept as it is. An annotation entry whose
+ * name is already a row is the row's (the row's id wins); one whose id is taken by a different row cannot keep that id and comes back in
+ * `reassign`, to be given a fresh id; any other annotation entry is kept (not created yet).
+ */
+export function reconcileExisting(annotation: PartitionSpec[], db: PartitionSpec[]): { existing: PartitionSpec[]; reassign: string[] } {
+  const existing = db.map((p) => ({ id: p.id, name: p.name }));
+  const reassign: string[] = [];
+  for (const a of annotation) {
+    if (existing.some((p) => p.name === a.name)) continue;
+    if (existing.some((p) => p.id === a.id)) reassign.push(a.name);
+    else existing.push({ id: a.id, name: a.name });
+  }
+  return { existing, reassign };
+}
+
+/**
  * The desired list for a tenant: what the running engine already carries (ids never change, nothing is ever dropped, the engine cannot
  * delete or rename) plus any requested name not yet present, which takes the next free id.
  */
