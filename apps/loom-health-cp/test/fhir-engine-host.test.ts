@@ -32,7 +32,9 @@ const SLUG = 'acme-health';
 const DB = 'lhds_acme_health';
 const SUB = '00000000-0000-0000-0000-000000000001';
 const ARM = 'https://management.azure.com';
-const IDENT = { name: 'id-lhds-dev01-acme-health-fhir', clientId: '11111111-2222-3333-4444-555555555555' };
+const PID = 'aaaaaaaa-2222-3333-4444-555555555555';
+const PID2 = 'bbbbbbbb-2222-3333-4444-555555555555';
+const IDENT = { name: 'id-lhds-dev01-acme-health-fhir', clientId: '11111111-2222-3333-4444-555555555555', principalId: PID };
 const PG_FQDN = 'pg-dev01.postgres.database.azure.com';
 const PDP = 'http://loom-health-pdp.loom-health.svc.cluster.local';
 const FHIR_IMAGE = 'acrx.azurecr.io/loom-health-fhir:v0.1';
@@ -180,7 +182,7 @@ describe('renderEngineManifest', () => {
 
 describe('PostgreSQL principal Job', () => {
   it('ensure SQL is idempotent: create is guarded by a pg_roles check, then CONNECT only on the tenant database', () => {
-    const [admin, tenantDb] = ensurePrincipalSteps(IDENT.name, DB);
+    const [admin, tenantDb] = ensurePrincipalSteps(IDENT.name, DB, PID);
     const sql = admin?.sql ?? '';
     const guard = sql.indexOf(`IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${IDENT.name}')`);
     const create = sql.indexOf(`pgaadauth_create_principal('${IDENT.name}', false, false)`);
@@ -194,14 +196,14 @@ describe('PostgreSQL principal Job', () => {
   });
 
   it('refuses a principal or database name that could carry SQL', () => {
-    expect(() => ensurePrincipalSteps("x'; DROP DATABASE y; --", DB)).toThrow(/malformed PostgreSQL principal/);
-    expect(() => ensurePrincipalSteps(IDENT.name, 'lhds_x"; --')).toThrow(/malformed tenant database/);
+    expect(() => ensurePrincipalSteps("x'; DROP DATABASE y; --", DB, PID)).toThrow(/malformed PostgreSQL principal/);
+    expect(() => ensurePrincipalSteps(IDENT.name, 'lhds_x"; --', PID)).toThrow(/malformed tenant database/);
     expect(() => readPrincipalSteps('a b')).toThrow();
     expect(() => removePrincipalSteps(IDENT.name, 'other')).toThrow();
   });
 
   it('the Job runs as lhds-pg-admin with workload identity, a digest-pinned image, no token in the manifest, and one-shot semantics', () => {
-    const m = JSON.parse(renderPgJobManifest({ jobName: 'pgp-x-ab12cd', namespace: 'loom-health', tenantId: SLUG, image: PG_IMAGE, postgresFqdn: PG_FQDN, pgAdminName: TARGET.pgAdminName, pgScope: 'https://ossrdbms-aad.database.windows.net/.default', steps: ensurePrincipalSteps(IDENT.name, DB) })) as Record<string, any>;
+    const m = JSON.parse(renderPgJobManifest({ jobName: 'pgp-x-ab12cd', namespace: 'loom-health', tenantId: SLUG, image: PG_IMAGE, postgresFqdn: PG_FQDN, pgAdminName: TARGET.pgAdminName, pgScope: 'https://ossrdbms-aad.database.windows.net/.default', steps: ensurePrincipalSteps(IDENT.name, DB, PID) })) as Record<string, any>;
     const pod = m.spec.template;
     expect(pod.spec.serviceAccountName).toBe('lhds-pg-admin');
     expect(pod.metadata.labels['azure.workload.identity/use']).toBe('true');
@@ -219,7 +221,7 @@ describe('PostgreSQL principal Job', () => {
     expect(script).not.toMatch(/echo[^\n]*\$TOKEN|set -x/);
     expect(script).toContain('LOOM_PG_DONE=1');
     expect(script.match(/psql /g)).toHaveLength(2);
-    expect(pgJobScript(1).match(/psql /g)).toHaveLength(1);
+    expect(pgJobScript([{ db: 'postgres', sql: 'x' }]).match(/psql /g)).toHaveLength(1);
   });
 });
 
@@ -240,10 +242,10 @@ describe('small parsers', () => {
   });
 
   it('fhirIdentityOf accepts a full identity and rejects a missing, non-GUID or injection-shaped one', () => {
-    expect(fhirIdentityOf({ fhirIdentity: { id: 'i', name: IDENT.name, clientId: IDENT.clientId, principalId: 'p' } })).toEqual(IDENT);
+    expect(fhirIdentityOf({ fhirIdentity: { id: 'i', ...IDENT } })).toEqual(IDENT);
     expect(fhirIdentityOf({})).toBeUndefined();
-    expect(fhirIdentityOf({ fhirIdentity: { name: IDENT.name, clientId: 'nope' } })).toBeUndefined();
-    expect(fhirIdentityOf({ fhirIdentity: { name: "a'b", clientId: IDENT.clientId } })).toBeUndefined();
+    expect(fhirIdentityOf({ fhirIdentity: { name: IDENT.name, clientId: 'nope', principalId: PID } })).toBeUndefined();
+    expect(fhirIdentityOf({ fhirIdentity: { name: "a'b", clientId: IDENT.clientId, principalId: PID } })).toBeUndefined();
   });
 });
 
@@ -271,6 +273,10 @@ class FakeCluster implements AksRunCommand {
   jobsDeleted: string[] = [];
   deleteLeavesWorkload = false;
   workloadPresent = false;
+  /** The tenant database was dropped by tenant.destroy. */
+  dbAbsent = false;
+  /** Entra object id the existing role is bound to. */
+  roleOid: string | undefined;
 
   async run(_t: AksTarget, command: string): Promise<RunCommandResult> {
     this.commands.push(command);
@@ -280,8 +286,7 @@ class FakeCluster implements AksRunCommand {
       const manifest = JSON.parse(/<<'LOOM_MANIFEST_EOF'\n([\s\S]*)\nLOOM_MANIFEST_EOF/.exec(command)?.[1] ?? '{}') as any;
       this.jobsApplied.push(manifest.metadata.name);
       this.lastJobEnv = Object.fromEntries(manifest.spec.template.spec.containers[0].env.map((e: any) => [e.name, e.value]));
-      if (!this.jobFails && Object.values(this.lastJobEnv).some((v) => v.includes('pgaadauth_create_principal'))) this.roleExists = true;
-      if (!this.jobFails && Object.values(this.lastJobEnv).some((v) => v.includes('DROP ROLE'))) this.roleExists = false;
+      this.runJobSql();
       return ok('LOOM_APPLIED=1');
     }
     if (command.includes('"kind":"List"')) {
@@ -320,7 +325,6 @@ class FakeCluster implements AksRunCommand {
       }
       return ok(lines.join('\n'));
     }
-    if (command.includes('partition-management-list-partitions')) return ok(this.partitionsJson());
     if (command.includes('partition-management-create-partition')) {
       for (const m of command.matchAll(/printf '%s' '(\{.*?\})'/g)) {
         const p = JSON.parse(m[1] as string) as any;
@@ -328,6 +332,7 @@ class FakeCluster implements AksRunCommand {
       }
       return ok();
     }
+    if (command.includes('partition-management-list-partitions')) return ok(this.partitionsJson());
     if (command.startsWith('kubectl delete deployment/')) {
       if (!this.deleteLeavesWorkload) {
         this.deployment = undefined;
@@ -337,6 +342,29 @@ class FakeCluster implements AksRunCommand {
     }
     if (command.includes('-o name')) return ok(this.workloadPresent ? `deployment.apps/fhir-${SLUG}\n` : '');
     return { exitCode: 127, logs: `fake cluster: unscripted command ${command.slice(0, 60)}` };
+  }
+
+  /** What psql would do with the applied Job, step by step: a step with no database guard against an absent DB FAILS (psql: database does not exist). */
+  runJobSql(): void {
+    const env = this.lastJobEnv;
+    for (let n = 1; env[`LOOM_SQL_${n}`] !== undefined; n++) {
+      const sql = env[`LOOM_SQL_${n}`] as string;
+      const db = env[`LOOM_DB_${n}`];
+      if (env[`LOOM_REQ_DB_${n}`] && this.dbAbsent) continue; // guarded step skipped
+      if (db === DB && this.dbAbsent) {
+        this.jobFails = true;
+        return;
+      }
+      const oid = /oid=([0-9a-f-]{36})/.exec(sql)?.[1];
+      // The stale-role drop only fires if its guard really is "role exists AND no pgaadauth label with this oid".
+      const dropArmed = /IF EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = '[^']+'\) AND NOT EXISTS \(SELECT 1 FROM pg_seclabels/.test(sql);
+      if (oid && dropArmed && this.roleExists && this.roleOid !== oid) this.roleExists = false; // DROP ROLE of the stale role
+      if (sql.includes('pgaadauth_create_principal') && !this.roleExists) {
+        this.roleExists = true;
+        this.roleOid = oid ?? this.roleOid;
+      }
+      if (sql.includes('DROP ROLE') && !oid) this.roleExists = false;
+    }
   }
 
   partitionsJson(): string {
@@ -362,7 +390,7 @@ describe('RunCommandFhirEngineHost', () => {
     const c = new FakeCluster();
     const h = hostOver(c);
     expect(await h.readDatabaseRole(SLUG, IDENT.name)).toEqual({ exists: false, connectableDatabases: [] });
-    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name });
+    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID });
     expect(await h.readDatabaseRole(SLUG, IDENT.name)).toEqual({ exists: true, connectableDatabases: [DB] });
     // 3 Jobs ran and every one was deleted (2 would mean a leaked Job).
     expect(c.jobsApplied).toHaveLength(3);
@@ -372,9 +400,9 @@ describe('RunCommandFhirEngineHost', () => {
   it('ensure is idempotent at the SQL level: a second ensure sends the same guarded SQL and succeeds', async () => {
     const c = new FakeCluster();
     const h = hostOver(c);
-    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name });
+    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID });
     const first = c.lastJobEnv.LOOM_SQL_1;
-    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name });
+    await h.ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID });
     expect(c.lastJobEnv.LOOM_SQL_1).toBe(first);
     expect(first).toContain('IF NOT EXISTS');
     expect(c.jobsApplied).toHaveLength(2);
@@ -383,7 +411,7 @@ describe('RunCommandFhirEngineHost', () => {
   it('a Job that fails surfaces what it printed, names what is NOT established, and the Job is still deleted', async () => {
     const c = new FakeCluster();
     c.jobFails = true;
-    const err = (await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name }).catch((e: unknown) => e)) as Error & { code: string };
+    const err = (await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID }).catch((e: unknown) => e)) as Error & { code: string };
     expect(err.code).toBe('pg_job_failed');
     expect(err.message).toContain('FATAL: password authentication failed'); // exactly what psql printed
     expect(err.message).toContain('Not established');
@@ -404,7 +432,7 @@ describe('RunCommandFhirEngineHost', () => {
     const c = new FakeCluster();
     c.applyExit = 1;
     c.applyLogs = 'Error from server (Forbidden): jobs.batch is forbidden: User "oid" cannot create resource "jobs"';
-    const err = (await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name }).catch((e: unknown) => e)) as Error & { code: string };
+    const err = (await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID }).catch((e: unknown) => e)) as Error & { code: string };
     expect(err.code).toBe('permission');
     expect(err.message).toContain('kubectl exit 1');
     expect(err.message).toContain('loom-health-cp-edit');
@@ -533,7 +561,7 @@ function e2e() {
       return { state: 'found' as const, value: { postgresFqdn: PG_FQDN, postgresServerId: pgId, aksClusterName: 'aks-lhds-dev01', pgAdminIdentity: { name: TARGET.pgAdminName, clientId: 'c', principalId: 'p' } } };
     },
     async getTenantManifest() {
-      return { state: 'found' as const, value: { fhirIdentity: { id: 'i', ...IDENT, principalId: 'p' } } };
+      return { state: 'found' as const, value: { fhirIdentity: { id: 'i', ...IDENT } } };
     },
     async readResource(id: string) {
       return { id, exists: true, name: DB };
@@ -656,5 +684,94 @@ describe('loadFhirEngineConfig', () => {
     const env = { LOOM_HEALTH_CP_FHIR_IMAGE: FHIR_IMAGE, LOOM_HEALTH_CP_PG_CLIENT_IMAGE: digest };
     expect(loadFhirEngineConfig('commercial', env)?.pgScope).toBe('https://ossrdbms-aad.database.windows.net/.default');
     expect(loadFhirEngineConfig('gcc-high', env)?.pgScope).toBe('https://ossrdbms-aad.database.usgovcloudapi.net/.default');
+  });
+});
+
+// ────────────────────────────────────────────────────────────── rework round 1
+
+describe('teardown when the tenant database is already gone, and ensure for a re-created slug', () => {
+  it('removePrincipalSteps guards ONLY the in-database step; DROP ROLE in postgres is unguarded', () => {
+    const [inDb, inPostgres] = removePrincipalSteps(IDENT.name, DB);
+    expect(inDb?.requireDb).toBe(DB);
+    expect(inPostgres?.requireDb).toBeUndefined(); // a guard here would skip DROP ROLE exactly when the DB is gone
+    expect(inPostgres?.sql).toContain(`DROP ROLE "${IDENT.name}"`);
+    const script = pgJobScript(removePrincipalSteps(IDENT.name, DB));
+    expect(script).toContain('LOOM_SKIPPED_1=database_absent');
+    expect(script).not.toContain('LOOM_SKIPPED_2');
+  });
+
+  it('with the tenant database absent, teardown still drops the role and does not fail on "database does not exist"', async () => {
+    const c = new FakeCluster();
+    c.roleExists = true;
+    c.dbAbsent = true;
+    await hostOver(c).removeDatabaseRole(SLUG, IDENT.name);
+    expect(c.roleExists).toBe(false); // true would mean DROP ROLE never ran
+  });
+
+  it('with the database present the same teardown also runs the in-database step first', async () => {
+    const c = new FakeCluster();
+    c.roleExists = true;
+    await hostOver(c).removeDatabaseRole(SLUG, IDENT.name);
+    expect(c.lastJobEnv.LOOM_REQ_DB_1).toBe(DB);
+    expect(c.roleExists).toBe(false);
+  });
+
+  it('ensure replaces a role bound to an OLD Entra object id and binds the new one (same name, new UAMI)', async () => {
+    const c = new FakeCluster();
+    c.roleExists = true;
+    c.roleOid = PID2; // stale: the destroyed tenant's identity
+    await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID });
+    expect(c.roleExists).toBe(true);
+    expect(c.roleOid).toBe(PID); // PID2 would mean the stale binding was kept
+  });
+
+  it('ensure leaves a role already bound to the CURRENT object id alone (no drop)', async () => {
+    const c = new FakeCluster();
+    c.roleExists = true;
+    c.roleOid = PID;
+    await hostOver(c).ensureDatabaseRole({ tenantId: SLUG, databaseName: DB, roleName: IDENT.name, principalId: PID });
+    expect(c.roleOid).toBe(PID);
+    const sql = ensurePrincipalSteps(IDENT.name, DB, PID)[0]?.sql ?? '';
+    // The oid is interpolated lower-cased and differs per identity: two ids must give two statements.
+    expect(sql).toContain(`oid=${PID}`);
+    expect(ensurePrincipalSteps(IDENT.name, DB, PID2)[0]?.sql).not.toBe(sql);
+    expect(sql.indexOf('DROP ROLE')).toBeLessThan(sql.indexOf('pgaadauth_create_principal'));
+  });
+
+  it('refuses a malformed object id before sending anything', () => {
+    expect(() => ensurePrincipalSteps(IDENT.name, DB, "x' OR '1'='1")).toThrow(/malformed Entra object id/);
+  });
+});
+
+describe('ensurePartitions is safe to re-send', () => {
+  it('every create is preceded, in the same command, by a list check for that partition name', async () => {
+    const c = new FakeCluster();
+    await hostOver(c).ensurePartitions(SLUG, ['site-a', 'site-b']);
+    const cmd = c.commands.find((x) => x.includes('create-partition') && x.includes('printf')) ?? '';
+    for (const n of ['site-a', 'site-b']) {
+      const guard = cmd.indexOf(`grep -q '"valueCode" *: *"${n}"'`);
+      const create = cmd.indexOf('create-partition', guard);
+      expect(guard, `no list guard for ${n}`).toBeGreaterThanOrEqual(0);
+      expect(create).toBeGreaterThan(guard);
+    }
+    expect((cmd.match(/grep -q/g) ?? []).length).toBe(2); // one guard per create
+  });
+});
+
+describe('engine image pin', () => {
+  const mk = (fhirImage: string) => () => new RunCommandFhirEngineHost({ run: new FakeCluster(), target: async () => TARGET, fhirImage, pgClientImage: PG_IMAGE, pgScope: 's' });
+  it('refuses :latest, an untagged reference (also behind a registry port) and accepts an explicit tag or a digest', () => {
+    expect(mk('acrx.azurecr.io/loom-health-fhir:latest')).toThrow(/fhir engine image must carry an explicit tag/i);
+    expect(mk('acrx.azurecr.io/loom-health-fhir:LATEST')).toThrow(/explicit tag/);
+    expect(mk('acrx.azurecr.io/loom-health-fhir')).toThrow(/explicit tag/);
+    expect(mk('acrx.azurecr.io:5000/loom-health-fhir')).toThrow(/explicit tag/); // the port colon is not a tag
+    expect(mk('acrx.azurecr.io/loom-health-fhir:v0.1')).not.toThrow();
+    expect(mk(`acrx.azurecr.io/loom-health-fhir@sha256:${'c'.repeat(64)}`)).not.toThrow();
+  });
+  it('the config loader refuses the same, naming the variable', () => {
+    const base = { LOOM_HEALTH_CP_PG_CLIENT_IMAGE: `acrx.azurecr.io/postgres@sha256:${'b'.repeat(64)}` };
+    expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir:latest' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE.*latest/);
+    expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE/);
+    expect(loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: FHIR_IMAGE })?.fhirImage).toBe(FHIR_IMAGE);
   });
 });

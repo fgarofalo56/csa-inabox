@@ -39,6 +39,16 @@ const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
 const DB_NAME = /^lhds_[a-z0-9_]{1,60}$/;
 const FQDN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 const IMAGE_BY_DIGEST = /^[a-z0-9][a-z0-9.\-/:_]{0,200}@sha256:[0-9a-f]{64}$/;
+/** A digest, or an explicit tag other than `latest`. An untagged reference means `latest`, so it is refused too. */
+export function assertEngineImagePinned(image: string): void {
+  if (image.includes('@sha256:')) return;
+  const last = image.split('/').pop() ?? '';
+  const tag = last.includes(':') ? last.split(':').pop() : '';
+  if (!tag || tag.toLowerCase() === 'latest') {
+    throw new JobFailure('fhir_image_unpinned', 'the FHIR engine image must carry an explicit tag other than latest, or a digest; an untagged or :latest reference can change under a running tenant');
+  }
+}
+
 const PARTITION = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
 
 export interface RunCommandHostOptions {
@@ -142,6 +152,8 @@ export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: stri
 export interface PgStep {
   db: string;
   sql: string;
+  /** Run the step only if this database exists (checked in `postgres` first); otherwise print LOOM_SKIPPED_<n>=database_absent. */
+  requireDb?: string;
 }
 
 function assertPgNames(principal: string, db?: string): void {
@@ -154,12 +166,17 @@ function assertPgNames(principal: string, db?: string): void {
  * `lhds_*` database (the principal inherits PUBLIC, so a role-level grant alone cannot confine it) and the stamp admin
  * group keeps its own access. `pgaadauth_create_principal` errors when the role exists, so it is guarded.
  */
-export function ensurePrincipalSteps(principal: string, db: string): PgStep[] {
+export function ensurePrincipalSteps(principal: string, db: string, principalId: string): PgStep[] {
   assertPgNames(principal, db);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(principalId)) throw new JobFailure('bad_principal_id', 'refusing a malformed Entra object id; nothing was sent');
   return [
     {
       db: 'postgres',
       sql: [
+        // A role of this name bound to ANOTHER Entra object id is a stale one from a destroyed tenant (the re-created UAMI has the
+        // same name and a new object id). Replace it: DROP ROLE refuses while the role owns or is granted anything, so a live
+        // role that was misread as stale fails closed with psql's own message instead of losing data.
+        `DO $do$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}') AND NOT EXISTS (SELECT 1 FROM pg_seclabels WHERE provider = 'pgaadauth' AND objtype = 'role' AND objname = '${principal}' AND label LIKE '%oid=${principalId.toLowerCase()}%') THEN DROP ROLE "${principal}"; END IF; END $do$;`,
         `DO $do$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}') THEN PERFORM pgaadauth_create_principal('${principal}', false, false); END IF; END $do$;`,
         `DO $do$ DECLARE d text; BEGIN FOR d IN SELECT datname FROM pg_database WHERE datname LIKE 'lhds\\_%' LOOP EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', d); EXECUTE format('GRANT CONNECT ON DATABASE %I TO azure_pg_admin', d); END LOOP; END $do$;`,
         `GRANT CONNECT ON DATABASE "${db}" TO "${principal}";`,
@@ -189,13 +206,14 @@ export function removePrincipalSteps(principal: string, db: string): PgStep[] {
   assertPgNames(principal, db);
   const has = `EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${principal}')`;
   return [
-    { db, sql: `DO $do$ BEGIN IF ${has} THEN REASSIGN OWNED BY "${principal}" TO azure_pg_admin; DROP OWNED BY "${principal}"; END IF; END $do$;` },
+    // The tenant database is dropped by tenant.destroy BEFORE a retried teardown can run: step 1 is skipped when it is gone and DROP ROLE still runs.
+    { db, requireDb: db, sql: `DO $do$ BEGIN IF ${has} THEN REASSIGN OWNED BY "${principal}" TO azure_pg_admin; DROP OWNED BY "${principal}"; END IF; END $do$;` },
     { db: 'postgres', sql: `DO $do$ BEGIN IF ${has} THEN DROP ROLE "${principal}"; END IF; END $do$;` },
   ];
 }
 
 /** The shell the PG Job runs: token via the workload-identity federated token, then psql per step. The token is never printed. */
-export function pgJobScript(stepCount: number): string {
+export function pgJobScript(steps: PgStep[]): string {
   const lines = [
     'set -eu',
     'AUTH="${AZURE_AUTHORITY_HOST%/}"',
@@ -204,9 +222,15 @@ export function pgJobScript(stepCount: number): string {
     '[ -n "$TOKEN" ] || { echo "LOOM_ERR=no_access_token"; exit 12; }',
     'export PGPASSWORD="$TOKEN"',
   ];
-  for (let i = 1; i <= stepCount; i++) {
-    lines.push(`printf '%s\\n' "$LOOM_SQL_${i}" | psql -X -q -v ON_ERROR_STOP=1 -At -d "$LOOM_DB_${i}" -f -`);
-  }
+  steps.forEach((step, k) => {
+    const i = k + 1;
+    const run = `printf '%s\\n' "$LOOM_SQL_${i}" | psql -X -q -v ON_ERROR_STOP=1 -At -d "$LOOM_DB_${i}" -f -`;
+    if (step.requireDb) {
+      lines.push(
+        `if [ "$(psql -X -At -d postgres -c "SELECT 1 FROM pg_database WHERE datname = '$LOOM_REQ_DB_${i}'")" = "1" ]; then ${run}; else echo "LOOM_SKIPPED_${i}=database_absent"; fi`,
+      );
+    } else lines.push(run);
+  });
   lines.push('echo LOOM_PG_DONE=1');
   return lines.join('\n');
 }
@@ -230,6 +254,7 @@ export function renderPgJobManifest(i: {
     ...i.steps.flatMap((s, n) => [
       { name: `LOOM_DB_${n + 1}`, value: s.db },
       { name: `LOOM_SQL_${n + 1}`, value: s.sql },
+      ...(s.requireDb ? [{ name: `LOOM_REQ_DB_${n + 1}`, value: s.requireDb }] : []),
     ]),
   ];
   return JSON.stringify({
@@ -252,7 +277,7 @@ export function renderPgJobManifest(i: {
               name: 'psql',
               image: i.image,
               command: ['/bin/sh', '-c'],
-              args: [pgJobScript(i.steps.length)],
+              args: [pgJobScript(i.steps)],
               env,
               resources: { requests: { cpu: '50m', memory: '64Mi' }, limits: { cpu: '250m', memory: '128Mi' } },
               securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } },
@@ -301,6 +326,7 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   private readonly log: (event: string, fields: Record<string, string | number>) => void;
 
   constructor(private readonly o: RunCommandHostOptions) {
+    assertEngineImagePinned(o.fhirImage);
     if (!IMAGE_BY_DIGEST.test(o.pgClientImage)) throw new JobFailure('pg_client_image_unpinned', 'the PG client image must be pinned by digest (name@sha256:<64 hex>)');
     this.ns = o.namespace ?? ENGINE_NAMESPACE;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -375,8 +401,8 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     }
   }
 
-  async ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string }): Promise<void> {
-    await this.runPgJob(i.tenantId, ensurePrincipalSteps(i.roleName, i.databaseName));
+  async ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string; principalId: string }): Promise<void> {
+    await this.runPgJob(i.tenantId, ensurePrincipalSteps(i.roleName, i.databaseName, i.principalId));
   }
 
   async readDatabaseRole(tenantId: string, roleName: string): Promise<RoleReadback> {
@@ -486,7 +512,12 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     const cmds = ['set -e'];
     for (const [i, n] of missing.entries()) {
       const body = JSON.stringify({ resourceType: 'Parameters', parameter: [{ name: 'id', valueInteger: next++ }, { name: 'name', valueCode: n }] });
-      cmds.push(`printf '%s' '${body}' > /tmp/part${i}.json`, `kubectl create --raw '${base}/DEFAULT/$partition-management-create-partition' -f /tmp/part${i}.json`);
+      // create-partition is NOT idempotent, and runCommand may re-send a command whose outcome ARM did not report, so each
+      // create re-lists first and skips a partition that already exists. That makes the whole command safe to re-send.
+      cmds.push(
+        `printf '%s' '${body}' > /tmp/part${i}.json`,
+        `if ! kubectl get --raw '${base}/DEFAULT/$partition-management-list-partitions' | grep -q '"valueCode" *: *"${n}"'; then kubectl create --raw '${base}/DEFAULT/$partition-management-create-partition' -f /tmp/part${i}.json; fi`,
+      );
     }
     const r = await this.o.run.run(t, cmds.join('\n'));
     if (r.exitCode !== 0) throw this.failure('partition_create_failed', `creating partition(s) ${missing.join(', ')} for ${tenantId} failed`, r);

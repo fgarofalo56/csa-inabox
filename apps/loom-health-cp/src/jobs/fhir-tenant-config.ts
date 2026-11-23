@@ -53,6 +53,8 @@ export function fhirNames(slug: string): FhirNames {
 export interface FhirIdentity {
   name: string;
   clientId: string;
+  /** Entra object id of the UAMI: what the PG principal is bound to (a re-created identity has a new one). */
+  principalId: string;
 }
 
 export const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
@@ -63,10 +65,10 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * takes `unknown` so it compiles and behaves the same before and after that lands. undefined = absent or malformed.
  */
 export function fhirIdentityOf(manifest: unknown): FhirIdentity | undefined {
-  const v = (manifest as { fhirIdentity?: { name?: unknown; clientId?: unknown } } | null | undefined)?.fhirIdentity;
-  if (!v || typeof v.name !== 'string' || typeof v.clientId !== 'string') return undefined;
-  if (!IDENTITY_NAME.test(v.name) || !GUID.test(v.clientId)) return undefined;
-  return { name: v.name, clientId: v.clientId };
+  const v = (manifest as { fhirIdentity?: { name?: unknown; clientId?: unknown; principalId?: unknown } } | null | undefined)?.fhirIdentity;
+  if (!v || typeof v.name !== 'string' || typeof v.clientId !== 'string' || typeof v.principalId !== 'string') return undefined;
+  if (!IDENTITY_NAME.test(v.name) || !GUID.test(v.clientId) || !GUID.test(v.principalId)) return undefined;
+  return { name: v.name, clientId: v.clientId, principalId: v.principalId };
 }
 
 /** The datasource plugin baked into the engine image by lane B2b. */
@@ -132,8 +134,8 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   if (!/^https?:$/.test(pdp.protocol) || pdp.username || pdp.password || pdp.search || pdp.hash) {
     throw new JobFailure('pdp_url_invalid', 'the PDP url must be http(s) without credentials, query or fragment');
   }
-  if (!IDENTITY_NAME.test(i.identity.name) || !GUID.test(i.identity.clientId)) {
-    throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name or client id; the engine cannot be bound to it, so no engine is configured');
+  if (!IDENTITY_NAME.test(i.identity.name) || !GUID.test(i.identity.clientId) || !GUID.test(i.identity.principalId)) {
+    throw new JobFailure('fhir_identity_invalid', 'the tenant FHIR identity has an invalid name, client id or principal id; the engine cannot be bound to it, so no engine is configured');
   }
   const overrides = OverridesSchema.parse(i.overrides ?? {});
   const maxPage = overrides.maxPageSize ?? BASE_MAX_PAGE_SIZE;
@@ -162,7 +164,7 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
     LOOM_HEALTH_PDP_URL: pdp.toString().replace(/\/$/, ''),
     LOOM_HEALTH_PDP_TIMEOUT_MS: '1500',
   };
-  const identity = { name: i.identity.name, clientId: i.identity.clientId };
+  const identity = { name: i.identity.name, clientId: i.identity.clientId, principalId: i.identity.principalId };
   const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const };
   const revision = createHash('sha256').update(canonical(body)).digest('hex');
   return { ...body, revision };

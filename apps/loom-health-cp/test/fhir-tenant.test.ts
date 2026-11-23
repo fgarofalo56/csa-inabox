@@ -29,7 +29,7 @@ const PG_ID = `/subscriptions/s/resourceGroups/${RG}/providers/Microsoft.DBforPo
 const PG_FQDN = 'pg-dev01.postgres.database.azure.com';
 const PDP = 'http://pdp.lhds.svc.cluster.local:8181';
 const DB = tenantNames(STAMP, SLUG).databaseName;
-const IDENT = { name: `id-lhds-${STAMP}-${SLUG}-fhir`, clientId: '11111111-2222-3333-4444-555555555555' };
+const IDENT = { name: `id-lhds-${STAMP}-${SLUG}-fhir`, clientId: '11111111-2222-3333-4444-555555555555', principalId: 'aaaaaaaa-2222-3333-4444-555555555555' };
 
 const ENGINE_DIR = new URL('../../loom-health-fhir/', import.meta.url);
 const read = (rel: string) => readFileSync(new URL(rel, ENGINE_DIR), 'utf8');
@@ -55,8 +55,8 @@ describe('renderEngineConfig', () => {
   });
 
   it('refuses a malformed identity and puts the identity in the revision', () => {
-    expect(() => renderEngineConfig({ ...baseInput, identity: { name: 'bad name!', clientId: IDENT.clientId } })).toThrow(/invalid name or client id/);
-    expect(() => renderEngineConfig({ ...baseInput, identity: { name: IDENT.name, clientId: 'not-a-guid' } })).toThrow(/invalid name or client id/);
+    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, name: "bad name!" } })).toThrow(/invalid name, client id or principal id/);
+    expect(() => renderEngineConfig({ ...baseInput, identity: { ...IDENT, clientId: "not-a-guid" } })).toThrow(/invalid name, client id or principal id/);
     // A re-created identity (new client id) must re-apply: equal revisions would leave the old annotation in place.
     expect(renderEngineConfig({ ...baseInput, identity: { ...IDENT, clientId: '99999999-2222-3333-4444-555555555555' } }).revision).not.toBe(renderEngineConfig(baseInput).revision);
   });
@@ -223,7 +223,7 @@ class FakeArm implements Partial<TenantArm> {
   stampManifest: Record<string, unknown> = { postgresFqdn: PG_FQDN, postgresServerId: PG_ID };
   databases = new Map<string, string>([[`${PG_ID}/databases/${DB}`, DB]]);
   readError: Error | undefined;
-  tenantManifest: Record<string, unknown> | 'absent' = { fhirIdentity: { id: 'x', name: IDENT.name, clientId: IDENT.clientId, principalId: 'p' } };
+  tenantManifest: Record<string, unknown> | 'absent' = { fhirIdentity: { id: 'x', ...IDENT } };
   async getTenantManifest() {
     return this.tenantManifest === 'absent' ? { state: 'absent' as const } : { state: 'found' as const, value: this.tenantManifest };
   }
@@ -263,7 +263,7 @@ function setup(tenantStatus: TenantDoc['status'] = 'active') {
     await runner.idle();
     return runner.get(job.id);
   };
-  return { arm, host, tenants, runner, run };
+  return { arm, host, stamps, tenants, runner, run };
 }
 
 describe('fhir-tenant.create', () => {
@@ -442,7 +442,21 @@ describe('fhir-tenant identity (from the tenant manifest)', () => {
     const job = await run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
     expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
     expect(job.receipts.map((r) => r.step)).toEqual(['engine.removed', 'role.skipped']);
+    expect(job.receipts[1]?.detail).toContain('no valid fhirIdentity output');
     expect(host.removeRoleCalls).toBe(0);
+  });
+
+  it('the role.skipped receipt names the cause that was observed: deployment absent, no outputs, or stamp not registered', async () => {
+    const absent = setup('destroying');
+    absent.arm.tenantManifest = 'absent';
+    const a = await absent.run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
+    expect(a.receipts[1]?.detail).toContain(`lhds-tenant-${SLUG} was not found`);
+    expect(a.receipts[1]?.detail).not.toContain('fhirIdentity'); // an absent deployment must not be reported as a missing field
+    const noStamp = setup('destroying');
+    noStamp.stamps.docs.delete(STAMP);
+    const s = await noStamp.run('fhir-tenant.teardown', 't1', { confirmTenantId: SLUG });
+    expect(s.receipts[1]?.detail).toContain('stamp that is not registered');
+    expect(s.receipts[1]?.detail).not.toContain('was not found');
   });
 });
 

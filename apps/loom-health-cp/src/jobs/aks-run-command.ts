@@ -5,8 +5,8 @@
 //
 // Learn caveat, accepted by the operator (#5422): runCommand is documented as not meant for programmatic use and has
 // a 60 s scheduling timeout (the command pod must start within it) and a 512 kB output ceiling. So:
-//   - every command this client is given must be IDEMPOTENT (apply, get, delete --ignore-not-found), because the
-//     one retry below re-sends a command whose outcome ARM did not report;
+//   - every command this client is given must be SAFE TO RE-SEND (apply, get, delete --ignore-not-found, or a create that
+//     re-checks first, as ensurePartitions does), because the retry below re-sends a command whose outcome ARM did not report;
 //   - the retry fires ONLY when ARM ended the operation without an exit code (the command did not report back), never
 //     when kubectl exited non-zero: a non-zero exit is an answer and is returned to the caller;
 //   - errors say what was established. "kubectl did not run" is never claimed; only "ARM reported no exit code".
@@ -150,7 +150,7 @@ export class RestAksRunCommand implements AksRunCommand {
     }
     throw new JobFailure(
       'run_command_no_result',
-      `runCommand on ${target.cluster} ended without an exit code on all ${RUN_COMMAND_ATTEMPTS} attempt(s) (${last}). Whether kubectl ran is NOT established; every command sent is idempotent, so retrying the job is safe. Microsoft documents a 60 s scheduling timeout for the command pod.`,
+      `runCommand on ${target.cluster} ended without an exit code on all ${RUN_COMMAND_ATTEMPTS} attempt(s) (${last}). Whether kubectl ran is NOT established; every command this client is given is written to be safe to re-send, so retrying the job is safe. Microsoft documents a 60 s scheduling timeout for the command pod.`,
     );
   }
 
@@ -184,7 +184,7 @@ export class RestAksRunCommand implements AksRunCommand {
     }
     throw new JobFailure(
       'run_command_timeout',
-      `runCommand ${id} was still not finished after ${this.maxPolls} poll(s) of ${this.pollMs} ms. Whether it completed is NOT established; every command sent is idempotent, so retrying the job is safe.`,
+      `runCommand ${id} was still not finished after ${this.maxPolls} poll(s) of ${this.pollMs} ms. Whether it completed is NOT established; every command this client is given is written to be safe to re-send, so retrying the job is safe.`,
     );
   }
 }

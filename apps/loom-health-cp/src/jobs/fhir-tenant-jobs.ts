@@ -48,8 +48,9 @@ export interface FhirEngineHost {
   /**
    * Idempotent: ensure the Entra PostgreSQL principal `roleName` (the tenant FHIR identity's name) exists, grant CONNECT
    * on `databaseName` only, and the schema privileges the engine needs to create its tables. No credential is involved.
+   * A same-named principal bound to a DIFFERENT Entra object id (a re-created identity) is replaced, never reused.
    */
-  ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string }): Promise<void>;
+  ensureDatabaseRole(i: { tenantId: string; databaseName: string; roleName: string; principalId: string }): Promise<void>;
   readDatabaseRole(tenantId: string, roleName: string): Promise<RoleReadback>;
   removeDatabaseRole(tenantId: string, roleName: string): Promise<void>;
   applyEngineConfig(cfg: RenderedEngineConfig): Promise<void>;
@@ -158,7 +159,7 @@ async function ensureRole(ctx: JobContext, deps: FhirTenantJobDeps, cfg: Rendere
   let have = await deps.engine.readDatabaseRole(cfg.tenantId, want.roleName);
   const scoped = (rb: typeof have) => rb.exists && rb.connectableDatabases.length === 1 && rb.connectableDatabases[0] === want.databaseName;
   if (!scoped(have)) {
-    await deps.engine.ensureDatabaseRole({ tenantId: cfg.tenantId, databaseName: want.databaseName, roleName: want.roleName });
+    await deps.engine.ensureDatabaseRole({ tenantId: cfg.tenantId, databaseName: want.databaseName, roleName: want.roleName, principalId: cfg.identity.principalId });
     await ctx.receipt('role.ensured', `role=${want.roleName} database=${want.databaseName}`);
     have = await deps.engine.readDatabaseRole(cfg.tenantId, want.roleName);
   } else {
@@ -296,16 +297,23 @@ export function fhirTenantTeardownHandler(deps: FhirTenantJobDeps): JobHandler {
       // fhirIdentity there (a tenant that never had an engine) nothing is established to remove, and that is said.
       const stamp = await deps.stamps.get(tenant.stampId);
       let identity: FhirIdentity | undefined;
+      // The receipt names the cause that was actually observed, never a guess.
+      let skipCause = 'the tenant references a stamp that is not registered';
       if (stamp) {
         try {
           const tm = await deps.arm.getTenantManifest(stampResourceGroup(stamp.id, stamp.region), tenant.id);
-          identity = tm.state === 'found' ? fhirIdentityOf(tm.value) : undefined;
+          if (tm.state === 'found') {
+            identity = fhirIdentityOf(tm.value);
+            skipCause = 'the tenant manifest has no valid fhirIdentity output (absent or malformed)';
+          } else {
+            skipCause = tm.state === 'absent' ? `the tenant deployment lhds-tenant-${tenant.id} was not found` : `the tenant deployment lhds-tenant-${tenant.id} returned no outputs`;
+          }
         } catch (e) {
           throw classifyArm(e);
         }
       }
       if (!identity) {
-        await ctx.receipt('role.skipped', 'the tenant manifest carries no fhirIdentity; no database principal was established to remove');
+        await ctx.receipt('role.skipped', `${skipCause}; no database principal name was established, so none was removed`);
         return;
       }
       await deps.engine.removeDatabaseRole(tenant.id, identity.name);

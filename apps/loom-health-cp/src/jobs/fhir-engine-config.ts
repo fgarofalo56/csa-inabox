@@ -7,7 +7,7 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import { ConfigError, type Cloud } from '../config.js';
 import { RestAksRunCommand } from './aks-run-command.js';
-import { armEngineTarget, RunCommandFhirEngineHost } from './fhir-engine-host.js';
+import { armEngineTarget, assertEngineImagePinned, RunCommandFhirEngineHost } from './fhir-engine-host.js';
 import type { TenantArmConfig } from './tenant-arm-config.js';
 import type { TenantArm } from './tenant-arm.js';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
@@ -38,6 +38,11 @@ export function loadFhirEngineConfig(cloud: Cloud, env: NodeJS.ProcessEnv = proc
   const missing = [!fhirImage && 'LOOM_HEALTH_CP_FHIR_IMAGE', !pgClientImage && 'LOOM_HEALTH_CP_PG_CLIENT_IMAGE'].filter(Boolean);
   if (missing.length > 0) throw new ConfigError(`the FHIR engine host needs both images; missing: ${missing.join(', ')}`);
   if (!IMAGE.test(fhirImage)) throw new ConfigError('LOOM_HEALTH_CP_FHIR_IMAGE must be an image reference');
+  try {
+    assertEngineImagePinned(fhirImage);
+  } catch {
+    throw new ConfigError('LOOM_HEALTH_CP_FHIR_IMAGE must carry an explicit tag other than latest, or a digest');
+  }
   if (!IMAGE_BY_DIGEST.test(pgClientImage)) throw new ConfigError('LOOM_HEALTH_CP_PG_CLIENT_IMAGE must be pinned by digest (name@sha256:<64 hex>)');
   return { fhirImage, pgClientImage, pgScope: PG_SCOPE_BY_CLOUD[cloud] };
 }
