@@ -597,9 +597,15 @@ export class RestTenantArm implements TenantArm {
   async getStampManifest(rg: string, stampId: string): Promise<Lookup<Json>> {
     const r = await this.call('GET', this.arm(this.deploymentPath(rg, stampDeploymentName(stampId))), this.armScope, 'read stamp deployment');
     if (r.status === 404) return { state: 'absent' };
-    const out = ((r.json?.properties as Json | undefined)?.outputs as Json | undefined)?.stamp as Json | undefined;
-    const value = out?.value as Json | undefined;
-    return value ? { state: 'found', value } : { state: 'no_outputs' };
+    const outputs = (r.json?.properties as Json | undefined)?.outputs as Json | undefined;
+    const value = (outputs?.stamp as Json | undefined)?.value as Json | undefined;
+    if (!value) return { state: 'no_outputs' };
+    // stamp.bicep emits the PG role-job identity as its OWN top-level output (`output pgAdminIdentity object`), not
+    // inside `stamp`. Every consumer reads it as manifest.pgAdminIdentity, so it is merged in here, from the one place the
+    // deployment record is read. Reading only `stamp` made every fhir-tenant.create fail stamp_manifest_incomplete live
+    // (W2-2b B3, run 45121806911) while each lane's stubbed tests passed.
+    const pgAdmin = (outputs?.pgAdminIdentity as Json | undefined)?.value as Json | undefined;
+    return { state: 'found', value: pgAdmin ? { ...value, pgAdminIdentity: pgAdmin } : value };
   }
 
   async getTenantManifest(rg: string, slug: string): Promise<Lookup<TenantManifest>> {
