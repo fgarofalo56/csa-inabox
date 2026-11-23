@@ -11,7 +11,9 @@ import {
   armEngineTarget,
   ensurePrincipalSteps,
   excerpt,
-  parsePartitions,
+  comparePartitions,
+  parsePartitionRows,
+  readPartitionSteps,
   pgJobScript,
   readPrincipalSteps,
   removePrincipalSteps,
@@ -42,7 +44,7 @@ const PG_IMAGE = `acrx.azurecr.io/postgres@sha256:${'a'.repeat(64)}`;
 const TARGET: EngineTarget = { resourceGroup: 'rg-csa-loom-health-dev01-eastus2', cluster: 'aks-lhds-dev01', postgresFqdn: PG_FQDN, pgAdminName: 'id-lhds-dev01-pgadmin' };
 
 const cfgFor = (over: Partial<Parameters<typeof renderEngineConfig>[0]> = {}) =>
-  renderEngineConfig({ tenantId: SLUG, stampId: 'dev01', postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, ...over });
+  renderEngineConfig({ tenantId: SLUG, stampId: 'dev01', postgresFqdn: PG_FQDN, identity: IDENT, maxRequestsPerMinute: 600, pdpUrl: PDP, pgAdminName: TARGET.pgAdminName, ...over });
 
 // ────────────────────────────────────────────────────────────── runCommand client
 
@@ -239,10 +241,26 @@ describe('small parsers', () => {
     expect(out.length).toBeLessThanOrEqual(103);
   });
 
-  it('parsePartitions reads id+name pairs and ignores junk', () => {
-    const body = JSON.stringify({ resourceType: 'Parameters', parameter: [{ name: 'partition', part: [{ name: 'id', valueInteger: 3 }, { name: 'name', valueCode: 'site-a' }] }, { name: 'x' }] });
-    expect(parsePartitions(body)).toEqual([{ id: 3, name: 'site-a' }]);
-    expect(parsePartitions('not json')).toEqual([]);
+  it('parsePartitionRows reads LOOM_PARTITION=<id>:<name> lines and ignores everything else', () => {
+    expect(parsePartitionRows('EXIT=0\nLOOM_PARTITION=3:site-a\nnoise LOOM_PARTITION=9:x\nLOOM_PARTITION=4:site-b\nLOOM_PG_DONE=1')).toEqual([{ id: 3, name: 'site-a' }, { id: 4, name: 'site-b' }]);
+    expect(parsePartitionRows('not a row')).toEqual([]);
+  });
+
+  it('comparePartitions: present is ok, absent is missing, same name other id and same id other name are conflicts, extras are tolerated', () => {
+    const want = [{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }, { id: 3, name: 'site-c' }];
+    expect(comparePartitions(want, [{ id: 1, name: 'site-a' }, { id: 2, name: 'site-b' }, { id: 3, name: 'site-c' }, { id: 9, name: 'extra' }])).toEqual({ missing: [], conflicting: [] });
+    expect(comparePartitions(want, [{ id: 1, name: 'site-a' }]).missing.map((p) => p.name)).toEqual(['site-b', 'site-c']);
+    const c = comparePartitions(want, [{ id: 1, name: 'site-a' }, { id: 5, name: 'site-b' }, { id: 3, name: 'other' }]);
+    expect(c.missing).toEqual([]);
+    expect(c.conflicting.map((x) => x.want.name)).toEqual(['site-b', 'site-c']);
+  });
+
+  it('the partition readback SQL selects hfj_partition in the TENANT database and nothing else', () => {
+    const [step, ...rest] = readPartitionSteps(DB);
+    expect(rest).toEqual([]);
+    expect(step?.db).toBe(DB);
+    expect(step?.sql).toBe("SELECT 'LOOM_PARTITION=' || part_id || ':' || part_name FROM hfj_partition ORDER BY part_id;");
+    expect(() => readPartitionSteps('postgres')).toThrow(/malformed tenant database name/);
   });
 });
 
@@ -264,7 +282,13 @@ class FakeCluster implements AksRunCommand {
   applyExit = 0;
   applyLogs = '';
   rolloutExit = 0;
+  /** The tenant database's hfj_partition rows. */
   partitions: Array<{ id: number; name: string }> = [];
+  partsAnnotation = '';
+  /** Simulate the engine reconciling at startup when a Deployment is applied. */
+  engineReconciles = true;
+  /** The grant to the PG admin is absent. */
+  partitionsDenied = false;
   lastJobEnv: Record<string, string> = {};
   jobsApplied: string[] = [];
   jobsDeleted: string[] = [];
@@ -291,6 +315,8 @@ class FakeCluster implements AksRunCommand {
       const m = JSON.parse(/<<'LOOM_MANIFEST_EOF'\n([\s\S]*)\nLOOM_MANIFEST_EOF/.exec(command)?.[1] ?? '{}') as any;
       const d = m.items.find((i: any) => i.kind === 'Deployment');
       this.deployment = { rev: d.metadata.annotations['loom.health/engine-revision'], ovr: d.metadata.annotations['loom.health/engine-overrides'], part: d.metadata.annotations['loom.health/partitioning'] };
+      this.partsAnnotation = d.metadata.annotations['loom.health/partitions'] ?? '';
+      if (this.engineReconciles) this.reconcileFrom(d.spec.template.spec.containers[0].env);
       this.workloadPresent = true;
       return this.rolloutExit === 0 ? ok('LOOM_APPLIED=1\ndeployment successfully rolled out') : { exitCode: this.rolloutExit, logs: 'LOOM_APPLIED=1\nerror: timed out waiting for the condition' };
     }
@@ -299,6 +325,10 @@ class FakeCluster implements AksRunCommand {
     if (command.includes('kubectl logs')) {
       if (this.jobFails) return ok('EXIT=1\npsql: error: FATAL: password authentication failed');
       const sql = this.lastJobEnv.LOOM_SQL_1 ?? '';
+      if (sql.includes('hfj_partition')) {
+        if (this.partitionsDenied) return ok('EXIT=1\npsql: error: ERROR:  permission denied for table hfj_partition');
+        return ok(['EXIT=0', ...this.partitions.map((p) => `LOOM_PARTITION=${p.id}:${p.name}`), 'LOOM_PG_DONE=1'].join('\n'));
+      }
       if (sql.includes('LOOM_ROLE_EXISTS')) {
         const dbs = this.roleExists ? this.roleDbs.map((d) => `LOOM_ROLE_DB=${d}`) : [];
         return ok(['EXIT=0', `LOOM_ROLE_EXISTS=${this.roleExists ? 't' : 'f'}`, ...dbs, 'LOOM_PG_DONE=1'].join('\n'));
@@ -310,7 +340,7 @@ class FakeCluster implements AksRunCommand {
       return ok();
     }
     if (command.includes('kubectl get deployment/') && command.includes('jsonpath')) {
-      return ok(this.deployment ? `FOUND=fhir-${SLUG}\nREV=${this.deployment.rev}\nPART=${this.deployment.part}\nOVR=${this.deployment.ovr}\n` : '');
+      return ok(this.deployment ? `FOUND=fhir-${SLUG}\nREV=${this.deployment.rev}\nPART=${this.deployment.part}\nOVR=${this.deployment.ovr}\nPARTS=${this.partsAnnotation}\n` : '');
     }
     if (command.includes('/metadata')) {
       const lines = [`LOOM_PROBE_RC=${this.proxyRc}`];
@@ -318,18 +348,10 @@ class FakeCluster implements AksRunCommand {
       else {
         if (this.capability) lines.push('LOOM_CAPABILITY=1');
         if (this.fhirVersion) lines.push(`LOOM_FHIR_VERSION=${this.fhirVersion}`);
-        if (command.includes('partition-management-list-partitions')) lines.push('LOOM_PARTITIONS_RC=0', `LOOM_PARTITIONS_JSON=${this.partitionsJson()}`);
       }
       return ok(lines.join('\n'));
     }
-    if (command.includes('partition-management-create-partition')) {
-      for (const m of command.matchAll(/printf '%s' '(\{.*?\})'/g)) {
-        const p = JSON.parse(m[1] as string) as any;
-        this.partitions.push({ id: p.parameter[0].valueInteger, name: p.parameter[1].valueCode });
-      }
-      return ok();
-    }
-    if (command.includes('partition-management-list-partitions')) return ok(this.partitionsJson());
+    if (command.startsWith('kubectl rollout status')) return this.rolloutExit === 0 ? ok('deployment successfully rolled out') : { exitCode: this.rolloutExit, logs: 'error: timed out waiting for the condition' };
     if (command.startsWith('kubectl delete deployment/')) {
       if (!this.deleteLeavesWorkload) {
         this.deployment = undefined;
@@ -364,8 +386,10 @@ class FakeCluster implements AksRunCommand {
     }
   }
 
-  partitionsJson(): string {
-    return JSON.stringify({ resourceType: 'Parameters', parameter: this.partitions.map((p) => ({ name: 'partition', part: [{ name: 'id', valueInteger: p.id }, { name: 'name', valueCode: p.name }] })) });
+  /** What the real engine does at startup: it reads LOOM_HEALTH_PARTITIONS and creates the missing rows itself (the plugin's reconciler). */
+  reconcileFrom(env: Array<{ name: string; value: string }>): void {
+    const want = JSON.parse(env.find((e) => e.name === 'LOOM_HEALTH_PARTITIONS')?.value ?? '[]') as Array<{ id: number; name: string }>;
+    for (const w of want) if (!this.partitions.some((p) => p.id === w.id && p.name === w.name)) this.partitions.push(w);
   }
 }
 
@@ -460,7 +484,7 @@ describe('RunCommandFhirEngineHost', () => {
     expect(await h.readEngineConfig(SLUG)).toBeUndefined();
     const cfg = cfgFor({ overrides: { maxPageSize: 50 } });
     await h.applyEngineConfig(cfg);
-    expect(await h.readEngineConfig(SLUG)).toEqual({ revision: cfg.revision, overrides: { maxPageSize: 50 }, partitioning: true });
+    expect(await h.readEngineConfig(SLUG)).toEqual({ revision: cfg.revision, overrides: { maxPageSize: 50 }, partitioning: true, partitions: [] });
     const sent = c.commands.find((x) => x.includes('"kind":"List"')) ?? '';
     expect(sent).toContain(`"azure.workload.identity/client-id":"${IDENT.clientId}"`);
     expect(sent).toContain('"azure.workload.identity/use":"true"');
@@ -504,19 +528,110 @@ describe('RunCommandFhirEngineHost', () => {
     await expect(hostOver(c).probeEngine(SLUG)).rejects.toMatchObject({ code: 'permission' });
   });
 
-  it('ensurePartitions creates only the missing ones with the next free ids, and reads them back', async () => {
+  const WANT = [{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }];
+
+  it('the Deployment carries the desired partitions as an annotation and as LOOM_HEALTH_PARTITIONS, and readEngineConfig hands the list back', async () => {
     const c = new FakeCluster();
-    c.partitions = [{ id: 7, name: 'site-a' }];
-    await hostOver(c).ensurePartitions(SLUG, ['site-a', 'site-b']);
-    // site-a existed (id 7): re-creating it would duplicate; site-b gets 8, not 1.
-    expect(c.partitions).toEqual([{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }]);
+    const h = hostOver(c);
+    const cfg = cfgFor({ partitions: WANT });
+    await h.applyEngineConfig(cfg);
+    const dep = (JSON.parse(renderEngineManifest(cfg, { image: FHIR_IMAGE, namespace: 'loom-health' })) as { items: Array<Record<string, any>> }).items.find((i) => i.kind === 'Deployment')!;
+    expect(dep.metadata.annotations['loom.health/partitions']).toBe('[{"id":7,"name":"site-a"},{"id":8,"name":"site-b"}]');
+    expect(dep.spec.template.spec.containers[0].env.find((e: any) => e.name === 'LOOM_HEALTH_PARTITIONS').value).toBe('[{"id":7,"name":"site-a"},{"id":8,"name":"site-b"}]');
+    expect((await h.readEngineConfig(SLUG))?.partitions).toEqual(WANT);
   });
 
-  it('ensurePartitions fails readback_mismatch when the engine accepted a create but still does not list it', async () => {
+  it('ensurePartitions waits for the rollout, reads hfj_partition through the PG job, and passes when every desired row is there', async () => {
     const c = new FakeCluster();
-    const run = c.run.bind(c);
-    c.run = async (t, cmd) => (cmd.includes('partition-management-create-partition') ? { exitCode: 0, logs: '' } : run(t, cmd));
-    await expect(hostOver(c).ensurePartitions(SLUG, ['site-z'])).rejects.toMatchObject({ code: 'readback_mismatch' });
+    c.partitions = [{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }, { id: 99, name: 'extra' }];
+    await hostOver(c).ensurePartitions(SLUG, WANT);
+    const rollout = c.commands.findIndex((x) => x.startsWith('kubectl rollout status deployment/fhir-acme-health'));
+    const job = c.commands.findIndex((x) => x.includes('"kind":"Job"'));
+    expect(rollout, 'a rollout wait was sent').toBeGreaterThanOrEqual(0);
+    expect(job, 'a PG job was sent').toBeGreaterThan(rollout);
+    expect(c.lastJobEnv.LOOM_SQL_1).toContain('FROM hfj_partition');
+    expect(c.lastJobEnv.LOOM_DB_1).toBe(DB);
+  });
+
+  it('ensurePartitions fails readback_mismatch, naming the partition, when a desired row is absent (a mismatch is never accepted)', async () => {
+    const c = new FakeCluster();
+    c.partitions = [{ id: 7, name: 'site-a' }];
+    const err = (await hostOver(c).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error & { code: string };
+    expect(err.code).toBe('readback_mismatch');
+    expect(err.message).toContain('site-b (id 8) is absent');
+    expect(err.message).not.toContain('site-a (id 7) is absent'); // the present row is not blamed
+    expect(err.message).toContain('Not established: why');
+  });
+
+  it('ensurePartitions fails readback_mismatch on a row with the desired name under another id', async () => {
+    const c = new FakeCluster();
+    c.partitions = [{ id: 7, name: 'site-a' }, { id: 3, name: 'site-b' }];
+    await expect(hostOver(c).ensurePartitions(SLUG, WANT)).rejects.toMatchObject({ code: 'readback_mismatch', message: expect.stringContaining('disagrees with the row site-b (id 3)') });
+  });
+
+  it('ensurePartitions: an unrolled-out engine and an ungranted table are each their own TRUE error', async () => {
+    const a = new FakeCluster();
+    a.rolloutExit = 1;
+    await expect(hostOver(a).ensurePartitions(SLUG, WANT)).rejects.toMatchObject({ code: 'engine_rollout_failed' });
+    expect(a.jobsApplied.length).toBe(1); // exactly one PG job: the read-only cause lookup (it never creates anything)
+    expect(a.lastJobEnv.LOOM_SQL_1).toMatch(/^SELECT .* FROM hfj_partition/);
+    const b = new FakeCluster();
+    b.partitionsDenied = true;
+    b.jobFails = false;
+    const err = (await hostOver(b).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error & { code: string };
+    // The Job's own psql output is passed through; the host does not guess why the table is unreadable.
+    expect(err.code).toBe('pg_job_failed');
+    expect(err.message).toContain('permission denied for table hfj_partition');
+  });
+
+  it('a failed rollout names a partition conflict only when the table shows one; otherwise it says what was ruled out or that the cause is NOT established', async () => {
+    const conflict = new FakeCluster();
+    conflict.rolloutExit = 1;
+    conflict.partitions = [{ id: 7, name: 'site-x' }, { id: 8, name: 'site-b' }]; // id 7 is taken by another name
+    const e1 = (await hostOver(conflict).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error & { code: string };
+    expect(e1.code).toBe('engine_rollout_failed');
+    expect(e1.message).toContain('site-a (id 7) disagrees with the row site-x (id 7)');
+    expect(e1.message).toContain('partitions.conflict');
+    const clean = new FakeCluster();
+    clean.rolloutExit = 1;
+    clean.partitions = [{ id: 7, name: 'site-a' }];
+    const e2 = (await hostOver(clean).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error;
+    expect(e2.message).toContain('a partition conflict is ruled out');
+    expect(e2.message).not.toContain('disagrees');
+    const unreadable = new FakeCluster();
+    unreadable.rolloutExit = 1;
+    unreadable.partitionsDenied = true;
+    const e3 = (await hostOver(unreadable).ensurePartitions(SLUG, WANT).catch((e: unknown) => e)) as Error;
+    expect(e3.message).toContain('hfj_partition could not be read; the cause is NOT established');
+    expect(e3.message).not.toContain('ruled out');
+  });
+
+  it('readPartitionRows returns the rows, and undefined (not an empty list) when the table cannot be read', async () => {
+    const c = new FakeCluster();
+    c.partitions = [{ id: 1, name: 'site-a' }];
+    expect(await hostOver(c).readPartitionRows(SLUG)).toEqual([{ id: 1, name: 'site-a' }]);
+    c.partitionsDenied = true;
+    expect(await hostOver(c).readPartitionRows(SLUG)).toBeUndefined();
+  });
+
+  it('NO command the host sends ever touches $partition-management-* (the engine answers 401 there); the positive controls are the PG job and /metadata', async () => {
+    const c = new FakeCluster();
+    const h = hostOver(c);
+    await h.applyEngineConfig(cfgFor({ partitions: WANT }));
+    await h.probeEngine(SLUG);
+    await h.probeEngine(SLUG, { partitions: true });
+    await h.ensurePartitions(SLUG, WANT);
+    expect(c.commands.filter((x) => /partition-management/.test(x))).toEqual([]);
+    expect(c.commands.some((x) => x.includes('/proxy/fhir/metadata'))).toBe(true);
+    expect(c.commands.some((x) => x.includes('FROM hfj_partition') || x.includes('"kind":"Job"'))).toBe(true);
+  });
+
+  it('probeEngine({partitions:true}) takes its partition names from the DATABASE, and still checks /metadata through the proxy', async () => {
+    const c = new FakeCluster();
+    c.partitions = [{ id: 7, name: 'site-a' }, { id: 8, name: 'site-b' }];
+    expect(await hostOver(c).probeEngine(SLUG, { partitions: true })).toEqual({ ready: true, fhirVersion: '4.0.1', partitions: ['site-a', 'site-b'] });
+    c.partitionsDenied = true;
+    await expect(hostOver(c).probeEngine(SLUG, { partitions: true })).rejects.toMatchObject({ code: 'pg_job_failed' }); // an unreadable table is never reported as "no partitions"
   });
 
   it('removeEngine deletes the three objects by name and fails teardown_incomplete when one is still listed', async () => {
@@ -737,21 +852,6 @@ describe('teardown when the tenant database is already gone, and ensure for a re
 
   it('refuses a malformed object id before sending anything', () => {
     expect(() => ensurePrincipalSteps(IDENT.name, DB, "x' OR '1'='1")).toThrow(/malformed Entra object id/);
-  });
-});
-
-describe('ensurePartitions is safe to re-send', () => {
-  it('every create is preceded, in the same command, by a list check for that partition name', async () => {
-    const c = new FakeCluster();
-    await hostOver(c).ensurePartitions(SLUG, ['site-a', 'site-b']);
-    const cmd = c.commands.find((x) => x.includes('create-partition') && x.includes('printf')) ?? '';
-    for (const n of ['site-a', 'site-b']) {
-      const guard = cmd.indexOf(`grep -q '"valueCode" *: *"${n}"'`);
-      const create = cmd.indexOf('create-partition', guard);
-      expect(guard, `no list guard for ${n}`).toBeGreaterThanOrEqual(0);
-      expect(create).toBeGreaterThan(guard);
-    }
-    expect((cmd.match(/grep -q/g) ?? []).length).toBe(2); // one guard per create
   });
 });
 
