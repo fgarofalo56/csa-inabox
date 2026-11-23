@@ -205,6 +205,8 @@ test('jdbc-auth.lock.tsv pins the Entra plugin and every jar by sha256; the imag
     assert.ok(url.includes(`/${g.replace(/\./g, '/')}/${a}/${v}/`), `${file}: url must embed group/artifact/version`);
     assert.ok(!files.has(file), `duplicate ${file}`);
     files.add(file);
+    // HAND-KEPT list, a cheap early signal only. The authoritative overlap gate is the tools-stage `comm -12`
+    // of the war's real lib list against the baked set (asserted below), which fails the build on any overlap.
     assert.doesNotMatch(a, /^(jackson-|reactor-core$|reactive-streams$|slf4j-|postgresql$|nimbus-jose-jwt$|json-smart$|jspecify$)/, `${a} is already shipped by HAPI; baking it forks the class path`);
     assert.doesNotMatch(file, /osx|windows|aarch_64|kqueue/, `${file}: only linux-x86_64 natives belong in this image`);
   }
@@ -212,7 +214,16 @@ test('jdbc-auth.lock.tsv pins the Entra plugin and every jar by sha256; the imag
   assert.match(stage('runtime'), /^COPY --from=tools \/baked\/jdbc-auth\/ \/app\/extra-classes\/$/m);
   assert.match(stage('tools'), /JdbcAuthProbe/);
   assert.match(stage('tools'), /"loadable":true/);
-  assert.match(read(join(APP, 'scripts/fetch-baked-assets.sh')), /sha256 mismatch/);
+  // The jdbc loop must itself call verify() on the downloaded file against the lock's sha column. BREAKS when
+  // that line is deleted (the generic "sha256 mismatch" text lives in verify() and would still be present).
+  const fetch = read(join(APP, 'scripts/fetch-baked-assets.sh'));
+  assert.match(fetch, /^ {2}verify "\$OUT\/jdbc-auth\/\$FILE" "\$SUM" "\$FILE"$/m);
+  assert.match(fetch, /sha256 mismatch/);
+  // Build-stage gates: war lib list vs baked set must be compared (overlap fails the build), and the probe's
+  // class path must list the war's libs FIRST, as PropertiesLauncher does at runtime.
+  const tools = stage('tools');
+  assert.match(tools, /comm -12 \/tmp\/war-artifacts\.txt \/tmp\/baked-artifacts\.txt/);
+  assert.match(tools, /-cp "\/hapi\/lib\/WEB-INF\/lib\/\*:\/baked\/jdbc-auth\/\*:/);
 });
 
 test('the hapiwar probe stage uses the same HAPI digest as runtime (B2b)', () => {

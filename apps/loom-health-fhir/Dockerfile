@@ -16,13 +16,15 @@
 #   - /opt/loom/fhir/validator/validator_cli.jar   HL7 validator 6.9.12 (the same
 #     org.hl7.fhir.core version the pinned server ships).
 # Every baked artifact is sha256-checked at BUILD time (validator.lock,
-# packages.lock.tsv); the runtime image performs NO download. The build FAILS if the
-# baked validator cannot pass a valid US Core Patient and reject an invalid one,
-# offline.
+# packages.lock.tsv, jdbc-auth.lock.tsv, otel-agent.lock, os-patch.lock); the runtime
+# image performs NO download. The build FAILS if the baked validator cannot pass a valid
+# US Core Patient and reject an invalid one, offline, or if the baked Entra JDBC auth
+# plugin does not link against the pinned server's own libs.
 #
 # The base image is distroless (no shell, user 65532, java 21, entrypoint
-# PropertiesLauncher with /app/extra-classes on loader.path). Configuration is
-# environment-only and arrives in W2-2; nothing tenant-specific is baked in.
+# PropertiesLauncher with /app/extra-classes on loader.path). Tenant-independent policy
+# is baked (/opt/loom/fhir/config/application.yaml); everything tenant-specific arrives as
+# environment (rendered by the control plane) and nothing tenant-specific is baked in.
 
 # ---- hapiwar stage: the pinned server, only so the tools stage can probe against its real libs.
 # Digest MUST equal the runtime stage's (tests/image-contract.test.mjs).
@@ -58,7 +60,12 @@ RUN set -eu; \
 # test). A plugin that cannot load, or does not implement pgjdbc's AuthenticationPlugin, fails the build.
 COPY --from=hapiwar /app/main.war /hapi/main.war
 RUN set -eu; mkdir -p /hapi/lib && cd /hapi/lib && jar xf /hapi/main.war WEB-INF/lib && \
-    java -cp "/build/plugin/target/loom-health-fhir-plugin.jar:/baked/jdbc-auth/*:/hapi/lib/WEB-INF/lib/*" \
+    ls /hapi/lib/WEB-INF/lib | sed 's/-[0-9].*//' | sort -u > /tmp/war-artifacts.txt; \
+    ls /baked/jdbc-auth | sed 's/-[0-9].*//' | sort -u > /tmp/baked-artifacts.txt; \
+    [ -s /tmp/war-artifacts.txt ] && [ -s /tmp/baked-artifacts.txt ] || { echo "FAIL: empty artifact list"; exit 1; }; \
+    OVERLAP=$(comm -12 /tmp/war-artifacts.txt /tmp/baked-artifacts.txt); \
+    [ -z "$OVERLAP" ] || { echo "FAIL: baked jdbc-auth jars duplicate artifacts the HAPI war ships (class path fork): $OVERLAP"; exit 1; }; \
+    java -cp "/hapi/lib/WEB-INF/lib/*:/baked/jdbc-auth/*:/build/plugin/target/loom-health-fhir-plugin.jar" \
       ai.loom.health.fhir.JdbcAuthProbe | tee /tmp/jdbc-auth-load.json; \
     grep -q '"loadable":true' /tmp/jdbc-auth-load.json
 
