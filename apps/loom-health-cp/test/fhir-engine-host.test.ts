@@ -89,9 +89,9 @@ describe('RestAksRunCommand', () => {
     expect(calls).toHaveLength(3);
   });
 
-  it('no cluster token means no request: a permission failure that names the AKS server app, and zero calls', async () => {
+  it('no cluster token means no request: a retryable failure that names the AKS server app, and zero calls', async () => {
     // Breaks if a token failure is swallowed and the POST goes out without clusterToken (calls would be 1), or if the
-    // failure is misclassified (code would not be 'permission').
+    // failure is labelled as a cause nobody measured (code would not be 'transient').
     const calls: unknown[] = [];
     const rc = new RestAksRunCommand({
       armEndpoint: ARM,
@@ -103,7 +103,7 @@ describe('RestAksRunCommand', () => {
     });
     const err = await rc.run(T, 'kubectl get ns').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(JobFailure);
-    expect((err as JobFailure).code).toBe('permission');
+    expect((err as JobFailure).code).toBe('transient');
     expect((err as JobFailure).message).toContain('6dae42f8-4368-4678-94ff-3960e28e3630');
     expect(calls).toHaveLength(0);
   });

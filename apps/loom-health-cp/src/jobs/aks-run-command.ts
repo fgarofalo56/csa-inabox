@@ -169,7 +169,9 @@ export class RestAksRunCommand implements AksRunCommand {
     try {
       clusterToken = await this.o.token(`${AKS_SERVER_APP_ID}/.default`);
     } catch {
-      throw new JobFailure('permission', `could not obtain an Entra token for the AKS server application (${AKS_SERVER_APP_ID}), which an Entra-integrated cluster requires for runCommand; nothing was sent`);
+      // R7: the credential error is not inspected, so the cause (a transient IMDS/Entra hiccup or a real denial) is NOT
+      // established. 'transient' keeps the job retryable rather than asserting a permission problem nobody measured.
+      throw new JobFailure('transient', `could not obtain an Entra token for the AKS server application (${AKS_SERVER_APP_ID}), which an Entra-integrated cluster requires for runCommand. Whether this is transient or a permission problem is not established; this request was not sent. Retry the job.`);
     }
     let post;
     try {
