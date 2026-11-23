@@ -135,7 +135,7 @@ param stampClass string = ''
 @description('Stamp public ingress base URL (https://<ingress fqdn>), recorded as the stamp baseUrl the routing publisher serves. Required with stampId.')
 param stampBaseUrl string = ''
 
-@description('In-cluster decision endpoint of the stamp PDP, emitted as LOOM_HEALTH_CP_PDP_URL for the tenant engine config. Empty = PDP not deployed, no env emitted.')
+@description('In-cluster BASE url of the stamp PDP (no path: the engine appends /v1/data/lhds/authz/decision), emitted as LOOM_HEALTH_CP_PDP_URL for the tenant engine config. Empty = PDP not deployed, no env emitted.')
 param pdpUrl string = ''
 
 @description('Tag-pinned hub-ACR reference of the HAPI FHIR engine image (loom-health-fhir), emitted as LOOM_HEALTH_CP_FHIR_IMAGE. The control plane refuses :latest. Empty = no env emitted.')

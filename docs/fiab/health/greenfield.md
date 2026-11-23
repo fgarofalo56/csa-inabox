@@ -214,7 +214,7 @@ Ready, 6 outcome unknown).
   (ClusterRole `edit`, namespace `loom-health`) in the same manifest, bound to its Entra object id, so it cannot read
   Secrets or run pods in other namespaces; per-tenant workloads therefore live in `loom-health` unless a later item adds
   tenant namespaces. Its ARM runCommand rights come from `Contributor` on the stamp resource group. It also gets
-  `LOOM_HEALTH_CP_PDP_URL` (the in-cluster decision endpoint) and `LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID`. The PDP's own
+  `LOOM_HEALTH_CP_PDP_URL` (the in-cluster PDP base url, no path; the engine appends the decision path) and `LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID`. The PDP's own
   identity needs `HealthCP.Reader` and an allowlist entry: `csa-loom-post-deploy-bootstrap` discovers
   `uami-loom-health-pdp-*` and grants both; run it after `deploy-health` deploys the PDP.
 - **The image path: private endpoint plus a digest-pinned import (#5422, decision 8).** The hub registry is

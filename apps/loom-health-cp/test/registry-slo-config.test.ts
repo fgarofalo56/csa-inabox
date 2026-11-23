@@ -146,12 +146,15 @@ describe('config', () => {
     expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_COSMOS_ENDPOINT: 'http://insecure' })).toThrow(/https/);
     expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET: '1' })).toThrow(/between 0 and 1/);
   });
-  it('LOOM_HEALTH_CP_PDP_URL: unset is "no PDP" (empty), the in-cluster endpoint passes verbatim, junk fails closed (#5422)', () => {
-    const endpoint = 'http://loom-health-pdp.loom-health.svc.cluster.local/v1/data/lhds/authz/decision';
+  it('LOOM_HEALTH_CP_PDP_URL: unset is "no PDP" (empty), the in-cluster BASE passes verbatim, a path or junk fails closed (#5422)', () => {
+    const pdpBase = 'http://loom-health-pdp.loom-health.svc.cluster.local';
     // Breaks if an unset var starts throwing (a stamp without a PDP could not start) or yields undefined.
     expect(loadConfig(base).pdpUrl).toBe('');
-    // Breaks if the value is rewritten (a dropped path would send engines to the wrong OPA route).
-    expect(loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: endpoint }).pdpUrl).toBe(endpoint);
+    // Breaks if the base is rewritten or refused (engines would get no PDP or the wrong host).
+    expect(loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: pdpBase }).pdpUrl).toBe(pdpBase);
+    // BREAKS on: the value health.bicep emitted before #5449 (the FULL decision endpoint). The engine appends the decision
+    // path, so accepting this doubled it and every token-bearing request was a 503 (B3 probe run 45201088369).
+    expect(() => loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: `${pdpBase}/v1/data/lhds/authz/decision` })).toThrow(/no path/);
     // Breaks if the trailing slash is kept (engine config would double it).
     expect(loadConfig({ ...base, LOOM_HEALTH_CP_PDP_URL: ' http://pdp.ns.svc/ ' }).pdpUrl).toBe('http://pdp.ns.svc');
     // Each of these must throw: not a URL, wrong scheme, embedded credentials, query string.

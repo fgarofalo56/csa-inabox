@@ -29,8 +29,9 @@ export interface Config {
   /** Directory holding <stamp>.tar.gz signed PDP bundles. Empty = bundle route answers 503. */
   pdpBundleDir: string;
   /**
-   * In-cluster decision endpoint of the stamp PDP (LOOM_HEALTH_CP_PDP_URL, set by control-plane.bicep when the PDP
-   * deploys). Written into tenant engine config, never called from here. Empty = no PDP: engines then answer 503.
+   * In-cluster BASE url of the stamp PDP, no path (LOOM_HEALTH_CP_PDP_URL, set by control-plane.bicep when the PDP
+   * deploys); the engine appends the decision path. Written into tenant engine config, never called from here.
+   * Empty = no PDP: engines then answer 503. renderEngineConfig refuses a url with a path (pdp_url_invalid).
    */
   pdpUrl: string;
   /** Versioned Key Vault key id of the PDP bundle signing key (LOOM_HEALTH_CP_PDP_SIGNING_KEY_ID). Empty = signing off. */
@@ -49,6 +50,11 @@ export function parsePdpUrl(raw: string | undefined): string {
   }
   if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash) {
     throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be an http(s) URL without credentials, query or fragment');
+  }
+  if (u.pathname !== '/') {
+    // The engine appends /v1/data/lhds/authz/decision itself; a path here doubles it and every engine answers 503
+    // (B3 probe run 45201088369). Fail at startup rather than at the first fhir-tenant job.
+    throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be the PDP base URL with no path (the engine appends the decision path)');
   }
   return v.replace(/\/$/, '');
 }
