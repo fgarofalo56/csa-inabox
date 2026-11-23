@@ -5,6 +5,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createAuthServer, type AuthServerInit } from './auth/server.js';
 import { tenantHandlers } from './jobs/tenant-jobs.js';
+import { fhirTenantHandlers, type FhirEngineHost } from './jobs/fhir-tenant-jobs.js';
 import type { TenantArm } from './jobs/tenant-arm.js';
 import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
@@ -31,6 +32,11 @@ export interface ComposeInput {
   postgresRestart?: Pick<StampPowerDeps, 'power' | 'getStampManifest'>;
   /** Registers tenant.create / tenant.destroy. */
   tenantArm?: TenantArm;
+  /**
+   * Registers fhir-tenant.create / .configure / .teardown. Needs `tenantArm` too, and a non-empty `pdpUrl`: without a
+   * PDP every engine request is answered 503, so the kinds are not registered (they answer "unknown job kind").
+   */
+  fhirEngine?: { host: FhirEngineHost; pdpUrl: string };
   /** Serves the SMART/OAuth routes and /api/health/auth/*. */
   authServer?: AuthServerInit;
 }
@@ -60,6 +66,10 @@ export function compose(input: ComposeInput) {
   // W1-2: registered only when an ARM adapter is supplied (main.ts always passes one, #5162); without one the tenant.* kinds answer "unknown job kind".
   if (input.tenantArm) {
     for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm })) jobs.register(h);
+  }
+  // W2-2b B2c: fail CLOSED. No host, no ARM adapter, or no PDP url = no engine kinds at all.
+  if (input.tenantArm && input.fhirEngine && input.fhirEngine.pdpUrl.trim() !== '') {
+    for (const h of fhirTenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, arm: input.tenantArm, engine: input.fhirEngine.host, pdpUrl: input.fhirEngine.pdpUrl })) jobs.register(h);
   }
   const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, bundleKey: input.bundleKey, log });
   // W1-4: the Authorization Server answers its own paths and hands everything else to the control-plane app.
