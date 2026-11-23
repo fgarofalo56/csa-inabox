@@ -39,6 +39,14 @@ export const RUN_COMMAND_API = '2025-04-01';
 /** Total sends of one command when ARM ends the operation without an exit code. */
 export const RUN_COMMAND_ATTEMPTS = 3;
 export const RUN_COMMAND_BACKOFF_MS = [10_000, 20_000] as const;
+/**
+ * The AKS server application (first-party Entra app). On an Entra-integrated cluster (every LHDS stamp: managed AAD,
+ * Azure RBAC, local accounts disabled) runCommand refuses a request without `clusterToken`, an access token issued for
+ * THIS app (HTTP 400 MissingAADClusterToken, measured live on W2-2b B3 run 45127463187). Learn: "These application IDs
+ * are the same in all environments", so one constant serves Commercial and Azure Government.
+ * https://learn.microsoft.com/azure/aks/kubelogin-authentication#how-to-use-kubelogin-application-ids-with-aks
+ */
+export const AKS_SERVER_APP_ID = '6dae42f8-4368-4678-94ff-3960e28e3630';
 /** Consecutive transient (429/5xx) poll answers tolerated before giving up. */
 const POLL_TRANSIENT_MAX = 3;
 
@@ -155,9 +163,17 @@ export class RestAksRunCommand implements AksRunCommand {
   }
 
   private async sendOnce(base: string, command: string): Promise<{ kind: 'result'; result: RunCommandResult } | { kind: 'none'; detail: string }> {
+    // The cluster token is fetched per send (a retry may come minutes later) and goes ONLY into the request body, which
+    // nothing logs: errors carry ARM's response diagnostics, never the request.
+    let clusterToken: string;
+    try {
+      clusterToken = await this.o.token(`${AKS_SERVER_APP_ID}/.default`);
+    } catch {
+      throw new JobFailure('permission', `could not obtain an Entra token for the AKS server application (${AKS_SERVER_APP_ID}), which an Entra-integrated cluster requires for runCommand; nothing was sent`);
+    }
     let post;
     try {
-      post = await this.call('POST', `${this.o.armEndpoint}${base}/runCommand?api-version=${RUN_COMMAND_API}`, 'start runCommand', { command });
+      post = await this.call('POST', `${this.o.armEndpoint}${base}/runCommand?api-version=${RUN_COMMAND_API}`, 'start runCommand', { command, clusterToken });
     } catch (e) {
       throw classifyArm(e);
     }
