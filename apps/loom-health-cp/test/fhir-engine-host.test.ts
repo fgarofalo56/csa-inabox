@@ -554,7 +554,9 @@ describe('RunCommandFhirEngineHost', () => {
       `kubectl() { printf '%s' '${fixture}'; }`,
     ].join('\n');
     const r = spawnSync('sh', ['-c', `${prelude}\n${engineProbeScript('/api/v1/namespaces/loom-health/services/fhir-x:80/proxy/fhir')}`], { encoding: 'utf8' });
-    // Breaks if the script uses sed again (status 127), or if the field cut picks the wrong field (version would differ).
+    // Breaks if the script uses sed again: inside $(...) the failed sed leaves V empty while the script still exits 0, so it
+    // is the LOOM_FHIR_VERSION assertion that goes red (measured by mutation), not the status. Also breaks if the cut picks
+    // the wrong field (the version would differ). The status assertion pins the separate "always exit 0" contract.
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^LOOM_PROBE_RC=0$/m);
     expect(r.stdout).toMatch(/^LOOM_CAPABILITY=1$/m);
