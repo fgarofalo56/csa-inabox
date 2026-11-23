@@ -189,6 +189,12 @@ describe('RestTenantArm', () => {
     expect(m.state === 'found' && (m.value as Record<string, unknown>).pgAdminIdentity).toEqual(pg);
     // Positive control: the stamp object itself still comes through.
     expect(m.state === 'found' && (m.value as Record<string, unknown>).aksClusterName).toBe('aks-lhds-dev01');
+    // A pre-B2a record (no top-level pgAdminIdentity) passes `stamp` through unchanged. Breaks if the merge invents a key.
+    const legacy = await rig([{ status: 200, body: { properties: { outputs: { stamp: { value: { aksClusterName: 'x' } } } } } }]).arm.getStampManifest(RG, 'dev01');
+    expect(legacy).toEqual({ state: 'found', value: { aksClusterName: 'x' } });
+    // pgAdminIdentity alone is not a manifest. Breaks if the merge turns a record with no `stamp` into 'found'.
+    const orphan = await rig([{ status: 200, body: { properties: { outputs: { pgAdminIdentity: { value: pg } } } } }]).arm.getStampManifest(RG, 'dev01');
+    expect(orphan.state).toBe('no_outputs');
   });
 
   it('findTenantStorage keeps only storage accounts from the tag query', async () => {
