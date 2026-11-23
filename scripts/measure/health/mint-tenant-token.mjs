@@ -199,7 +199,7 @@ export async function mintTenantToken(c) {
   if (typeof scope !== 'string' || !/^\S+( \S+)*$/.test(scope)) throw new MintError('config', 'scope must be a space separated list of scopes');
   if (!Array.isArray(allowedScopes) || allowedScopes.length === 0 || allowedScopes.some((x) => typeof x !== 'string' || !/^\S+$/.test(x))) throw new MintError('config', 'allowedScopes must be a non-empty array of scope strings');
   if (!Array.isArray(roleIds) || roleIds.length === 0 || roleIds.some((x) => typeof x !== 'string' || !/^[a-z0-9-]{1,64}$/.test(x))) throw new MintError('config', 'roleIds must be a non-empty array of role ids');
-  if (typeof prefix !== 'string' || !/^[a-z0-9]{1,8}$/.test(prefix)) throw new MintError('config', 'clientPrefix must match ^[a-z0-9]{1,8}$');
+  if (typeof prefix !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/.test(prefix)) throw new MintError('config', 'clientPrefix must be 1-20 chars of a-z0-9 and hyphen, not starting or ending with a hyphen');
   const disc = await discoverIssuer(c);
   const km = newKeyMaterial();
   const clientId = `${prefix}-${c.tenant}-${randomBytes(4).toString('hex')}`.slice(0, 64);

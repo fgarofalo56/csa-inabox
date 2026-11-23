@@ -291,7 +291,8 @@ jobs:
   cleanup:
     name: Cleanup - disable clients, destroy the tenants this run created, remove their engines
     needs: [create, publish, probe]
-    if: always() && needs.create.outputs.owned != ''
+    # Not gated on create's OUTPUT: a cancelled or lost create step may leave the job result unset; the first step skips the rest when nothing is owned.
+    if: always() && needs.create.result != 'skipped'
     runs-on: [self-hosted, loom-aca]
     timeout-minutes: 120
     env:
@@ -312,6 +313,7 @@ jobs:
       - name: Validate the values handed over by the create job
         run: |
           set -euo pipefail
+          if [ -z "$OWNED" ]; then echo "HAVE_OWNED=false" >> "$GITHUB_ENV"; echo "this run created no tenant (no ownership record); nothing to clean up"; exit 0; fi
           [[ "$TENANT_A" =~ ^fc-a-[0-9]{12}$ && "$TENANT_B" =~ ^fc-b-[0-9]{12}$ ]] || { echo "::error::tenant names from the create job have an unexpected shape; nothing was destroyed"; exit 1; }
           [[ "$OWNED" =~ ^(fc-[ab]-[0-9]{12})(,fc-[ab]-[0-9]{12})?$ ]] || { echo "::error::the owned list from the create job has an unexpected shape; nothing was destroyed"; exit 1; }
           [[ "$CP_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::control plane URL from the create job is not a bare https origin; nothing was destroyed"; exit 1; }
@@ -324,6 +326,7 @@ jobs:
           echo "tenants this run created: $OWNED"
 
       - name: Azure login (Commercial - limitlessdata_deploy SP)
+        if: env.HAVE_OWNED != 'false'
         uses: azure/login@v2
         with:
           creds: |
@@ -335,6 +338,7 @@ jobs:
             }
 
       - name: Disable clients, destroy owned tenants, then tear down their engines
+        if: env.HAVE_OWNED != 'false'
         run: |
           set -euo pipefail
           TOKEN="$(az account get-access-token --resource "$CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"

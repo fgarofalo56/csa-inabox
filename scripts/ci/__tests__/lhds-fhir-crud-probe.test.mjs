@@ -454,3 +454,43 @@ test('validate: a tenant pair that is not distinct slugs, the reserved partition
   assert.match(validate({ ...ok, aksRg: '' }), /aks-rg/);
   assert.match(validate({ ...ok, cpToken: '' }), /bearer/);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// review should-fixes
+
+test('phaseCreate: the owned slug is in the outputs file BEFORE the waits, so a wait that throws (cancel / lost runner) still leaves it (breaks if ownership is emitted only in a finally)', async () => {
+  const cp = cpFake({ jobState: () => 'queued' });
+  const file = ownFile();
+  // The snapshot is taken INSIDE the first wait, i.e. before any finally could have run.
+  let snap;
+  const sleep = async () => { snap = readFileSync(`${file}.out`, 'utf8'); throw new Error('runner lost'); };
+  await assert.rejects(() => phaseCreate(crudCfg(file), { ...cp.deps, sleep, out: () => {} }), /runner lost/);
+  assert.match(snap, /^owned=fc-a-1,fc-b-1$/m);
+});
+
+test('phaseCreate: after only the FIRST 201 the output already holds that slug and not the second (cumulative emit; breaks if nothing is written until both exist)', async () => {
+  const cp = cpFake({ tenantStatus: { 'fc-b-1': 500 } });
+  const file = ownFile();
+  const r = await capture((out) => phaseCreate(crudCfg(file), { ...cp.deps, out }));
+  assert.equal(r.code, 1);
+  assert.match(readFileSync(`${file}.out`, 'utf8'), /^owned=fc-a-1$/m);
+});
+
+test('judge: (e) 403 with a FAILED f_ctrl is NOT a pass even though c and d passed (breaks if e ignores engine-B admission: 403 could mean B is not homed)', () => {
+  const v = verdictOf(swap(ALL_OK, 'PROBE step=f_ctrl status=200', 'PROBE step=f_ctrl status=403'));
+  assert.equal(v.c, 'pass');
+  assert.equal(v.d, 'pass');
+  assert.equal(v.f_ctrl, 'fail');
+  assert.equal(v.e, 'unmeasured');
+  assert.equal(verdictOf(ALL_OK).e, 'pass'); // positive control: all three controls passing still passes e
+});
+
+test('mint: a hyphenated clientPrefix (accepted by the CLI before) still mints, and an over-long or hyphen-edged one is refused (breaks if the prefix regex excludes hyphens)', async () => {
+  const cp = cpFake();
+  const m = await mintTenantToken({ ...cp.deps, cpUrl: 'https://cp.example.test', cpToken: CP_TOKEN, tenant: 'ten-a', issuerPath: '/auth', clientPrefix: 'edge-probe' });
+  assert.match(m.clientId, /^edge-probe-ten-a-[0-9a-f]{8}$/);
+  assert.ok(m.clientId.length <= 64);
+  for (const bad of ['-x', 'x-', 'a'.repeat(21), 'Up', 'a b']) {
+    await assert.rejects(() => mintTenantToken({ ...cpFake().deps, cpUrl: 'https://cp.example.test', cpToken: CP_TOKEN, tenant: 'ten-a', clientPrefix: bad }), /clientPrefix/, bad);
+  }
+});

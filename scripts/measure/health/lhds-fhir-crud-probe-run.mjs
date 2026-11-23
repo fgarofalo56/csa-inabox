@@ -165,6 +165,8 @@ export async function phaseCreate(c, deps = {}) {
       if (r.status !== 201) { say(`REFUSED creating tenant ${t}: ${errText(r)}`); return 1; }
       // Ownership: only a 201 means THIS run created the slug. Recorded (slugs only, non-secret) before anything else can fail.
       appendFileSync(c.ownedFile, `${t}\n`);
+      // Emitted NOW, cumulatively (the last `owned=` line wins), so a cancelled step or a lost runner during the waits below still hands cleanup the slug.
+      writeOutputs(c, say, { owned: [...readOwned(c.ownedFile)].join(',') });
       const j = await submit(c, deps, say, 'tenant.create', t, `fc-create-${t}`);
       if (!j) return 1;
       tenantJobs.push(j);
@@ -340,16 +342,17 @@ export function judge(parsed) {
   else put('d', 'pass', '');
   const dOk = res.d.verdict === 'pass';
   // e: a cross-tenant read that SUCCEEDS is a leak and fails regardless of anything else; a 403 counts only after c and d passed.
+  // f_ctrl first: it shows tenant B's engine admits B at all, so a 403 from B in (e) is a tenant mismatch and not 'B is not homed in the bundle'.
+  generic('f_ctrl');
+  const ctrlOk = res.f_ctrl.verdict === 'pass';
   const e = s.e;
   if (e && (e.status >= 200 && e.status < 300)) put('e', 'fail', `CROSS-TENANT LEAK: engine B answered ${e.status} to a token minted for tenant A`);
   else if (!e) put('e', 'unmeasured', cOk ? 'no result line for this step' : 'not evaluated: no Patient was created to read');
   else if (UNAVAILABLE(e.status)) put('e', 'unmeasured', 'no usable answer');
   else if (e.status !== 403) put('e', 'fail', 'expected 403');
-  else if (cOk && dOk) put('e', 'pass', '');
-  else put('e', 'unmeasured', '403 is not evidence while the same-tenant create/read (c, d) did not pass');
-  // f_ctrl is the positive control for f.
-  generic('f_ctrl');
-  const ctrlOk = res.f_ctrl.verdict === 'pass';
+  else if (cOk && dOk && ctrlOk) put('e', 'pass', '');
+  else put('e', 'unmeasured', '403 is not evidence while the same-tenant create/read (c, d) or the engine-B positive control (f_ctrl) did not pass');
+  // f_ctrl (judged above) is also the positive control for f.
   const f = s.f;
   if (f && f.status >= 200 && f.status < 300) put('f', 'fail', `a READER token created a Patient (HTTP ${f.status}): the scope is not enforced`);
   else if (!f) put('f', 'unmeasured', 'no result line for this step');
