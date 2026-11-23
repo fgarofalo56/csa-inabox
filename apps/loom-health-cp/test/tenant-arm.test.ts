@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ArmError, RestTenantArm, TITLE_MAX, classifyArm, htmlTitle, resourceTypeOf } from '../src/jobs/tenant-arm.js';
 import { JobFailure } from '../src/jobs/types.js';
@@ -171,6 +173,28 @@ describe('RestTenantArm', () => {
     expect((await rig([{ status: 200, body: { properties: { outputs: {} } } }]).arm.getStampManifest(RG, 'dev01')).state).toBe('no_outputs');
     const ok = await rig([{ status: 200, body: { properties: { outputs: { stamp: { value: { stampName: 'dev01' } } } } } }]).arm.getStampManifest(RG, 'dev01');
     expect(ok).toEqual({ state: 'found', value: { stampName: 'dev01' } });
+  });
+
+  it('the stamp manifest carries pgAdminIdentity from its own top-level output, as stamp.bicep declares it', async () => {
+    // Lifted from the template, not transcribed: if stamp.bicep stops declaring a top-level `pgAdminIdentity`
+    // output (or moves it into `stamp`), the first assertion fails and this fixture must follow the real shape.
+    const bicep = readFileSync(fileURLToPath(new URL('../../../platform/fiab/bicep/modules/health/stamp.bicep', import.meta.url)), 'utf8');
+    const outputs = [...bicep.matchAll(/^output (\w+) /gm)].map((m) => m[1] as string);
+    expect(outputs).toEqual(expect.arrayContaining(['stamp', 'pgAdminIdentity']));
+    const pg = { name: 'id-lhds-dev01-pgadmin', clientId: '00000000-0000-0000-0000-000000000001', principalId: '00000000-0000-0000-0000-000000000002' };
+    // Each declared output becomes a top-level ARM output, as the live lhds-stamp-dev01 record showed (keys: stamp, pgAdminIdentity).
+    const armOutputs = Object.fromEntries(outputs.map((k) => [k, { value: k === 'pgAdminIdentity' ? pg : k === 'stamp' ? { aksClusterName: 'aks-lhds-dev01' } : {} }]));
+    const m = await rig([{ status: 200, body: { properties: { outputs: armOutputs } } }]).arm.getStampManifest(RG, 'dev01');
+    // Breaks if getStampManifest reads only outputs.stamp (the B3 defect): pgAdminIdentity would be undefined.
+    expect(m.state === 'found' && (m.value as Record<string, unknown>).pgAdminIdentity).toEqual(pg);
+    // Positive control: the stamp object itself still comes through.
+    expect(m.state === 'found' && (m.value as Record<string, unknown>).aksClusterName).toBe('aks-lhds-dev01');
+    // A pre-B2a record (no top-level pgAdminIdentity) passes `stamp` through unchanged. Breaks if the merge invents a key.
+    const legacy = await rig([{ status: 200, body: { properties: { outputs: { stamp: { value: { aksClusterName: 'x' } } } } } }]).arm.getStampManifest(RG, 'dev01');
+    expect(legacy).toEqual({ state: 'found', value: { aksClusterName: 'x' } });
+    // pgAdminIdentity alone is not a manifest. Breaks if the merge turns a record with no `stamp` into 'found'.
+    const orphan = await rig([{ status: 200, body: { properties: { outputs: { pgAdminIdentity: { value: pg } } } } }]).arm.getStampManifest(RG, 'dev01');
+    expect(orphan.state).toBe('no_outputs');
   });
 
   it('findTenantStorage keeps only storage accounts from the tag query', async () => {
