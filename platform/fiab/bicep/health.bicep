@@ -368,6 +368,7 @@ module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
     aksClusterName: healthStamp!.outputs.stamp.aksClusterName
     aksOidcIssuerUrl: healthStamp!.outputs.stamp.aksOidcIssuerUrl
     replicas: int(controlPlaneConfig.?pdpReplicas ?? 2)
+    pgAdminClientId: healthStamp!.outputs.pgAdminIdentity.clientId
     skipRoleGrants: skipRoleGrants
     tags: tags
   }

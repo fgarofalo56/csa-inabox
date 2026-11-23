@@ -82,6 +82,9 @@ param applyPrincipalId string = ''
 @description('Object id of the control plane identity. When set the manifest adds a RoleBinding (ClusterRole edit, this namespace only) so the control plane can apply tenant workloads through runCommand. Empty = no binding.')
 param controlPlanePrincipalId string = ''
 
+@description('Client id of the stamp PG role-job identity (stamp.bicep output pgAdminIdentity.clientId). When set the manifest adds the ServiceAccount lhds-pg-admin annotated with it; the control-plane-applied PG principal Job runs as that account (#5422 decision 10). Empty = no ServiceAccount.')
+param pgAdminClientId string = ''
+
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
@@ -195,6 +198,19 @@ var controlPlaneBinding = empty(controlPlanePrincipalId) ? [] : [
   '    name: "${controlPlanePrincipalId}"'
 ]
 
+// ServiceAccount of the PG role Job. Federated (stamp.bicep pgAdminFederation) to id-lhds-<stamp>-pgadmin, which is a
+// PostgreSQL Entra administrator. No Role/RoleBinding: it needs no Kubernetes API access, only its projected token.
+var pgAdminServiceAccount = empty(pgAdminClientId) ? [] : [
+  '---'
+  'apiVersion: v1'
+  'kind: ServiceAccount'
+  'metadata:'
+  '  name: lhds-pg-admin'
+  '  namespace: ${aksNamespace}'
+  '  annotations:'
+  '    azure.workload.identity/client-id: "${pgAdminClientId}"'
+]
+
 var manifest = join(concat([
   'apiVersion: v1'
   'kind: Namespace'
@@ -287,7 +303,7 @@ var manifest = join(concat([
   '  ports:'
   '    - port: 80'
   '      targetPort: ${opaPort}'
-], controlPlaneBinding), '\n')
+], controlPlaneBinding, pgAdminServiceAccount), '\n')
 
 @description('The rendered Kubernetes manifest (Namespace, ServiceAccount, ConfigMap, Deployment, Service). Carries the PUBLIC bundle-verification key and ids only, no private material. Applied by the deploy workflow.')
 output manifest string = manifest
