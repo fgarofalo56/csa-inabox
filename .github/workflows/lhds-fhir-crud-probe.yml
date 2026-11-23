@@ -1,0 +1,349 @@
+name: lhds fhir crud probe
+
+# Dispatch-only, in-VNet (#5422 decision 12, LHDS W2-2b B3). NOT yet exercised live: the first dispatch is the receipt.
+#
+# WHAT IT PROVES: a PDP-allowed FHIR create/read against a SYNTHETIC tenant's per-tenant HAPI engine on Commercial dev01,
+# plus a cross-tenant denial and a scope denial, each with its positive control. It is the only path that can carry a bearer
+# token to an engine today: the APIM edge is not deployed, tenant engines have no Ingress, and the runCommand API-server proxy
+# consumes the Authorization header (decision 11). HAPI's LoomPdpInterceptor exempts only /metadata, so every other request
+# needs a token the PDP admits, and the PDP denies everything until a bundle that homes the tenant is published.
+#
+# WHAT IT DOES (scripts/measure/health/lhds-fhir-crud-probe-run.mjs):
+#   1. create   two SYNTHETIC tenants fc-a-<yyyymmddhhmm> / fc-b-<...> (<= 20 chars) on stamp dev01: tenant.create, then
+#               fhir-tenant.create (one facility partition) for each. fhir-tenant.create's own readback proves the tokenless half:
+#               rollout, /fhir/metadata through the API-server proxy, partitions through the PG job, and the isolation readback.
+#               Each job's state and control-plane receipts are printed (redacted, capped). Non-secret outputs: owned slugs,
+#               control plane URL and audience, the issuer DISCOVERED from the control plane.
+#   2. publish  health-pdp-bundle-publish.yml, called inside THIS run (mode=publish, Commercial, dev01) so the tenants' ownership
+#               stays in one run. It needs the operator's approval on the `health-pdp-publish` environment: THE RUN PAUSES THERE.
+#   3. probe    mint a WRITER token (system/*.cruds, role fhir-data-writer) for tenant A and a READER token (system/*.rs) for tenant B,
+#               write a probe script and the two token files (0600, header-file form) to a private temp dir, and run ONE
+#               `az aks command invoke` with `--file` so no token is ever on a command line. The aks-command pod curls each engine's
+#               ClusterIP Service (http://fhir-<slug>.loom-health.svc.cluster.local:80/fhir; engines have no NetworkPolicy). Only
+#               `PROBE step=<n> status=<code>` lines are read back; the temp dir is deleted in a finally.
+#   4. cleanup  (always) disable the minted clients, then destroy ONLY the tenants create recorded as owned.
+#
+# EXPECTED STATUS PER STEP (and the source that pins it; a different value is a defect, the value that breaks each is in the script):
+#   a  GET  /fhir/metadata, no token                          200  LoomPdpInterceptor exempts METADATA
+#   b  POST Patient, no token                                  401  AuthenticationException before the PDP is asked
+#   c  POST Patient, writer token A, engine A                  201  PDP permit (system/*.cruds), id from Location
+#   d  GET  that Patient, token A, engine A                    200  and the returned id equals the created one
+#   e  GET  that id, token A, engine B                         403  PDP tenant-mismatch (ForbiddenOperationException; the reason is audit-only)
+#   f_ctrl GET Patient?_count=1, reader token B, engine B      200  positive control: tenant B IS admitted, so f's 403 is the scope
+#   f  POST Patient, reader token B, engine B                  403  PDP scope-denied
+#   A 403 counts as a PASS only when its paired positive control passed (c+d for e, f_ctrl for f).
+#   c retries ONLY while the answer is 403 or 503 (a PDP that has not loaded the new bundle yet; the response cannot tell that from a real
+#   deny), for at most retry_window_s, printing every attempt. Exit 0 pass, 1 defect, 2 unmeasured (R7: no claim of a cause that was not established).
+#
+# DOES tenant.destroy TEAR DOWN THE ENGINE? NO. tenant.destroy (tenant-jobs.ts) deletes the tenant's ARM resources and shreds its keys; it never
+# calls the engine host. The Deployment/Service/ServiceAccount in the stamp AKS and the PG Entra principal are removed only by
+# fhir-tenant.teardown (fhir-tenant-jobs.ts), which refuses unless the tenant is already `destroying`: tenant.destroy sets that as its first act
+# and never clears it. So cleanup runs tenant.destroy (health-tenant-destroy.mjs) and THEN fhir-tenant.teardown, and fails the run if either did not
+# succeed. If the tenant deployment record is gone by then, teardown prints `role.skipped` and the PG principal is not removed: read that receipt.
+#
+# SCOPE: Commercial dev01 only (the in-VNet `loom-aca` fleet exists only there; Gov has no equivalent runner, a disclosed gap per cloud-parity.md).
+# Caller: the deploy SP (HealthCP.Admin + control plane allowlist, and rights to `az aks command invoke` on aks-lhds-dev01). Control plane URL,
+# audience and stamp are read from the deployed estate, never typed in.
+#
+# WHY NO `push:` AND NO HOSTED FALLBACK: same reasons as lhds-tenant-destroy.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      retry_window_s:
+        description: Seconds step c may keep retrying a 403/503 while the new PDP bundle propagates (0-420).
+        type: string
+        default: '300'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lhds-fhir-crud-probe
+  cancel-in-progress: false
+
+jobs:
+  create:
+    name: Create two synthetic tenants and their FHIR engines, Commercial dev01
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 120
+    outputs:
+      tenant_a: ${{ steps.names.outputs.tenant_a }}
+      tenant_b: ${{ steps.names.outputs.tenant_b }}
+      owned: ${{ steps.create.outputs.owned }}
+      issuer_url: ${{ steps.create.outputs.issuer_url }}
+      cp_url: ${{ steps.export.outputs.cp_url }}
+      cp_audience: ${{ steps.export.outputs.cp_audience }}
+    env:
+      STAMP_ID: dev01
+      REGION: centralus
+      RETRY_S: ${{ inputs.retry_window_s }}
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate inputs and name the synthetic tenants
+        id: names
+        run: |
+          set -euo pipefail
+          [[ "$RETRY_S" =~ ^[0-9]{1,3}$ ]] && [ "$RETRY_S" -le 420 ] || { echo "::error::retry_window_s must be 0-420"; exit 1; }
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+          STAMP_TS="$(date -u +%Y%m%d%H%M)"
+          {
+            echo "TENANT_A=fc-a-${STAMP_TS}"
+            echo "TENANT_B=fc-b-${STAMP_TS}"
+            echo "OWNED_FILE=${RUNNER_TEMP}/lhds-fhir-crud-owned.txt"
+          } >> "$GITHUB_ENV"
+          {
+            echo "tenant_a=fc-a-${STAMP_TS}"
+            echo "tenant_b=fc-b-${STAMP_TS}"
+          } >> "$GITHUB_OUTPUT"
+          echo "synthetic tenants: fc-a-${STAMP_TS} fc-b-${STAMP_TS}"
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Locate the stamp resource group (subscription of record)
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-health-${STAMP_ID}-${REGION}"
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            exists="$(az group exists --subscription "$s" -n "$RG" | tr -d '\r')"
+            if [ "$exists" = "true" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::resource group $RG is not visible to the deploy SP in any of its subscriptions"
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          echo "STAMP_SUB=$FOUND" >> "$GITHUB_ENV"
+          echo "stamp RG $RG found (subscription id withheld from output)"
+
+      - name: Pre-install the containerapp CLI extension
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors -o none
+          echo "containerapp extension version: $(az extension show --name containerapp --query version -o tsv | tr -d '\r')"
+
+      - name: Resolve the control plane URL and audience from the deployed estate
+        id: binding
+        env:
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$STAMP_SUB"
+
+      - name: Require a resolved binding on stamp dev01
+        id: require
+        env:
+          BINDING: ${{ steps.binding.outputs.health_binding }}
+          BINDING_REASON: ${{ steps.binding.outputs.health_binding_reason }}
+        run: |
+          set -euo pipefail
+          if [ "$BINDING" != "resolved" ]; then
+            echo "::error::the control plane binding is '$BINDING', not 'resolved' ($BINDING_REASON). Nothing was created."
+            exit 1
+          fi
+          if [ "${LOOM_HEALTH_DEFAULT_STAMP_ID:-}" != "$STAMP_ID" ]; then
+            echo "::error::the control plane in this subscription serves stamp '${LOOM_HEALTH_DEFAULT_STAMP_ID:-}', not '$STAMP_ID'. Nothing was created."
+            exit 1
+          fi
+          case "${LOOM_HEALTH_CP_URL:-}" in https://*) ;; *) echo "::error::resolved control plane URL is not https. Nothing was created."; exit 1;; esac
+          echo "control plane resolved for stamp $STAMP_ID"
+
+      - name: Export the control plane URL and audience (not secrets) for the later jobs
+        id: export
+        run: |
+          set -euo pipefail
+          # LOOM_HEALTH_CP_* come from resolve-health-console-binding.sh via $GITHUB_ENV; the step above refuses to continue unless they resolved.
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          [[ "$LOOM_HEALTH_CP_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::the control plane URL is not a bare https origin"; exit 1; }
+          [[ "$LOOM_HEALTH_CP_AUDIENCE" =~ ^[A-Za-z0-9:/._-]{1,200}$ ]] || { echo "::error::the control plane audience has an unexpected shape"; exit 1; }
+          {
+            echo "cp_url=$LOOM_HEALTH_CP_URL"
+            echo "cp_audience=$LOOM_HEALTH_CP_AUDIENCE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create the two synthetic tenants and their FHIR engines
+        id: create
+        run: |
+          set -euo pipefail
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhir-crud-probe-run.mjs --phase create --owned-file "$OWNED_FILE" \
+            --outputs-file "$GITHUB_OUTPUT" --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" \
+            --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" --timeout-s 1500
+
+  # The PDP denies everything until a bundle that homes the tenants is published. mode=publish needs the operator's
+  # approval on the `health-pdp-publish` environment (inside the called workflow), so the run pauses here until approved.
+  publish:
+    name: Publish the PDP bundle that homes the synthetic tenants
+    needs: create
+    uses: ./.github/workflows/health-pdp-bundle-publish.yml
+    with:
+      boundary: Commercial
+      mode: publish
+      stamp_id: dev01
+      control_plane_url: ${{ needs.create.outputs.cp_url }}
+      control_plane_audience: ${{ needs.create.outputs.cp_audience }}
+      issuer_url: ${{ needs.create.outputs.issuer_url }}
+    secrets: inherit
+
+  probe:
+    name: Create and read a Patient in-cluster, with cross-tenant and scope denials
+    needs: [create, publish]
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 60
+    env:
+      STAMP_ID: dev01
+      REGION: centralus
+      RETRY_S: ${{ inputs.retry_window_s }}
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TENANT_A: ${{ needs.create.outputs.tenant_a }}
+      TENANT_B: ${{ needs.create.outputs.tenant_b }}
+      CP_URL: ${{ needs.create.outputs.cp_url }}
+      CP_AUDIENCE: ${{ needs.create.outputs.cp_audience }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate the values handed over by the create job
+        run: |
+          set -euo pipefail
+          [[ "$TENANT_A" =~ ^fc-a-[0-9]{12}$ && "$TENANT_B" =~ ^fc-b-[0-9]{12}$ ]] || { echo "::error::tenant names from the create job have an unexpected shape"; exit 1; }
+          [[ "$CP_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::control plane URL from the create job is not a bare https origin"; exit 1; }
+          [[ "$CP_AUDIENCE" =~ ^[A-Za-z0-9:/._-]{1,200}$ ]] || { echo "::error::control plane audience from the create job has an unexpected shape"; exit 1; }
+          [[ "$RETRY_S" =~ ^[0-9]{1,3}$ ]] && [ "$RETRY_S" -le 420 ] || { echo "::error::retry_window_s must be 0-420"; exit 1; }
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Locate the stamp resource group (subscription of record)
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-health-${STAMP_ID}-${REGION}"
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            exists="$(az group exists --subscription "$s" -n "$RG" | tr -d '\r')"
+            if [ "$exists" = "true" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::resource group $RG is not visible to the deploy SP in any of its subscriptions"
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          {
+            echo "STAMP_SUB=$FOUND"
+            echo "STAMP_RG=$RG"
+          } >> "$GITHUB_ENV"
+          echo "stamp RG $RG found (subscription id withheld from output)"
+
+      - name: Mint tokens and probe the engines from the aks-command pod
+        run: |
+          set -euo pipefail
+          TOKEN="$(az account get-access-token --resource "$CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          {
+            echo "## lhds fhir crud probe: $TENANT_A / $TENANT_B"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          # unset-var-ok: STAMP_RG
+          # unset-var-ok: STAMP_SUB
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhir-crud-probe-run.mjs --phase probe \
+            --cp-url "$CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
+            --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
+            --retry-s "$RETRY_S" | tee -a "$GITHUB_STEP_SUMMARY"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "exit code: $rc (0 = pass, 1 = defect/failed, 2 = UNMEASURED: nothing here is a claim the engine or PDP is broken)"
+          exit "$rc"
+
+  cleanup:
+    name: Cleanup - disable clients, destroy the tenants this run created, remove their engines
+    needs: [create, publish, probe]
+    # Not gated on create's OUTPUT: a cancelled or lost create step may leave the job result unset; the first step skips the rest when nothing is owned.
+    if: always() && needs.create.result != 'skipped'
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 120
+    env:
+      STAMP_ID: dev01
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TENANT_A: ${{ needs.create.outputs.tenant_a }}
+      TENANT_B: ${{ needs.create.outputs.tenant_b }}
+      OWNED: ${{ needs.create.outputs.owned }}
+      CP_URL: ${{ needs.create.outputs.cp_url }}
+      CP_AUDIENCE: ${{ needs.create.outputs.cp_audience }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate the values handed over by the create job
+        run: |
+          set -euo pipefail
+          if [ -z "$OWNED" ]; then echo "HAVE_OWNED=false" >> "$GITHUB_ENV"; echo "this run created no tenant (no ownership record); nothing to clean up"; exit 0; fi
+          [[ "$TENANT_A" =~ ^fc-a-[0-9]{12}$ && "$TENANT_B" =~ ^fc-b-[0-9]{12}$ ]] || { echo "::error::tenant names from the create job have an unexpected shape; nothing was destroyed"; exit 1; }
+          [[ "$OWNED" =~ ^(fc-[ab]-[0-9]{12})(,fc-[ab]-[0-9]{12})?$ ]] || { echo "::error::the owned list from the create job has an unexpected shape; nothing was destroyed"; exit 1; }
+          [[ "$CP_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::control plane URL from the create job is not a bare https origin; nothing was destroyed"; exit 1; }
+          [[ "$CP_AUDIENCE" =~ ^[A-Za-z0-9:/._-]{1,200}$ ]] || { echo "::error::control plane audience from the create job has an unexpected shape; nothing was destroyed"; exit 1; }
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+          # The ownership record is rebuilt from what create recorded (slugs only), never from the tenant names alone.
+          OWNED_FILE="${RUNNER_TEMP}/lhds-fhir-crud-owned.txt"
+          printf '%s\n' "${OWNED//,/$'\n'}" > "$OWNED_FILE"
+          echo "OWNED_FILE=$OWNED_FILE" >> "$GITHUB_ENV"
+          echo "tenants this run created: $OWNED"
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        if: env.HAVE_OWNED != 'false'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Disable clients, destroy owned tenants, then tear down their engines
+        if: env.HAVE_OWNED != 'false'
+        run: |
+          set -euo pipefail
+          TOKEN="$(az account get-access-token --resource "$CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token; the tenants $OWNED were NOT destroyed"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          # unset-var-ok: OWNED_FILE
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhir-crud-probe-run.mjs --phase cleanup --owned-file "$OWNED_FILE" \
+            --cp-url "$CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" --timeout-s 1800

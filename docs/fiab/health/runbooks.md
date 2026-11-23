@@ -86,6 +86,34 @@
   tenant destroy makes the tenant's tokens unmintable anyway; the leftover documents
   are tracked in a follow-up issue.
 
+## FHIR create/read receipt (W2-2b B3, #5422 decision 12, not yet exercised live)
+
+Commercial dev01 only (no Gov in-VNet runner: a disclosed gap). Dispatch
+`.github/workflows/lhds-fhir-crud-probe.yml`; nothing is typed in except an optional
+`retry_window_s`.
+
+1. `create` makes two synthetic tenants (`fc-a-<yyyymmddhhmm>`, `fc-b-...`), runs
+   `tenant.create` then `fhir-tenant.create` (partition `probe-site`) and prints each job's
+   receipts. Its outputs are non-secret: owned slugs, control plane URL/audience, issuer.
+2. `publish` calls `health-pdp-bundle-publish.yml` (mode=publish) inside the same run.
+   **The run pauses here for the operator's approval of the `health-pdp-publish`
+   environment.** Until a bundle homes the tenants the PDP denies everything.
+3. `probe` mints a writer token (tenant A, `system/*.cruds`) and a reader token (tenant B,
+   `system/*.rs`), hands them to ONE `az aks command invoke` as `--file` header files (never
+   on a command line) and curls each engine's ClusterIP Service from the aks-command pod.
+   Expected: a metadata 200 (no token), a tokenless create 401, a writer create 201, a read
+   200 with the same id, a cross-tenant read 403, a reader create 403 (with a reader read
+   200 as its positive control). A 403 counts only when its positive control passed. Step c
+   retries only a 403/503 for up to `retry_window_s`: the response cannot tell a PDP that has
+   not loaded the new bundle from a real deny; the reason is in the engine audit log.
+4. `cleanup` (always) disables the minted clients, runs `tenant.destroy` for the tenants
+   `create` recorded as owned, then `fhir-tenant.teardown`. `tenant.destroy` does NOT remove
+   the engine, its PG principal or its cluster objects; teardown does, and only works once
+   the tenant is `destroying`, hence this order. Read the `role.skipped` receipt if shown.
+
+Exit codes: 0 pass, 1 defect, 2 UNMEASURED (az or the pod gave no answer; nothing here is a
+claim the engine is broken).
+
 ## PDP bundle publish
 
 - The control plane serves `GET /api/health/pdp/stamps/<id>/bundle.tar.gz`

@@ -38,6 +38,11 @@ import { generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto'
 export const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 export const DEFAULT_ISSUER_PATH = '/auth';
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,19}$/;
+// Defaults of the optional mint parameters: the edge probe's least-privilege reader. A caller that needs another
+// grant (the FHIR CRUD probe's writer) passes allowedScopes/roleIds/scope/clientPrefix; nothing else changes.
+export const DEFAULT_SCOPE = 'system/*.rs';
+export const DEFAULT_ROLE_IDS = Object.freeze(['fhir-data-reader']);
+export const DEFAULT_CLIENT_PREFIX = 'ep';
 const ASSERTION_TTL_S = 120; // the AS refuses anything above 300 (MAX_ASSERTION_LIFETIME_S)
 const MAX_ATTEMPTS = 3;
 const TRANSIENT = new Set(['network-error', 408, 429, 500, 502, 503, 504]);
@@ -187,18 +192,26 @@ export async function disableClient(c, clientId) {
 export async function mintTenantToken(c) {
   if (!c.cpToken) throw new MintError('config', 'no control-plane bearer token (set env LHDS_CP_TOKEN)');
   if (!SLUG_RE.test(c.tenant ?? '')) throw new MintError('config', 'tenant must match ^[a-z0-9][a-z0-9-]{1,19}$');
+  const scope = c.scope ?? DEFAULT_SCOPE;
+  const allowedScopes = c.allowedScopes ?? [scope];
+  const roleIds = c.roleIds ?? [...DEFAULT_ROLE_IDS];
+  const prefix = c.clientPrefix ?? DEFAULT_CLIENT_PREFIX;
+  if (typeof scope !== 'string' || !/^\S+( \S+)*$/.test(scope)) throw new MintError('config', 'scope must be a space separated list of scopes');
+  if (!Array.isArray(allowedScopes) || allowedScopes.length === 0 || allowedScopes.some((x) => typeof x !== 'string' || !/^\S+$/.test(x))) throw new MintError('config', 'allowedScopes must be a non-empty array of scope strings');
+  if (!Array.isArray(roleIds) || roleIds.length === 0 || roleIds.some((x) => typeof x !== 'string' || !/^[a-z0-9-]{1,64}$/.test(x))) throw new MintError('config', 'roleIds must be a non-empty array of role ids');
+  if (typeof prefix !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/.test(prefix)) throw new MintError('config', 'clientPrefix must be 1-20 chars of a-z0-9 and hyphen, not starting or ending with a hyphen');
   const disc = await discoverIssuer(c);
   const km = newKeyMaterial();
-  const clientId = `${c.clientPrefix ?? 'ep'}-${c.tenant}-${randomBytes(4).toString('hex')}`.slice(0, 64);
+  const clientId = `${prefix}-${c.tenant}-${randomBytes(4).toString('hex')}`.slice(0, 64);
 
   const reg = await withRetry(c, 'client registration', (attempt) => cpCall(c, 'POST', `${disc.origin}/api/health/auth/clients`, {
     bearer: c.cpToken,
     body: {
       clientId, tenant: c.tenant, clientType: 'backend', displayName: `edge probe ${c.tenant}`,
       jwks: { keys: [km.publicJwk] },
-      // Least privilege: read-only system scope on the reader role. 409 on a REPLAY means the first
+      // Least privilege: the DEFAULT is the read-only system scope on the reader role. 409 on a REPLAY means the first
       // attempt landed (same client id, same key): accept it, never on the first attempt.
-      allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-reader'],
+      allowedScopes, roleIds,
     },
   }).then((r) => (attempt > 1 && r.status === 409 ? { status: 201, json: { ok: true } } : r)));
   if (reg.status !== 201 || reg.json?.ok !== true) {
@@ -217,7 +230,7 @@ export async function mintTenantToken(c) {
     const now = Math.floor((c.nowMs ?? Date.now()) / 1000);
     const assertion = km.signAssertion({ iss: clientId, sub: clientId, aud, jti: randomUUID(), iat: now, exp: now + ASSERTION_TTL_S });
     return cpCall(c, 'POST', `${disc.tokenBase}/${c.tenant}/token`, {
-      form: { grant_type: 'client_credentials', client_assertion_type: ASSERTION_TYPE, client_assertion: assertion, scope: 'system/*.rs' },
+      form: { grant_type: 'client_credentials', client_assertion_type: ASSERTION_TYPE, client_assertion: assertion, scope },
     }).then((r) => { attempts.push(r); return r; });
   }).catch(async (e) => { await disableClient(c, clientId).catch(() => false); throw e; });
   if (tok.status !== 200 || typeof tok.json?.access_token !== 'string') {
