@@ -1,0 +1,73 @@
+name: health-cp-test
+
+# LHDS control plane (#5396): runs the WHOLE apps/loom-health-cp vitest suite plus `tsc --noEmit`.
+# Before this lane only six named pdp-*/bundle-* files ran (health-pdp-opa.yml); the other ~20 test files
+# ran nowhere in CI. Some tests read sibling trees (apps/loom-health-pdp tools, apps/loom-health-fhir) and
+# cp-bicep-tenant-dependson.test.ts compiles platform/fiab/bicep/modules/health/tenant.bicep with
+# `az bicep build`, so those paths are in the filter. The real-OPA signature check (bundle-sign-opa.test.ts)
+# skips here because no OPA is installed; health-pdp-opa.yml runs it with REQUIRE_OPA=1.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/loom-health-cp/**'
+      - 'apps/loom-health-pdp/**'
+      - 'apps/loom-health-fhir/**'
+      - 'platform/fiab/bicep/modules/health/**'
+      - '.github/workflows/health-cp-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/loom-health-cp/**'
+      - 'apps/loom-health-pdp/**'
+      - 'apps/loom-health-fhir/**'
+      - 'platform/fiab/bicep/modules/health/**'
+      - '.github/workflows/health-cp-test.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cp-vitest:
+    name: Health CP vitest + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/loom-health-cp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+      - name: Install Bicep (pinned; cp-bicep-tenant-dependson.test.ts shells out to az bicep build)
+        working-directory: .
+        run: |
+          set -euo pipefail
+          az bicep install --version v0.47.16
+          az bicep version
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.test.json
+      - name: Full vitest suite
+        run: |
+          set -euo pipefail
+          npx vitest run 2>&1 | tee "$RUNNER_TEMP/vitest.log"
+      # The lane must run the whole suite, not a subset. Count test files on disk and compare with what vitest
+      # reported, so a future narrowing of the command (or an include glob) fails here instead of reading green.
+      - name: Assert every test file ran
+        run: |
+          set -euo pipefail
+          on_disk=$(find test -name '*.test.ts' | wc -l)
+          ran=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/vitest.log" | grep -E '^ *Test Files ' | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' || true)
+          echo "test files on disk: ${on_disk}; vitest passed files: ${ran:-none}"
+          if [ "${on_disk}" -lt 20 ] || [ "${ran:-0}" -ne "${on_disk}" ]; then
+            echo "::error::vitest passed ${ran:-0} test files but ${on_disk} exist on disk (or the on-disk count is implausibly low)"
+            exit 1
+          fi

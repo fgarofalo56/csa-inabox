@@ -11,7 +11,10 @@
 //
 // LHDS_TENANT_BICEP overrides the compiled file so a mutation can be run against a sandbox copy
 // (temp/) without touching the tracked tree. It is not read by any product code.
+// A sandbox copy needs storage.bicep BESIDE it (tenant.bicep declares a module on './storage.bicep');
+// without it BCP091 fails the compile and every test here goes red for the wrong reason.
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -27,11 +30,24 @@ interface ArmResource {
   properties?: { parameters?: Record<string, { value?: unknown }> };
 }
 
+function azCommand(): [string, string[]] {
+  if (process.platform !== 'win32') return ['az', []];
+  for (const p of (process.env.PATH ?? '').split(';')) {
+    const cmd = resolve(p, 'az.cmd');
+    const py = resolve(p, '..', 'python.exe');
+    if (existsSync(cmd) && existsSync(py)) return [py, ['-IBm', 'azure.cli']];
+  }
+  throw new Error('az.cmd with a sibling ..\\python.exe was not found on PATH (MSI install layout); install the Azure CLI');
+}
+
 function compile(file: string): { resources: ArmResource[] } {
   // No skip when az is missing: a guard that silently skips watches nothing. It fails, naming why.
-  const r = spawnSync('az', ['bicep', 'build', '--file', file, '--stdout'], {
+  // No shell, so the LHDS_TENANT_BICEP path never passes through one. On win32 the CLI is az.cmd, and node
+  // (>= 20.12) refuses to spawn a .cmd without a shell (EINVAL), so resolve what az.cmd itself runs:
+  // `<CLI2>\python.exe -IBm azure.cli`, the MSI layout's sibling of wbin\az.cmd.
+  const [bin, lead] = azCommand();
+  const r = spawnSync(bin, [...lead, 'bicep', 'build', '--file', file, '--stdout'], {
     encoding: 'utf8',
-    shell: process.platform === 'win32',
     maxBuffer: 32 * 1024 * 1024,
   });
   if (r.status !== 0) {
