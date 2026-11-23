@@ -33,6 +33,13 @@ import { runDestroy } from '../../csa-loom/health-tenant-destroy.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const JOB_ID_RE = /^job-[0-9a-f]{32}$/;
+/** runCommand provisioningState values after which the command result no longer changes. */
+export const TERMINAL_RUN_STATES = new Set(['Succeeded', 'Failed', 'Canceled']);
+/** A runCommand id as ARM returns it (hex, measured 32 chars); anything else is never put on an az command line. */
+export const COMMAND_ID_RE = /^[A-Za-z0-9-]{8,80}$/;
+/** Poll the result of a command az stopped waiting for: 40 x 15 s bounds it at 10 min past az's own ~300 s. */
+export const RESULT_POLL_MS = 15_000;
+export const RESULT_MAX_POLLS = 40;
 // Mirrors apps/loom-health-cp/src/jobs/fhir-tenant-config.ts PARTITION_NAME (a test lifts the source pattern and compares).
 const PARTITION_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/;
 const GUID_RE = /^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$/;
@@ -381,6 +388,7 @@ export function defaultExec(cmd, args, opts = {}) {
 export async function phaseProbe(c, deps = {}) {
   const say = mkSay(deps);
   const exec = deps.exec ?? defaultExec;
+  const sleep = deps.sleep ?? ((ms) => new Promise((res) => setTimeout(res, ms)));
   const minted = [];
   const secrets = [];
   let code = 0;
@@ -419,12 +427,39 @@ export async function phaseProbe(c, deps = {}) {
     const args = ['aks', 'command', 'invoke', '-g', c.aksRg, '-n', c.aksName, ...(c.aksSub ? ['--subscription', c.aksSub] : []),
       '--command', 'sh probe.sh', '--file', 'probe.sh', '--file', 'hdrA', '--file', 'hdrB', '-o', 'json'];
     say(`running the probe in the aks-command pod of ${redact(c.aksName, 60)} (one az aks command invoke; retry window for step c: ${c.retryS}s)`);
-    const r = await exec('az', args, { cwd: dir });
+    let r = await exec('az', args, { cwd: dir });
     let logs = '';
     let podExit;
-    try { const j = JSON.parse(r.stdout); logs = String(j.logs ?? ''); podExit = j.exitCode; } catch { /* handled below */ }
+    let state = '';
+    let reason = '';
+    let sub = 'invoke'; // the az subcommand whose answer is being read, so a failure names it
+    const readResult = (out) => {
+      try {
+        const j = JSON.parse(out.stdout);
+        logs = String(j.logs ?? ''); podExit = j.exitCode; state = String(j.provisioningState ?? ''); reason = String(j.reason ?? '');
+        return j;
+      } catch { return undefined; }
+    };
+    const first = readResult(r);
+    // `az aks command invoke` stops waiting after about 300 s and returns the IN-FLIGHT result (provisioningState Running,
+    // exitCode null, logs null) with exit 0, while the command keeps running in the cluster. Measured on aks-lhds-dev01
+    // 2026-11-23: a 290 s command came back Succeeded with its logs, a 330 s one came back Running, and
+    // `az aks command result --command-id` then returned Succeeded with the logs. B3 run 45142805007 hit exactly this.
+    // So a non-terminal answer is polled to the end rather than read as "no logs".
+    const cmdId = String(first?.id ?? '');
+    if (r.code === 0 && first && !TERMINAL_RUN_STATES.has(state) && COMMAND_ID_RE.test(cmdId)) {
+      const resArgs = ['aks', 'command', 'result', '-g', c.aksRg, '-n', c.aksName, ...(c.aksSub ? ['--subscription', c.aksSub] : []), '--command-id', cmdId, '-o', 'json'];
+      for (let i = 1; i <= RESULT_MAX_POLLS && !TERMINAL_RUN_STATES.has(state); i++) {
+        say(`command ${redact(cmdId, 80)} is ${redact(state || 'unreported', 20)} (az stops waiting at about 300 s); polling its result (${i}/${RESULT_MAX_POLLS})`);
+        await sleep(RESULT_POLL_MS);
+        r = await exec('az', resArgs, { cwd: dir }); sub = 'result';
+        if (r.code !== 0 || !readResult(r)) break;
+      }
+    }
     if (r.code !== 0 || !logs) {
-      say(`UNMEASURED: az aks command invoke ${r.code !== 0 ? `exited ${r.code}` : 'returned no pod logs'}: ${redact(scrub(r.stderr || '(no stderr)', secrets), 300)}. Nothing is established about the engines.`);
+      // R7: say what ARM reported, never just "no logs".
+      const what = r.code !== 0 ? `exited ${r.code}` : `returned no pod logs (state=${redact(state || 'unreported', 20)} exitCode=${podExit === undefined || podExit === null ? 'none' : redact(podExit, 10)}${reason ? ` reason=${redact(scrub(reason, secrets), 200)}` : ''})`;
+      say(`UNMEASURED: az aks command ${sub} ${what}: ${redact(scrub(r.stderr || '(no stderr)', secrets), 300)}. Nothing is established about the engines.`);
       code = 2;
     } else {
       const parsed = parseProbeLogs(scrub(logs, secrets));
