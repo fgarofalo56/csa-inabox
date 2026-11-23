@@ -51,6 +51,11 @@ export function parsePdpUrl(raw: string | undefined): string {
   if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash) {
     throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be an http(s) URL without credentials, query or fragment');
   }
+  if (u.pathname !== '/') {
+    // The engine appends /v1/data/lhds/authz/decision itself; a path here doubles it and every engine answers 503
+    // (B3 probe run 45201088369). Fail at startup rather than at the first fhir-tenant job.
+    throw new ConfigError('LOOM_HEALTH_CP_PDP_URL must be the PDP base URL with no path (the engine appends the decision path)');
+  }
   return v.replace(/\/$/, '');
 }
 
