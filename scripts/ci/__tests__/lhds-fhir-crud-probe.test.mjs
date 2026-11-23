@@ -359,9 +359,23 @@ test('phaseProbe: a Running invoke is polled with `az aks command result --comma
     assert.equal(r.code, 0, r.text);
     assert.match(r.text, /step c PASS expect=201 got=201/);
     assert.deepEqual(calls, ['aks command invoke', 'aks command result', 'aks command result']);
-    const resultCall = calls[1];
-    assert.equal(resultCall, 'aks command result');
     assert.deepEqual(sleeps, [RESULT_POLL_MS, RESULT_POLL_MS]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('phaseProbe: a poll answer that is not JSON is reported as unparseable, never as the previous poll\'s state, and nothing is judged (breaks if stale state or logs survive the bad answer)', async () => {
+  const cp = cpFake();
+  const root = mkdtempSync(join(tmpdir(), 'fcp-root-'));
+  const exec = async (cmd, args) => (args[2] === 'invoke'
+    // The in-flight answer carries partial logs on purpose: a stale value would be judged as final.
+    ? { code: 0, stdout: JSON.stringify({ id: 'abc123def4567890', provisioningState: 'Running', exitCode: null, logs: ALL_OK }), stderr: '' }
+    : { code: 0, stdout: 'not json at all', stderr: '' });
+  try {
+    const r = await capture(() => phaseProbe(probeCfg(), { ...cp.deps, exec, sleep: async () => {}, tmpRoot: root }));
+    assert.equal(r.code, 2, r.text);
+    assert.match(r.text, /UNMEASURED: az aks command result returned no pod logs \(state=unparseable exitCode=none\)/);
+    // Paired: the stale in-flight logs were NOT judged (no step verdict lines at all).
+    assert.doesNotMatch(r.text, /step c (PASS|FAIL)/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

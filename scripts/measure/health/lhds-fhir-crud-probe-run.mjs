@@ -438,7 +438,11 @@ export async function phaseProbe(c, deps = {}) {
         const j = JSON.parse(out.stdout);
         logs = String(j.logs ?? ''); podExit = j.exitCode; state = String(j.provisioningState ?? ''); reason = String(j.reason ?? '');
         return j;
-      } catch { return undefined; }
+      } catch {
+        // R7: an answer that is not JSON must not leave the PREVIOUS poll's state or logs to be reported or judged as this one.
+        logs = ''; podExit = undefined; state = 'unparseable'; reason = '';
+        return undefined;
+      }
     };
     const first = readResult(r);
     // `az aks command invoke` stops waiting after about 300 s and returns the IN-FLIGHT result (provisioningState Running,
