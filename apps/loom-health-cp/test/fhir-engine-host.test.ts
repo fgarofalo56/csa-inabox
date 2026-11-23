@@ -20,6 +20,9 @@ import {
   readPrincipalSteps,
   removePrincipalSteps,
   renderEngineManifest,
+  renderEngineNetworkPolicy,
+  ENGINE_INGRESS_PEERS,
+  ENGINE_PORT,
   renderPgJobManifest,
   type EngineTarget,
 } from '../src/jobs/fhir-engine-host.js';
@@ -201,7 +204,62 @@ describe('renderEngineManifest', () => {
   });
 
   it('every object is namespaced to loom-health (the only namespace the control plane may write)', () => {
-    expect(list.items.map((i) => i.metadata.namespace)).toEqual(['loom-health', 'loom-health', 'loom-health']);
+    expect(list.items.map((i) => i.metadata.namespace)).toEqual(['loom-health', 'loom-health', 'loom-health', 'loom-health']);
+  });
+
+  describe('NetworkPolicy (#5441)', () => {
+    type Peer = { namespaceSelector?: { matchLabels?: Record<string, string> }; podSelector?: { matchLabels?: Record<string, string> } };
+    const build = (slug: string, edgePeers?: Peer[]) => {
+      const l = JSON.parse(renderEngineManifest(cfgFor({ tenantId: slug }), { image: FHIR_IMAGE, namespace: 'loom-health', ...(edgePeers ? { edgePeers: edgePeers as never } : {}) })) as { items: Array<Record<string, any>> };
+      return { l, np: l.items.filter((i) => i.kind === 'NetworkPolicy') };
+    };
+
+    it('exactly one policy beside the engine, named and labelled like it', () => {
+      const { l, np } = build(SLUG);
+      expect(np).toHaveLength(1); // breaks at 0 (not rendered) or 2
+      expect(np[0]!.metadata.name).toBe(`fhir-${SLUG}`);
+      expect(np[0]!.metadata.labels).toEqual(l.items.find((i) => i.kind === 'Deployment')!.metadata.labels); // breaks when managed-by/tenant labels are dropped
+    });
+
+    it("selects ONLY this tenant's engine pods (app AND tenant label), and those labels are on the pod template", () => {
+      const a = build(SLUG).np[0]!;
+      expect(a.spec.podSelector.matchLabels).toEqual({ app: `fhir-${SLUG}`, 'loom.health/tenant': SLUG }); // breaks on {} or an app-only selector
+      const b = build('beta-clinic').np[0]!;
+      expect(b.spec.podSelector.matchLabels['loom.health/tenant']).toBe('beta-clinic');
+      const tmpl = build(SLUG).l.items.find((i) => i.kind === 'Deployment')!.spec.template.metadata.labels;
+      for (const [k, v] of Object.entries(a.spec.podSelector.matchLabels)) expect(tmpl[k]).toBe(v); // breaks if the selector no longer matches the pods
+    });
+
+    it('ingress admits aks-command and the konnectivity tunnel by SCOPED selectors, nothing broader', () => {
+      const rules = build(SLUG).np[0]!.spec.ingress;
+      expect(rules).toHaveLength(1);
+      expect(rules[0].from).toEqual([
+        { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'aks-command' } } },
+        { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
+      ]); // breaks on an empty from, namespaceSelector: {}, an ipBlock, or a selector without its label
+      for (const p of rules[0].from as Peer[]) {
+        expect(Object.keys(p.namespaceSelector?.matchLabels ?? {}).length).toBeGreaterThan(0);
+        expect(p).not.toHaveProperty('ipBlock');
+      }
+    });
+
+    it('the port set is EXACT (TCP 8080 only) and the policy is ingress-only (egress stays open by design)', () => {
+      const np = build(SLUG).np[0]!;
+      expect(np.spec.ingress[0].ports).toEqual([{ protocol: 'TCP', port: 8080 }]); // breaks when 9999 or the service port 80 joins
+      expect(ENGINE_PORT).toBe(8080);
+      expect(np.spec.policyTypes).toEqual(['Ingress']); // adding Egress without rules would black-hole PG and Entra
+      expect(np.spec).not.toHaveProperty('egress');
+    });
+
+    it('the edge hook appends a scoped peer after the base peers; an unscoped one is refused', () => {
+      const edge = { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'lhds-edge' } }, podSelector: { matchLabels: { app: 'apim-edge' } } };
+      const from = build(SLUG, [edge]).np[0]!.spec.ingress[0].from;
+      expect(from).toHaveLength(ENGINE_INGRESS_PEERS.length + 1);
+      expect(from[from.length - 1]).toEqual(edge);
+      const base = { name: 'fhir-x', tenantId: 'x', namespace: 'loom-health', labels: {} };
+      expect(() => renderEngineNetworkPolicy({ ...base, edgePeers: [{ namespaceSelector: { matchLabels: {} } }] })).toThrow(/every namespace/); // breaks if {} is accepted
+      expect(() => renderEngineNetworkPolicy({ ...base, edgePeers: [{ namespaceSelector: { matchLabels: { a: 'b' } }, podSelector: { matchLabels: {} } }] })).toThrow(/every pod/);
+    });
   });
 });
 
@@ -692,7 +750,7 @@ describe('RunCommandFhirEngineHost', () => {
     await hostOver(ok).applyEngineConfig(cfgFor());
     await hostOver(ok).removeEngine(SLUG);
     expect(await hostOver(ok).readEngineConfig(SLUG)).toBeUndefined();
-    expect(ok.commands.some((x) => x.startsWith(`kubectl delete deployment/fhir-${SLUG} service/fhir-${SLUG} serviceaccount/fhir-${SLUG} -n loom-health`))).toBe(true);
+    expect(ok.commands.some((x) => x.startsWith(`kubectl delete deployment/fhir-${SLUG} service/fhir-${SLUG} serviceaccount/fhir-${SLUG} networkpolicy/fhir-${SLUG} -n loom-health`))).toBe(true);
     const stuck = new FakeCluster();
     await hostOver(stuck).applyEngineConfig(cfgFor());
     stuck.deleteLeavesWorkload = true;
