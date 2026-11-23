@@ -60,6 +60,9 @@ param alertActionGroupId string = ''
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
+@description('Kubernetes namespace of the tenant FHIR ServiceAccount (the federated credential subject). Must equal the stamp workload namespace.')
+param fhirNamespace string = 'loom-health'
+
 @description('Tags applied to every resource.')
 param tags object = {}
 
@@ -200,6 +203,29 @@ resource tenantIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   tags: tenantTags
 }
 
+// Dedicated FHIR engine identity (#5422 decision 9). Deliberately NOT tenantIdentity: that one can reach the
+// DICOM pixel storage and Event Hubs. This one carries ONLY the federated credential below (and, later, a
+// PostgreSQL principal created by the control plane's role Job). It has NO role assignment, so the control
+// plane's ABAC-conditioned RBAC Administrator grant (4 role ids, control-plane.bicep) stays valid; adding a
+// role assignment here would make tenant.create 403 (health-cp-stamp-rg-grants.test.mjs pins that).
+resource fhirIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-lhds-${stampName}-${tenantSlug}-fhir'
+  location: location
+  tags: tenantTags
+}
+
+// One federated credential per identity, so no serialisation edge is needed (credentials on ONE identity
+// must be written serially; add dependsOn if a second is ever added here).
+resource fhirFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: fhirIdentity
+  name: 'fhir-${tenantSlug}'
+  properties: {
+    issuer: string(stamp.aksOidcIssuerUrl)
+    subject: 'system:serviceaccount:${fhirNamespace}:fhir-${tenantSlug}'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
 // These two `existing` handles point at accounts the pixelStorage / auditStorage
 // modules above CREATE. An `existing` reference carries no edge to the module, so
 // every resource that scopes to or references them MUST name its storage module in
@@ -322,6 +348,12 @@ output tenant object = {
   identityPrincipalId: tenantIdentity.properties.principalId
   capacityAlertId: capacityAlert.id
   maxStorageGiB: maxStorageGiB
+  fhirIdentity: {
+    id: fhirIdentity.id
+    name: fhirIdentity.name
+    clientId: fhirIdentity.properties.clientId
+    principalId: fhirIdentity.properties.principalId
+  }
 }
 
 @description('Resource ids of the four tenant keys, in the order st-pixel, st-audit, pg, backup.')

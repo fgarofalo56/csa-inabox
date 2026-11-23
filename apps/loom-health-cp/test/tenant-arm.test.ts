@@ -8,6 +8,14 @@ const VAULT = 'https://kv-lhds-dev01-abc.vault.azure.net/';
 const ARM = 'https://management.azure.com';
 const HUB = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.EventHub/namespaces/evh/eventhubs/eh-t-a`;
 
+// Four distinct values so a swapped field cannot pass. The ids are GUIDs because the parser checks that shape.
+const FHIR_ID = {
+  id: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lhds-dev01-a-fhir`,
+  name: 'id-lhds-dev01-a-fhir',
+  clientId: '11111111-1111-4111-8111-111111111111',
+  principalId: '22222222-2222-4222-8222-222222222222',
+};
+
 interface Call { method: string; url: string; body?: string; auth?: string }
 
 interface Canned { status: number; body?: unknown; headers?: Record<string, string>; nonJson?: boolean; text?: string }
@@ -82,7 +90,7 @@ describe('RestTenantArm', () => {
 
   it('deployTenant PUTs an incremental deployment then returns the polled outputs', async () => {
     const outputs = {
-      tenant: { value: { tenantSlug: 'a', stampName: 'dev01', maxStorageGiB: 5, eventHubId: HUB } },
+      tenant: { value: { tenantSlug: 'a', stampName: 'dev01', maxStorageGiB: 5, eventHubId: HUB, fhirIdentity: FHIR_ID } },
       keyIds: { value: ['k1'] },
       keyNames: { value: ['t-a-st-pixel'] },
     };
@@ -94,6 +102,8 @@ describe('RestTenantArm', () => {
     const m = await arm.deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: { s: 1 } });
     expect(m.eventHubId).toBe(HUB);
     expect(m.keyNames).toEqual(['t-a-st-pixel']);
+    // Breaks if manifestFromOutputs drops fhirIdentity or reads another field into it (each value is distinct).
+    expect(m.fhirIdentity).toEqual(FHIR_ID);
     expect(calls.map((c) => c.method)).toEqual(['PUT', 'GET', 'GET']);
     const put = JSON.parse(calls[0]?.body ?? '{}');
     expect(put.properties.mode).toBe('Incremental'); // Complete would delete the stamp's own resources
@@ -111,6 +121,47 @@ describe('RestTenantArm', () => {
   it('a Succeeded deployment without a tenant output is a failure, not an empty manifest', async () => {
     const { arm } = rig([{ status: 201 }, { status: 200, body: { properties: { provisioningState: 'Succeeded', outputs: {} } } }]);
     await expect(arm.deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: {} })).rejects.toMatchObject({ code: 'no_outputs' });
+  });
+
+  describe('fhirIdentity in the tenant manifest (#5422 decision 9)', () => {
+    const deploy = (fhirIdentity: unknown) =>
+      rig([
+        { status: 201 },
+        { status: 200, body: { properties: { provisioningState: 'Succeeded', outputs: { tenant: { value: { tenantSlug: 'a', fhirIdentity } }, keyIds: { value: [] }, keyNames: { value: [] } } } } },
+      ]).arm
+        .deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: {} })
+        .catch((x: unknown) => x);
+
+    it('an absent fhirIdentity fails closed with a message that says to redeploy the tenant', async () => {
+      // Breaks if manifestFromOutputs defaults a missing fhirIdentity to empty strings instead of throwing.
+      const e = await deploy(undefined);
+      expect(e).toBeInstanceOf(JobFailure);
+      expect((e as JobFailure).code).toBe('tenant_manifest_fhir_identity_missing');
+      expect((e as JobFailure).message).toContain('redeploy the tenant');
+    });
+
+    it.each(['id', 'name', 'clientId', 'principalId'] as const)('an empty %s fails closed and names that field', async (field) => {
+      // Breaks if one field is dropped from the completeness check; each case blanks exactly one.
+      const e = (await deploy({ ...FHIR_ID, [field]: '' })) as JobFailure;
+      expect(e.code).toBe('tenant_manifest_fhir_identity_missing');
+      expect(e.message).toContain(`empty: ${field})`);
+    });
+
+    it('a non-GUID clientId or principalId is refused', async () => {
+      // Breaks if the GUID shape check is removed: 'not-a-guid' would be handed to the federated service account annotation.
+      expect(((await deploy({ ...FHIR_ID, clientId: 'not-a-guid' })) as JobFailure).code).toBe('tenant_manifest_fhir_identity_malformed');
+      expect(((await deploy({ ...FHIR_ID, principalId: 'not-a-guid' })) as JobFailure).code).toBe('tenant_manifest_fhir_identity_malformed');
+    });
+
+    it('a read-only lookup of a pre-B2a record reports no_outputs (destroy derives names) while a current record is found', async () => {
+      // Breaks if tenant.destroy's lookup throws for a legacy tenant (the tenant would become undeletable),
+      // or if the absorb swallows a record that DOES carry fhirIdentity.
+      const body = (tenant: unknown) => ({ status: 200, body: { properties: { outputs: { tenant: { value: tenant }, keyIds: { value: [] }, keyNames: { value: [] } } } } });
+      expect((await rig([body({ tenantSlug: 'a' })]).arm.getTenantManifest(RG, 'a')).state).toBe('no_outputs');
+      const hit = await rig([body({ tenantSlug: 'a', fhirIdentity: FHIR_ID })]).arm.getTenantManifest(RG, 'a');
+      expect(hit.state).toBe('found');
+      expect(hit.state === 'found' && hit.value.fhirIdentity).toEqual(FHIR_ID);
+    });
   });
 
   it('manifest lookups tell 404 apart from a record without outputs', async () => {
