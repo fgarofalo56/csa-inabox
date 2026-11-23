@@ -101,14 +101,33 @@ class PublicBaseTest {
     }
   }
 
+  /** A token whose aud is set, built like InterceptorTest.token (unsigned, run-time only). */
+  static String tokenWithAud(String aud) throws Exception {
+    var e = java.util.Base64.getUrlEncoder().withoutPadding();
+    String h = e.encodeToString("{\"alg\":\"none\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    String p = e.encodeToString(InterceptorTest.JSON.writeValueAsBytes(java.util.Map.of(
+        "tenant", "acme", "scope", "user/*.rs", "patient", "", "sub", "u-1", "client_id", "c-1", "aud", aud)));
+    return h + "." + p + ".sig";
+  }
+
   @Test
-  void withNoConfiguredAddressTheBaseIsTheServletBaseNotTheFacility() throws Exception {
-    // BREAKS when: the facility segment is left on the fallback base (base would end in /facility-a).
+  void anEngineWithNoPinnedAddressNeverAuthorizesOnARequestDerivedBase() throws Exception {
+    // BREAKS when: publicBase falls back to the request-derived base (Host / X-Forwarded-*): the token below names
+    // exactly the as-received base, so the PDP would see aud == base and answer 200 instead of 403.
     try (EngineHarness e = engine(null, null)) {
-      String[] r = e.call("GET", "/facility-a/Patient/p1", InterceptorTest.token("acme", "user/*.rs", ""), null, null);
-      assertEquals("200", r[0], r[1]);
-      assertEquals(e.base, pdp.inputs.get(0).get("request").get("base").asText());
-      assertFalse(pdp.inputs.get(0).get("request").get("base").asText().endsWith("facility-a"));
+      String[] denied = e.call("GET", "/facility-a/Patient/p1", tokenWithAud(e.base), null, null);
+      assertEquals("403", denied[0], denied[1]);
+      assertEquals("", pdp.inputs.get(0).get("request").get("base").asText());
+      assertEquals(0, e.handlerCalls.get(), "a denied request must not reach the engine");
+      e.awaitAudits(1);
+    }
+    // Positive pair: the SAME token shape on a pinned engine, aud = the pinned base, reaches the engine.
+    try (EngineHarness e = engine(PUBLIC, null)) {
+      reset();
+      String[] ok = e.call("GET", "/facility-a/Patient/p1", tokenWithAud(PUBLIC), null, null);
+      assertEquals("200", ok[0], ok[1]);
+      assertEquals(PUBLIC, pdp.inputs.get(0).get("request").get("base").asText());
+      assertEquals(1, e.handlerCalls.get());
       e.awaitAudits(1);
     }
   }

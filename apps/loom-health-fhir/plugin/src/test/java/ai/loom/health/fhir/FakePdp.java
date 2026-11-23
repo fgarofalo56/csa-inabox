@@ -117,6 +117,10 @@ final class FakePdp implements AutoCloseable {
     } catch (Exception e) {
       return new String[] {"false", "token-invalid"};
     }
+    // authz.rego aud_ok: an aud claim must equal request.base exactly. Tokens without aud skip this, so older tests are unchanged.
+    if (claims.has("aud") && !claims.get("aud").asText().equals(req.path("base").asText())) {
+      return new String[] {"false", "audience-mismatch"};
+    }
     if (!req.get("tenant").asText().equals(claims.path("tenant").asText())) {
       return new String[] {"false", "tenant-mismatch"};
     }

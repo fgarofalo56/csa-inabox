@@ -73,7 +73,7 @@ class InterceptorTest {
     assertEquals("acme", in.get("tenant").asText(), "tenant sent to the PDP must be the engine's tenant");
     assertEquals("read", in.get("interaction").asText());
     assertEquals("Patient", in.get("resource_type").asText());
-    assertEquals(engine.base, in.get("base").asText(), "base is the server public base: no partition segment, no trailing slash (decision 13)");
+    assertEquals("", in.get("base").asText(), "an engine with no pinned server address sends an EMPTY base (fail closed), never the request-derived URL (decision 13)");
     assertEquals(1, engine.handlerCalls.get(), "the engine ran exactly once");
   }
 
@@ -645,7 +645,7 @@ class InterceptorTest {
       String[] r = e2.call("GET", "/Patient/p1", token("acme", "user/*.rs", ""), null, null);
       assertEquals("200", r[0], r[1]);
       assertEquals("acme", pdp.inputs.get(0).get("request").get("tenant").asText());
-      assertTrue(pdp.inputs.get(0).get("request").get("base").asText().endsWith("/acme/fhir"));
+      assertEquals("", pdp.inputs.get(0).get("request").get("base").asText(), "unpinned engine: empty base, not the request URL");
       e2.awaitAudits(1);
     }
   }

@@ -6,6 +6,7 @@ import ca.uhn.fhir.interceptor.api.Interceptor;
 import ca.uhn.fhir.interceptor.api.Pointcut;
 import ca.uhn.fhir.rest.api.RestOperationTypeEnum;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
+import ca.uhn.fhir.rest.server.HardcodedServerAddressStrategy;
 import ca.uhn.fhir.rest.server.RestfulServer;
 import ca.uhn.fhir.rest.server.exceptions.AuthenticationException;
 import ca.uhn.fhir.rest.server.exceptions.ForbiddenOperationException;
@@ -224,40 +225,38 @@ public class LoomPdpInterceptor {
 
   /**
    * The server's PUBLIC base for the PDP's {@code request.base}: the configured server address
-   * ({@code hapi.fhir.server_address}, the tenant's {@code <stampBaseUrl>/<tenant>/fhir}) WITHOUT the
-   * facility-partition segment, no trailing slash. The PDP compares it exactly with the token {@code aud}
-   * and the bundle's bases (authz.rego aud_ok), so it must name the tenant's public base whatever the transport.
+   * ({@code hapi.fhir.server_address}, the tenant's {@code <stampBaseUrl>/<tenant>/fhir}), no trailing slash.
+   * The PDP compares it exactly with the token {@code aud} and the bundle's bases (authz.rego aud_ok), so it must
+   * name the tenant's public base whatever the transport.
    *
    * <p>Why not {@code rd.getFhirServerBase()}: with request tenant partitioning on, HAPI's
    * UrlBaseTenantIdentificationStrategy.massageServerBaseUrl appends "/" + the partition name to it
    * (RestfulServer.getServerBaseForRequest, 8.12.0), so it would be {@code .../fhir/<facility>} and never equal
-   * a bundle base. The server-address strategy is asked directly instead of cutting the string; the string cut
-   * is only the fallback when no RestfulServer is reachable.
+   * a bundle base. The HardcodedServerAddressStrategy is asked directly: it carries no partition segment.
+   *
+   * <p>FAILS CLOSED: unless the address strategy is a HardcodedServerAddressStrategy the base is "" (the PDP then
+   * denies with an audience mismatch). HAPI's default IncomingRequestAddressStrategy builds the base from Host and
+   * X-Forwarded-*, which the CALLER controls; a client could name any aud it holds a token for and have it echoed
+   * back as the base. An unpinned engine must never authorize on a request-derived base.
    */
   static String publicBase(RequestDetails rd, ServletRequestDetails srd) {
-    String base = null;
     try {
-      if (srd != null && srd.getServer() instanceof RestfulServer rs && srd.getServletRequest() != null) {
-        base = rs.getServerAddressStrategy()
-            .determineServerBase(srd.getServletRequest().getServletContext(), srd.getServletRequest());
+      if (srd != null && srd.getServer() instanceof RestfulServer rs && srd.getServletRequest() != null
+          && rs.getServerAddressStrategy() instanceof HardcodedServerAddressStrategy hs) {
+        String base = hs.determineServerBase(srd.getServletRequest().getServletContext(), srd.getServletRequest());
+        if (base == null) {
+          return "";
+        }
+        base = base.trim();
+        while (base.endsWith("/")) {
+          base = base.substring(0, base.length() - 1);
+        }
+        return base;
       }
     } catch (RuntimeException e) {
-      base = null;
+      return "";
     }
-    if (base == null || base.isBlank()) {
-      base = rd.getFhirServerBase() == null ? "" : rd.getFhirServerBase();
-      String partition = rd.getTenantId();
-      while (base.endsWith("/")) {
-        base = base.substring(0, base.length() - 1);
-      }
-      if (partition != null && !partition.isEmpty() && base.endsWith("/" + partition)) {
-        base = base.substring(0, base.length() - partition.length() - 1);
-      }
-    }
-    while (base.endsWith("/")) {
-      base = base.substring(0, base.length() - 1);
-    }
-    return base;
+    return "";
   }
 
   private static String pathOf(ServletRequestDetails srd) {
