@@ -43,6 +43,8 @@ const health = compile(`${BICEP}/health.bicep`);
 
 const SPEC_PATH = `${BICEP}/modules/health/pdp-image.json`;
 const spec = JSON.parse(read(SPEC_PATH));
+const PG_SPEC_PATH = `${BICEP}/modules/health/pg-client-image.json`;
+const pgSpec = JSON.parse(read(PG_SPEC_PATH));
 
 // ── bicep ─────────────────────────────────────────────────────────────────────
 
@@ -140,7 +142,7 @@ test('the PDP image is deployed BY DIGEST from the one spec file the workflow al
 // ── workflow ──────────────────────────────────────────────────────────────────
 
 const wf = read('.github/workflows/deploy-health.yml');
-const importStart = wf.indexOf('- name: Ensure the digest-pinned PDP image is in the registry');
+const importStart = wf.indexOf('- name: Ensure the digest-pinned stamp images (PDP, PG client)');
 const applyStart = wf.indexOf('- name: Apply the stamp PDP manifest');
 const importEnd = wf.indexOf('\n      # Runs AFTER the console bind', importStart);
 const importBlock = wf.slice(importStart, importEnd);
@@ -179,12 +181,13 @@ test('workflow: the import step discards nothing (no || true, no 2>/dev/null, no
   assert.ok(!/continue-on-error/.test(importBlock), 'continue-on-error');
   assert.ok(!/curl\s+[^\n]*-[a-zA-Z]*f/.test(importBlock), 'curl -f');
   // Positive: the step does capture stderr to a file it later prints.
-  assert.match(importBlock, /2> temp\/pdp-import\.err/);
-  assert.match(importBlock, /head -c 600 temp\/pdp-import\.err/);
+  assert.match(importBlock, /2> "temp\/\$N-import\.err"/);
+  assert.match(importBlock, /head -c 600 "temp\/\$N-import\.err"/);
 });
 
 // Run the real step script under bash with stubs.
-function runStep({ peState = 'Approved', peRc = 0, resolveSeq, importRc = 0, specDigest = spec.digest, deployed = true }) {
+// pgSeq: the resolve answers for the PG client image, which runs AFTER the PDP image in the same step (default: already present).
+function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgSpec.digest}`], importRc = 0, assertRc = 0, cpJson = null, specDigest = spec.digest, pgDigest = pgSpec.digest, deployed = true }) {
   const dir = mkdtempSync(join(tmp, 'run-'));
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
@@ -192,11 +195,14 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, importRc = 0, spe
   mkdirSync(join(dir, 'temp'), { recursive: true });
   mkdirSync(join(dir, BICEP, 'modules/health'), { recursive: true });
   writeFileSync(join(dir, SPEC_PATH), JSON.stringify({ ...spec, digest: specDigest }));
+  const pgObj = { ...pgSpec, digest: pgDigest };
+  if (pgDigest === null) delete pgObj.digest; // null = the key is absent from the file
+  writeFileSync(join(dir, PG_SPEC_PATH), JSON.stringify(pgObj));
   writeFileSync(join(dir, 'temp/outputs.json'), JSON.stringify({
     healthPdpState: { value: { deployed } },
     healthStamp: { value: { acrPrivateEndpoint: { privateEndpointName: 'pe-lhds-dev01-acr', reason: 'r' } } },
   }));
-  writeFileSync(join(dir, 'seq.txt'), resolveSeq.join('\n') + '\n');
+  writeFileSync(join(dir, 'seq.txt'), [...resolveSeq, ...pgSeq].join('\n') + '\n');
   writeFileSync(join(bin, 'az'), [
     '#!/usr/bin/env bash',
     'echo "az $*" >> "$STUB_LOG"',
@@ -216,6 +222,13 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, importRc = 0, spe
     'exit "$RC"',
     '',
   ].join('\n'));
+  writeFileSync(join(dir, 'scripts/ci/assert-acr-image-tags.sh'), [
+    '#!/usr/bin/env bash',
+    'echo "assert $*" >> "$STUB_LOG"',
+    'exit "$STUB_ASSERT_RC"',
+    '',
+  ].join('\n'));
+  if (cpJson !== null) writeFileSync(join(dir, 'temp/cp.json'), JSON.stringify(cpJson));
   chmodSync(join(bin, 'az'), 0o755);
   writeFileSync(join(dir, 'step.sh'), runBody);
   const log = join(dir, 'log.txt');
@@ -226,7 +239,7 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, importRc = 0, spe
     env: {
       ...process.env,
       STUB_BIN: posix(bin), STUB_LOG: posix(log), STUB_SEQ: posix(join(dir, 'seq.txt')),
-      STUB_PE_STATE: peState, STUB_PE_RC: String(peRc), STUB_IMPORT_RC: String(importRc),
+      STUB_PE_STATE: peState, STUB_PE_RC: String(peRc), STUB_IMPORT_RC: String(importRc), STUB_ASSERT_RC: String(assertRc),
       ACR: 'acrtest', HUB_RG: 'rg-hub', GITHUB_STEP_SUMMARY: posix(join(dir, 'summary.md')),
     },
   });
@@ -251,7 +264,7 @@ test('step script: absent -> imports exactly once from the digest source, reads 
   assert.equal(imp.length, 1, r.calls.join('\n'));
   // Breaks if the source is not docker.io/openpolicyagent/opa@<digest from the spec> or the target is not opa:<tag>.
   assert.equal(imp[0], `az acr import --name acrtest --resource-group rg-hub --source ${spec.source}@${D} --image ${spec.acrRepository}:${spec.tag} --force`);
-  assert.equal(r.calls.filter((c) => c.startsWith('resolve')).length, 2, 'presence check AND read-back expected');
+  assert.equal(r.calls.filter((c) => c.startsWith('resolve') && c.includes(' opa@')).length, 2, 'PDP presence check AND read-back expected');
 });
 
 test('step script: import fails -> exit 1 with the real exit code, no success claim', () => {
@@ -309,6 +322,99 @@ test('step script: PDP not deployed -> notice and exit 0 without touching Azure'
   const r = runStep({ deployed: false, resolveSeq: [] });
   assert.equal(r.status, 0, r.out);
   assert.equal(r.calls.length, 0);
+});
+
+// ── B2d: the FHIR engine and PG client images reach the control plane, and the PG image is imported ─────────────
+
+test('B2d step script: PG client image absent -> imported exactly once BY DIGEST from its own spec, after the PDP image, and read back', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`], pgSeq: ['3 x', `0 ${OTHER}`] });
+  assert.equal(r.status, 0, r.out);
+  const imp = imports(r.calls);
+  // Breaks if the PG image is imported by :tag (source without @digest), from the PDP spec, or not at all (length 0).
+  assert.equal(imp.length, 1, r.calls.join('\n'));
+  assert.equal(imp[0], `az acr import --name acrtest --resource-group rg-hub --source ${pgSpec.source}@${pgSpec.digest} --image ${pgSpec.acrRepository}:${pgSpec.tag} --force`);
+  assert.equal(pgSpec.acrRepository, 'postgres');
+  assert.match(pgSpec.digest, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(r.calls.filter((c) => c.startsWith('resolve') && c.includes(` ${pgSpec.acrRepository}@${pgSpec.digest}`)).length, 2, 'PG presence check AND read-back expected');
+  const lastResolve = r.calls.filter((c) => c.startsWith('resolve')).at(-1);
+  assert.ok(lastResolve.includes(pgSpec.acrRepository), `the last registry call must be the PG read-back: ${lastResolve}`);
+});
+
+test('B2d step script: an EMPTY PG digest fails the step (exit 1) before ANY Azure call, naming the PG spec - it is not skipped', () => {
+  // Breaks if the loop validates only the PDP spec, or if an empty digest is treated as "nothing to import" (status 0).
+  const r = runStep({ pgDigest: '', resolveSeq: [`0 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(r.calls.length, 0, `a spec defect must stop the step before the registry is touched:\n${r.calls.join('\n')}`);
+  assert.match(r.out, /pg-client-image\.json is missing source\/acrRepository\/tag or its digest is not sha256/);
+  assert.match(r.out, /digest=''/);
+});
+
+test('B2d step script: a MISSING digest key in the PG spec fails the step too (jq yields empty, not a skip)', () => {
+  const r = runStep({ pgDigest: null, resolveSeq: [`0 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(r.calls.length, 0, r.calls.join('\n'));
+  assert.match(r.out, /pg-client-image\.json is missing/);
+});
+
+test('B2d step script: a PG import that fails after a good PDP import is NOT swallowed (exit 1, PG named)', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`], pgSeq: ['3 x'], importRc: 9 });
+  assert.equal(r.status, 1, r.out);
+  // Exact substring, no regex: breaks if the PG source/digest is not named or the import rc is not surfaced.
+  const want = `import of ${pgSpec.source}@${pgSpec.digest} into acrtest exited 9`;
+  assert.ok(r.out.includes(want), `expected "${want}" in:\n${r.out}`);
+});
+
+test('B2d health: the control plane gets the FHIR image TAG-pinned to the CP tag and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
+  const cp = resourcesOf(health).find((r) => r.type === 'Microsoft.Resources/deployments' && /lhds-control-plane/.test(JSON.stringify(r.name)));
+  assert.ok(cp, 'control plane module missing');
+  const p = cp.properties.parameters;
+  // Breaks if the FHIR image drops to :latest / another repo / another tag variable, or is emitted without the PDP.
+  assert.equal(p.fhirImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/loom-health-fhir:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))), createObject('value', ''))]");
+  assert.equal(p.image.value, "[format('{0}/loom-health-cp:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))]", 'the CP image must share the tag variable with the FHIR image');
+  // Breaks if the PG image goes by tag (no @digest) or reads a different spec.
+  assert.equal(p.pgClientImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/{1}@{2}', variables('cpAcrLoginServer'), variables('pgClientImageSpec').acrRepository, variables('pgClientImageSpec').digest)), createObject('value', ''))]");
+  assert.ok(JSON.stringify(health.variables).includes(pgSpec.digest), 'compiled health.bicep does not carry the PG spec digest');
+  assert.doesNotMatch(JSON.stringify(health.variables.cpImageTag), /latest/);
+});
+
+test('B2d control-plane: LOOM_HEALTH_CP_FHIR_IMAGE and LOOM_HEALTH_CP_PG_CLIENT_IMAGE are rendered from fhirImage / pgClientImage, together or not at all, and are in cpEnv', () => {
+  const cpArm = compile(`${BICEP}/modules/health/control-plane.bicep`);
+  const v = JSON.stringify(cpArm.variables.engineImageEnv);
+  // Breaks if either env is sourced from the wrong param (a swap), or the all-or-nothing `or(empty..)` is dropped.
+  assert.match(v, /or\(empty\(parameters\('fhirImage'\)\), empty\(parameters\('pgClientImage'\)\)\)/);
+  assert.match(v, /'name', 'LOOM_HEALTH_CP_FHIR_IMAGE', 'value', parameters\('fhirImage'\)/);
+  assert.match(v, /'name', 'LOOM_HEALTH_CP_PG_CLIENT_IMAGE', 'value', parameters\('pgClientImage'\)/);
+  assert.equal(cpArm.parameters.fhirImage.defaultValue, '');
+  assert.equal(cpArm.parameters.pgClientImage.defaultValue, '');
+  // Positive pairing: the variable is actually concatenated into the container env (absence alone would pass if it were dead code).
+  assert.match(JSON.stringify(cpArm), /variables\('pdpEnv'\), variables\('engineImageEnv'\), /);
+});
+
+const asserts = (calls) => calls.filter((c) => c.startsWith('assert '));
+
+test('B2d step script: the FHIR image tag is asserted present, with the tag read from cp.json imageTag (not a transcribed v0.1)', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`], cpJson: { imageTag: 'v9.9' } });
+  assert.equal(r.status, 0, r.out);
+  // Breaks if the assertion is dropped (length 0) or the tag is hard-coded to v0.1 (this fixture asks for v9.9).
+  assert.deepEqual(asserts(r.calls), ['assert --acr acrtest --rg rg-hub --lease loom-health-fhir:v9.9']);
+});
+
+test('B2d step script: with no cp.json imageTag the FHIR tag defaults to v0.1, the default health.bicep uses', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`] });
+  assert.equal(r.status, 0, r.out);
+  assert.deepEqual(asserts(r.calls), ['assert --acr acrtest --rg rg-hub --lease loom-health-fhir:v0.1']);
+  assert.match(read(`${BICEP}/health.bicep`), /var cpImageTag = string\(controlPlaneConfig\.\?imageTag \?\? 'v0\.1'\)/);
+});
+
+test('B2d step script: FHIR tag MISSING (exit 3) fails the deploy before any import; UNPROVEN (exit 4) fails without claiming it is missing', () => {
+  const miss = runStep({ resolveSeq: ['3 x'], assertRc: 3 });
+  assert.equal(miss.status, 1, miss.out);
+  assert.equal(imports(miss.calls).length, 0, 'no import may run once the FHIR image is known missing');
+  assert.match(miss.out, /MISSING: the registry answered and loom-health-fhir:v0\.1 is not in it/);
+  const unproven = runStep({ resolveSeq: ['3 x'], assertRc: 4 });
+  assert.equal(unproven.status, 1, unproven.out);
+  assert.match(unproven.out, /UNPROVEN: .* This is not a claim that it is missing/);
+  assert.doesNotMatch(unproven.out, /MISSING: the registry answered/);
 });
 
 test.after(() => rmSync(tmp, { recursive: true, force: true }));
