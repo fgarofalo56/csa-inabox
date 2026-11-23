@@ -72,6 +72,40 @@ on:
         description: 'Publish even if the stamp homes zero active tenants (that bundle denies every request). Default false: refuse.'
         type: boolean
         default: false
+  # Callable (lhds-fhir-crud-probe.yml publishes inside its own run so tenant ownership stays in one run). The
+  # inputs are the dispatch inputs, with `choice` becoming `string`: a called workflow gets no choice validation, and
+  # the `if:` conditions below compare exact strings, so any value other than Commercial/publish publishes nothing.
+  # The `health-pdp-publish` environment approval and this concurrency group apply to the called job exactly as on dispatch.
+  workflow_call:
+    inputs:
+      boundary:
+        description: 'Cloud boundary. Commercial or GCC-High.'
+        type: string
+        default: Commercial
+      mode:
+        description: 'build-only runs the test gate and the build, publishes NOTHING. publish also PUTs the unsigned bundle to the control plane, which signs it.'
+        type: string
+        default: build-only
+      stamp_id:
+        description: 'Stamp id (slug) to publish for, as registered in the control plane.'
+        type: string
+        required: true
+      control_plane_url:
+        description: 'https base URL of loom-health-cp (publish mode).'
+        type: string
+        default: ''
+      control_plane_audience:
+        description: 'Token audience of loom-health-cp (its app id URI or client id) (publish mode).'
+        type: string
+        default: ''
+      issuer_url:
+        description: 'Authorization server issuer URL; its /jwks.json goes into the bundle (publish mode).'
+        type: string
+        default: ''
+      allow_empty_stamp:
+        description: 'Publish even if the stamp homes zero active tenants (that bundle denies every request). Default false: refuse.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
