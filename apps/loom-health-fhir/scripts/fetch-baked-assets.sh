@@ -44,6 +44,23 @@ fi
 curl -fsSL --retry 3 -o "$OUT/agent/opentelemetry-javaagent.jar" "$OURL"
 verify "$OUT/agent/opentelemetry-javaagent.jar" "$OSHA" "opentelemetry-javaagent $OVER"
 
+# jdbc-auth.lock.tsv: the Entra (passwordless) JDBC auth plugin and its runtime closure, minus
+# what the pinned HAPI main.war already ships (jackson, reactor-core, slf4j, pgjdbc, nimbus,
+# jspecify...) and minus non-linux-x86_64 natives. Columns: group, artifact, version, file,
+# sha256, url. Baked into /app/extra-classes so PropertiesLauncher puts it on the class path.
+mkdir -p "$OUT/jdbc-auth"
+sed 's/[[:cntrl:]]*$//' "$LOCK_DIR/jdbc-auth.lock.tsv" > "$OUT/jdbc-auth.lock.lf"
+JCOUNT=0
+while IFS="$(printf '\t')" read -r _G _A _V FILE SUM URL; do
+  [ -z "$FILE" ] && continue
+  case "$URL" in https://repo1.maven.org/maven2/*) ;; *) echo "ERROR: jdbc-auth url not Maven Central: $URL" >&2; exit 1 ;; esac
+  curl -fsSL --retry 3 -o "$OUT/jdbc-auth/$FILE" "$URL"
+  verify "$OUT/jdbc-auth/$FILE" "$SUM" "$FILE"
+  JCOUNT=$((JCOUNT + 1))
+done < "$OUT/jdbc-auth.lock.lf"
+[ "$JCOUNT" -ge 10 ] || { echo "ERROR: jdbc-auth.lock.tsv listed only $JCOUNT jars" >&2; exit 1; }
+echo "baked $JCOUNT JDBC auth jars"
+
 # packages.lock.tsv: name <TAB> version <TAB> sha256
 COUNT=0
 sed 's/[[:cntrl:]]*$//' "$LOCK_DIR/packages.lock.tsv" > "$OUT/packages.lock.lf"
