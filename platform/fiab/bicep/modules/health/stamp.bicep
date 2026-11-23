@@ -295,6 +295,28 @@ module exportStorage 'storage.bicep' = {
   ]
 }
 
+// ── PG role-job identity (#5422 decision 10) ──────────────────────────────────
+// The in-cluster Job that creates each tenant's Entra PostgreSQL principal runs as the Kubernetes
+// ServiceAccount lhds-pg-admin (declared in engines.bicep's stamp manifest), federated to this identity.
+// It is a PostgreSQL Entra administrator (postgres.bicep) and holds NO Azure role assignment.
+var pgAdminIdentityName = 'id-lhds-${stampName}-pgadmin'
+
+resource pgAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: pgAdminIdentityName
+  location: location
+  tags: stampTags
+}
+
+resource pgAdminFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: pgAdminIdentity
+  name: 'lhds-pg-admin'
+  properties: {
+    issuer: aks.outputs.oidcIssuerUrl
+    subject: 'system:serviceaccount:loom-health:lhds-pg-admin'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
 module postgres 'postgres.bicep' = if (postgresQuotaAvailable) {
   name: 'lhds-${stampName}-postgres'
@@ -314,6 +336,8 @@ module postgres 'postgres.bicep' = if (postgresQuotaAvailable) {
     cmkKeyUri: keyvault.outputs.keyUris['stamp-postgres']
     tenantId: tenantId
     adminEntraGroupId: adminEntraGroupId
+    pgAdminPrincipalId: pgAdminIdentity.properties.principalId
+    pgAdminPrincipalName: pgAdminIdentityName
     workspaceId: law.id
     tags: stampTags
   }
@@ -430,4 +454,11 @@ output stamp object = {
   ingressTlsSecretUri: ingress.outputs.tlsSecretUri
   ingressTlsExpectedIssuedSecretUri: ingress.outputs.tlsExpectedIssuedSecretUri
   wafPolicyId: ingress.outputs.wafPolicyId
+}
+
+@description('Stamp PG role-job identity (#5422 decision 10): a PostgreSQL Entra administrator federated to the ServiceAccount loom-health/lhds-pg-admin. The control plane reads it from the lhds-stamp-<id> deployment outputs.')
+output pgAdminIdentity object = {
+  name: pgAdminIdentity.name
+  clientId: pgAdminIdentity.properties.clientId
+  principalId: pgAdminIdentity.properties.principalId
 }

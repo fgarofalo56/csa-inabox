@@ -78,6 +78,12 @@ param adminEntraGroupId string = ''
 @description('Display name of the administrator group.')
 param adminEntraGroupName string = 'lhds-pg-admins'
 
+@description('Object id (principalId) of the stamp PG role-job identity (id-lhds-<stamp>-pgadmin). Registered as a second Entra administrator so the in-cluster role Job can create tenant database principals (#5422 decision 10). Empty = not registered.')
+param pgAdminPrincipalId string = ''
+
+@description('Name of that identity. It is the PostgreSQL role name the server maps the token to.')
+param pgAdminPrincipalName string = ''
+
 @description('Extensions allow-listed through azure.extensions. These are what the FHIR/DICOM engines create (BTREE_GIN and PG_TRGM for search, BTREE_GIST for ranges, UNACCENT for name search).')
 param extensions array = [
   'BTREE_GIN'
@@ -186,8 +192,24 @@ resource admin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08
   }
 }
 
+// The role-job identity is a SECOND administrator (ServicePrincipal). Serialised after the group
+// administrator: Entra administrator writes fail while the server is mid-update, so they are never
+// PUT in parallel (prior art: loom-unity-postgres.bicep pgExtraAdmins).
+resource adminRoleJob 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = if (!empty(pgAdminPrincipalId)) {
+  parent: server
+  name: pgAdminPrincipalId
+  properties: {
+    principalName: pgAdminPrincipalName
+    principalType: 'ServicePrincipal'
+    tenantId: tenantId
+  }
+  dependsOn: [
+    admin
+  ]
+}
+
 // Server configuration writes must be sequential and follow the administrator
-// write, or the Entra control-plane operation races a config-triggered update.
+// writes, or the Entra control-plane operation races a config-triggered update.
 resource cfgExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: server
   name: 'azure.extensions'
@@ -197,6 +219,7 @@ resource cfgExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations
   }
   dependsOn: [
     admin
+    adminRoleJob
   ]
 }
 

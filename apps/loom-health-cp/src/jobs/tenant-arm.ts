@@ -17,6 +17,8 @@ export interface TenantNames {
   eventHubName: string;
   databaseName: string;
   identityName: string;
+  /** Dedicated per-tenant FHIR engine identity (#5422 decision 9). */
+  fhirIdentityName: string;
   alertName: string;
 }
 
@@ -28,6 +30,7 @@ export function tenantNames(stampName: string, slug: string): TenantNames {
     eventHubName: `eh-t-${slug}`,
     databaseName: `lhds_${slug.replaceAll('-', '_')}`,
     identityName: `id-lhds-${stampName}-${slug}`,
+    fhirIdentityName: `id-lhds-${stampName}-${slug}-fhir`,
     alertName: `alert-lhds-${stampName}-${slug}-capacity`,
   };
 }
@@ -43,6 +46,14 @@ export function tenantDeploymentName(slug: string): string {
 
 export function stampDeploymentName(stampId: string): string {
   return `lhds-stamp-${stampId}`;
+}
+
+/** `tenant.fhirIdentity` of tenant.bicep. */
+export interface FhirIdentity {
+  id: string;
+  name: string;
+  clientId: string;
+  principalId: string;
 }
 
 /** The `tenant` output of tenant.bicep. */
@@ -61,6 +72,8 @@ export interface TenantManifest {
   identityPrincipalId: string;
   capacityAlertId: string;
   maxStorageGiB: number;
+  /** Dedicated FHIR identity; federated to loom-health/fhir-<slug>, holds no role assignment. */
+  fhirIdentity: FhirIdentity;
   keyIds: string[];
   keyNames: string[];
 }
@@ -592,7 +605,15 @@ export class RestTenantArm implements TenantArm {
   async getTenantManifest(rg: string, slug: string): Promise<Lookup<TenantManifest>> {
     const r = await this.call('GET', this.arm(this.deploymentPath(rg, tenantDeploymentName(slug))), this.armScope, 'read tenant deployment');
     if (r.status === 404) return { state: 'absent' };
-    const m = manifestFromOutputs((r.json?.properties as Json | undefined)?.outputs as Json | undefined);
+    let m: TenantManifest | undefined;
+    try {
+      m = manifestFromOutputs((r.json?.properties as Json | undefined)?.outputs as Json | undefined);
+    } catch (e) {
+      // Read-only lookup (tenant.destroy): a pre-B2a record has no fhirIdentity, and destroy derives every name it
+      // needs, so it must stay possible. Only the fhirIdentity refusal is absorbed; deployTenant still fails closed.
+      if (e instanceof JobFailure && e.code.startsWith('tenant_manifest_fhir_identity_')) return { state: 'no_outputs' };
+      throw e;
+    }
     return m ? { state: 'found', value: m } : { state: 'no_outputs' };
   }
 
@@ -716,12 +737,36 @@ function immutabilityOf(json: Json | undefined): ImmutabilityReadback | undefine
   };
 }
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Fails closed: a tenant deployment whose manifest has no usable `fhirIdentity` (an older tenant.bicep, or a malformed
+ * output) must not reach the FHIR engine job with empty ids, which would silently federate nothing.
+ */
+function fhirIdentityFrom(raw: unknown): FhirIdentity {
+  const o = raw && typeof raw === 'object' ? (raw as Json) : undefined;
+  const str = (k: string): string => (typeof o?.[k] === 'string' ? (o[k] as string) : '');
+  const out: FhirIdentity = { id: str('id'), name: str('name'), clientId: str('clientId'), principalId: str('principalId') };
+  const bad = (Object.keys(out) as (keyof FhirIdentity)[]).filter((k) => !out[k]);
+  if (!o || bad.length > 0) {
+    throw new JobFailure(
+      'tenant_manifest_fhir_identity_missing',
+      `the tenant deployment manifest has no usable fhirIdentity (missing or empty: ${bad.length ? bad.join(', ') : 'the whole object'}); the deployed tenant.bicep predates the dedicated FHIR identity, so redeploy the tenant (tenant.create) before the FHIR engine is configured`,
+    );
+  }
+  if (!GUID_RE.test(out.clientId) || !GUID_RE.test(out.principalId)) {
+    throw new JobFailure('tenant_manifest_fhir_identity_malformed', 'the tenant deployment manifest fhirIdentity.clientId or principalId is not a GUID; refusing to use it');
+  }
+  return out;
+}
+
 function manifestFromOutputs(outputs: Json | undefined): TenantManifest | undefined {
   const t = (outputs?.tenant as Json | undefined)?.value as Json | undefined;
   const ids = (outputs?.keyIds as Json | undefined)?.value;
   const names = (outputs?.keyNames as Json | undefined)?.value;
   if (!t || !Array.isArray(ids) || !Array.isArray(names)) return undefined;
   const s = (k: string): string => String(t[k] ?? '');
+  const fhirIdentity = fhirIdentityFrom(t.fhirIdentity);
   return {
     tenantSlug: s('tenantSlug'),
     stampName: s('stampName'),
@@ -737,6 +782,7 @@ function manifestFromOutputs(outputs: Json | undefined): TenantManifest | undefi
     identityPrincipalId: s('identityPrincipalId'),
     capacityAlertId: s('capacityAlertId'),
     maxStorageGiB: Number(t.maxStorageGiB ?? 0),
+    fhirIdentity,
     keyIds: ids.map(String),
     keyNames: names.map(String),
   };

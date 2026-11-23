@@ -147,6 +147,13 @@ async function deriveManifest(arm: TenantArm, r: Resolved): Promise<TenantManife
     identityPrincipalId: '',
     capacityAlertId: `${scope}/providers/Microsoft.Insights/metricAlerts/${n.alertName}`,
     maxStorageGiB: r.tenant.quotas.maxStorageGiB,
+    // Derived for destroy only: ids the deployment did not report are left empty, never invented.
+    fhirIdentity: {
+      id: `${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${n.fhirIdentityName}`,
+      name: n.fhirIdentityName,
+      clientId: '',
+      principalId: '',
+    },
     keyIds: n.keyNames.map((k) => `${vaultId}/keys/${k}`),
     keyNames: n.keyNames,
   };

@@ -101,6 +101,12 @@ class FakeArm implements TenantArm {
       identityPrincipalId: 'p',
       capacityAlertId: id('Microsoft.Insights/metricAlerts', n.alertName),
       maxStorageGiB: 100,
+      fhirIdentity: {
+        id: id('Microsoft.ManagedIdentity/userAssignedIdentities', n.fhirIdentityName),
+        name: n.fhirIdentityName,
+        clientId: '33333333-3333-4333-8333-333333333333',
+        principalId: '44444444-4444-4444-8444-444444444444',
+      },
       keyIds: n.keyNames.map((k) => id('Microsoft.KeyVault/vaults', 'kv') + `/keys/${k}`),
       keyNames: n.keyNames,
     };
@@ -207,6 +213,7 @@ describe('names agree with tenant.bicep', () => {
   it('event hub, identity, alert, key and database names equal the bicep templates', () => {
     expect(sub(lift(/resource tenantHub[\s\S]*?name: '([^']+)'/))).toBe(n.eventHubName);
     expect(sub(lift(/resource tenantIdentity[\s\S]*?name: '([^']+)'/))).toBe(n.identityName);
+    expect(sub(lift(/resource fhirIdentity[\s\S]*?name: '([^']+)'/))).toBe(n.fhirIdentityName);
     expect(sub(lift(/resource capacityAlert[\s\S]*?name: '([^']+)'/))).toBe(n.alertName);
     expect(sub(lift(/var keyNameList = \[for k in keySuffixes: '([^']+)'\]/)).replace('${k}', 'st-pixel')).toBe(n.keyNames[0]);
     // 'lhds_${replace(tenantSlug, '-', '_')}' -> lhds_abc_d
