@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { mintTenantToken } from '../../measure/health/mint-tenant-token.mjs';
 import {
   EXPECT, ENGINE_NAMESPACE, SERVICE_PORT, engineBase, judge, parseProbeLogs, phaseCleanup, phaseCreate, phaseProbe,
-  renderProbeScript, validate, parseArgs, workloadName,
+  renderProbeScript, validate, parseArgs, workloadName, RESULT_MAX_POLLS, RESULT_POLL_MS,
 } from '../../measure/health/lhds-fhir-crud-probe-run.mjs';
 
 const ISSUER = 'https://issuer-front-door.example.test/auth';
@@ -339,6 +339,61 @@ test('phaseProbe: tokens go ONLY into 0600 files (writer for A, reader for B), n
     for (const secret of [tokA, tokB, CP_TOKEN, SIG]) assert.equal(r.text.includes(secret), false, `a secret reached stdout: ${secret.slice(0, 12)}`);
     assert.equal(existsSync(seen.cwd), false, 'the temp dir was not deleted');
     assert.equal(cp.st.patches.length, 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// az stops waiting at ~300 s and returns the IN-FLIGHT result with exit 0 (measured 2026-11-23; B3 run 45142805007).
+test('phaseProbe: a Running invoke is polled with `az aks command result --command-id` until terminal, and its logs are judged (breaks if Running is read as "no logs")', async () => {
+  const cp = cpFake();
+  const root = mkdtempSync(join(tmpdir(), 'fcp-root-'));
+  const calls = [];
+  const sleeps = [];
+  const exec = async (cmd, args) => {
+    calls.push(args.slice(0, 3).join(' '));
+    if (args[2] === 'invoke') return { code: 0, stdout: JSON.stringify({ id: 'abc123def4567890', provisioningState: 'Running', exitCode: null, logs: null }), stderr: '' };
+    return { code: 0, stdout: JSON.stringify({ id: 'abc123def4567890', provisioningState: calls.length < 3 ? 'Running' : 'Succeeded', exitCode: 0, logs: calls.length < 3 ? null : ALL_OK }), stderr: '' };
+  };
+  try {
+    const r = await capture(() => phaseProbe(probeCfg(), { ...cp.deps, exec, sleep: async (ms) => { sleeps.push(ms); }, tmpRoot: root }));
+    // The old code stopped at the first answer: exit 2, UNMEASURED, and exactly 1 az call.
+    assert.equal(r.code, 0, r.text);
+    assert.match(r.text, /step c PASS expect=201 got=201/);
+    assert.deepEqual(calls, ['aks command invoke', 'aks command result', 'aks command result']);
+    assert.deepEqual(sleeps, [RESULT_POLL_MS, RESULT_POLL_MS]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('phaseProbe: a poll answer that is not JSON is reported as unparseable, never as the previous poll\'s state, and nothing is judged (breaks if stale state or logs survive the bad answer)', async () => {
+  const cp = cpFake();
+  const root = mkdtempSync(join(tmpdir(), 'fcp-root-'));
+  const exec = async (cmd, args) => (args[2] === 'invoke'
+    // The in-flight answer carries partial logs on purpose: a stale value would be judged as final.
+    ? { code: 0, stdout: JSON.stringify({ id: 'abc123def4567890', provisioningState: 'Running', exitCode: null, logs: ALL_OK }), stderr: '' }
+    : { code: 0, stdout: 'not json at all', stderr: '' });
+  try {
+    const r = await capture(() => phaseProbe(probeCfg(), { ...cp.deps, exec, sleep: async () => {}, tmpRoot: root }));
+    assert.equal(r.code, 2, r.text);
+    assert.match(r.text, /UNMEASURED: az aks command result returned no pod logs \(state=unparseable exitCode=none\)/);
+    // Paired: the stale in-flight logs were NOT judged (no step verdict lines at all).
+    assert.doesNotMatch(r.text, /step c (PASS|FAIL)/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('phaseProbe: a command that never finishes is polled a BOUNDED number of times, then UNMEASURED naming the state ARM reported (breaks if it loops forever or claims "no logs" blind)', async () => {
+  const cp = cpFake();
+  const root = mkdtempSync(join(tmpdir(), 'fcp-root-'));
+  let results = 0;
+  const exec = async (cmd, args) => {
+    if (args[2] === 'result') results += 1;
+    return { code: 0, stdout: JSON.stringify({ id: 'abc123def4567890', provisioningState: 'Running', exitCode: null, logs: null }), stderr: '' };
+  };
+  try {
+    const r = await capture(() => phaseProbe(probeCfg(), { ...cp.deps, exec, sleep: async () => {}, tmpRoot: root }));
+    assert.equal(r.code, 2, r.text);
+    assert.equal(results, RESULT_MAX_POLLS);
+    // Names the subcommand whose answer it read (result, after polling) and the state ARM reported.
+    assert.match(r.text, /UNMEASURED: az aks command result returned no pod logs \(state=Running exitCode=none\)/);
+    assert.match(r.text, /VERDICT UNMEASURED/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
