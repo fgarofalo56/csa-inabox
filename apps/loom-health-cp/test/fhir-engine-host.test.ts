@@ -2,12 +2,14 @@
 // the command text to {exitCode, logs}, so the manifests the host sends are the ones asserted on (not a copy of them).
 // Every assertion names the value that breaks it; each absence check is paired with a positive one.
 
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { compose } from '../src/compose.js';
 import { RestAksRunCommand, RUN_COMMAND_API, RUN_COMMAND_ATTEMPTS, type AksRunCommand, type AksTarget, type RunCommandResult } from '../src/jobs/aks-run-command.js';
 import {
   ANN_REVISION,
   RunCommandFhirEngineHost,
+  engineProbeScript,
   armEngineTarget,
   ensurePrincipalSteps,
   excerpt,
@@ -538,6 +540,34 @@ describe('RunCommandFhirEngineHost', () => {
     expect(p).toEqual({ ready: true, fhirVersion: '4.0.1', partitions: [] });
     const cmd = c.commands.find((x) => x.includes('/metadata')) ?? '';
     expect(cmd).toContain(`kubectl get --raw '/api/v1/namespaces/loom-health/services/fhir-${SLUG}:80/proxy/fhir/metadata'`);
+  });
+
+  // The probe SCRIPT itself, executed by a real POSIX sh (FakeCluster above fakes its output, so it never runs there).
+  // kubectl is a shell function that emits a CapabilityStatement; sed is a function that fails exactly as the distroless
+  // AKS command pod does ("sed: not found", 127), so a script that reaches for sed again is caught here.
+  // Skipped only where no `sh` exists; disclosed, not counted, in that case.
+  const hasSh = spawnSync('sh', ['-c', 'exit 0']).status === 0;
+  it.skipIf(!hasSh)('the probe script runs with ONLY the command pod toolset (no sed) and reports capability and version', () => {
+    const fixture = '{"resourceType" : "CapabilityStatement","status":"active","fhirVersion" : "4.0.1","format":["json"]}';
+    const prelude = [
+      'sed() { echo "sed: not found" >&2; return 127; }',
+      `kubectl() { printf '%s' '${fixture}'; }`,
+    ].join('\n');
+    const r = spawnSync('sh', ['-c', `${prelude}\n${engineProbeScript('/api/v1/namespaces/loom-health/services/fhir-x:80/proxy/fhir')}`], { encoding: 'utf8' });
+    // Breaks if the script uses sed again (status 127), or if the field cut picks the wrong field (version would differ).
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^LOOM_PROBE_RC=0$/m);
+    expect(r.stdout).toMatch(/^LOOM_CAPABILITY=1$/m);
+    expect(r.stdout).toMatch(/^LOOM_FHIR_VERSION=4\.0\.1$/m);
+  });
+
+  it.skipIf(!hasSh)('the probe script still exits 0, with no version line, when the body has no fhirVersion', () => {
+    // Breaks if an absent version makes the script exit non-zero (probeEngine would then report engine_probe_failed
+    // for an engine that answered). Paired positive: the capability marker is still printed.
+    const r = spawnSync('sh', ['-c', `kubectl() { printf '%s' '{"resourceType":"CapabilityStatement"}'; }\n${engineProbeScript('/x')}`], { encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^LOOM_CAPABILITY=1$/m);
+    expect(r.stdout).not.toMatch(/LOOM_FHIR_VERSION/);
   });
 
   it('a proxy failure that is not a refusal is "not ready"; a refusal is permission', async () => {

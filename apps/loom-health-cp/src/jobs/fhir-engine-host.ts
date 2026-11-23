@@ -240,6 +240,25 @@ export function pgJobScript(steps: PgStep[]): string {
   return lines.join('\n');
 }
 
+/**
+ * The /metadata probe, run through runCommand in the AKS command pod. That pod is distroless; measured on aks-lhds-dev01
+ * 2026-11-23 it HAS sh grep head cut cat tr awk kubectl curl and has NO sed (the first live probe died on
+ * "sed: not found", exit 127, W2-2b B3 run 45134282351). So only those tools appear here, and the version is cut out
+ * by field (`"fhirVersion" : "4.0.1"` splits on `"` with the value in field 4). The script always exits 0 once
+ * kubectl has answered; what it found is carried in the LOOM_* markers, which probeEngine parses.
+ */
+export function engineProbeScript(base: string): string {
+  return [
+    'set -u',
+    `kubectl get --raw '${base}/metadata' > /tmp/m.json 2> /tmp/m.err; RC=$?`,
+    'echo "LOOM_PROBE_RC=$RC"',
+    'if [ "$RC" -ne 0 ]; then head -c 400 /tmp/m.err; exit 0; fi',
+    `if grep -q '"resourceType" *: *"CapabilityStatement"' /tmp/m.json; then echo LOOM_CAPABILITY=1; fi`,
+    `V=$(grep -o '"fhirVersion" *: *"[^"]*"' /tmp/m.json | head -n 1 | cut -d '"' -f 4)`,
+    'if [ -n "$V" ]; then echo "LOOM_FHIR_VERSION=$V"; fi',
+  ].join('\n');
+}
+
 export function renderPgJobManifest(i: {
   jobName: string;
   namespace: string;
@@ -495,16 +514,8 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe> {
     const t = await this.resolve(tenantId);
     const base = `/api/v1/namespaces/${this.ns}/services/${fhirNames(tenantId).workloadName}:${SERVICE_PORT}/proxy/fhir`;
-    const lines = [
-      'set -u',
-      `kubectl get --raw '${base}/metadata' > /tmp/m.json 2> /tmp/m.err; RC=$?`,
-      'echo "LOOM_PROBE_RC=$RC"',
-      'if [ "$RC" -ne 0 ]; then head -c 400 /tmp/m.err; exit 0; fi',
-      `grep -q '"resourceType" *: *"CapabilityStatement"' /tmp/m.json && echo LOOM_CAPABILITY=1`,
-      `grep -o '"fhirVersion" *: *"[^"]*"' /tmp/m.json | head -n 1 | sed 's/.*: *"\\(.*\\)"/LOOM_FHIR_VERSION=\\1/'`,
-    ];
     // /metadata is the only path the engine answers without a bearer token. Partitions are NOT read over HTTP: see readPartitions().
-    const r = await this.o.run.run(t, lines.join('\n'));
+    const r = await this.o.run.run(t, engineProbeScript(base));
     if (r.exitCode !== 0) throw this.failure('engine_probe_failed', `probing ${fhirNames(tenantId).workloadName} through the API server proxy failed`, r);
     const rc = /^LOOM_PROBE_RC=(\d+)$/m.exec(r.logs)?.[1];
     if (rc === undefined) throw new JobFailure('engine_probe_unproven', 'the probe command printed no exit marker, so whether the engine answered is NOT established');
