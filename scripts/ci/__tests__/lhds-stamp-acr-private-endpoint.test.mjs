@@ -187,7 +187,7 @@ test('workflow: the import step discards nothing (no || true, no 2>/dev/null, no
 
 // Run the real step script under bash with stubs.
 // pgSeq: the resolve answers for the PG client image, which runs AFTER the PDP image in the same step (default: already present).
-function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgSpec.digest}`], importRc = 0, specDigest = spec.digest, pgDigest = pgSpec.digest, deployed = true }) {
+function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgSpec.digest}`], importRc = 0, assertRc = 0, cpJson = null, specDigest = spec.digest, pgDigest = pgSpec.digest, deployed = true }) {
   const dir = mkdtempSync(join(tmp, 'run-'));
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
@@ -222,6 +222,13 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgS
     'exit "$RC"',
     '',
   ].join('\n'));
+  writeFileSync(join(dir, 'scripts/ci/assert-acr-image-tags.sh'), [
+    '#!/usr/bin/env bash',
+    'echo "assert $*" >> "$STUB_LOG"',
+    'exit "$STUB_ASSERT_RC"',
+    '',
+  ].join('\n'));
+  if (cpJson !== null) writeFileSync(join(dir, 'temp/cp.json'), JSON.stringify(cpJson));
   chmodSync(join(bin, 'az'), 0o755);
   writeFileSync(join(dir, 'step.sh'), runBody);
   const log = join(dir, 'log.txt');
@@ -232,7 +239,7 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgS
     env: {
       ...process.env,
       STUB_BIN: posix(bin), STUB_LOG: posix(log), STUB_SEQ: posix(join(dir, 'seq.txt')),
-      STUB_PE_STATE: peState, STUB_PE_RC: String(peRc), STUB_IMPORT_RC: String(importRc),
+      STUB_PE_STATE: peState, STUB_PE_RC: String(peRc), STUB_IMPORT_RC: String(importRc), STUB_ASSERT_RC: String(assertRc),
       ACR: 'acrtest', HUB_RG: 'rg-hub', GITHUB_STEP_SUMMARY: posix(join(dir, 'summary.md')),
     },
   });
@@ -379,6 +386,33 @@ test('B2d control-plane: LOOM_HEALTH_CP_FHIR_IMAGE and LOOM_HEALTH_CP_PG_CLIENT_
   assert.equal(cpArm.parameters.pgClientImage.defaultValue, '');
   // Positive pairing: the variable is actually concatenated into the container env (absence alone would pass if it were dead code).
   assert.match(JSON.stringify(cpArm), /variables\('pdpEnv'\), variables\('engineImageEnv'\), /);
+});
+
+const asserts = (calls) => calls.filter((c) => c.startsWith('assert '));
+
+test('B2d step script: the FHIR image tag is asserted present, with the tag read from cp.json imageTag (not a transcribed v0.1)', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`], cpJson: { imageTag: 'v9.9' } });
+  assert.equal(r.status, 0, r.out);
+  // Breaks if the assertion is dropped (length 0) or the tag is hard-coded to v0.1 (this fixture asks for v9.9).
+  assert.deepEqual(asserts(r.calls), ['assert --acr acrtest --rg rg-hub --lease loom-health-fhir:v9.9']);
+});
+
+test('B2d step script: with no cp.json imageTag the FHIR tag defaults to v0.1, the default health.bicep uses', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`] });
+  assert.equal(r.status, 0, r.out);
+  assert.deepEqual(asserts(r.calls), ['assert --acr acrtest --rg rg-hub --lease loom-health-fhir:v0.1']);
+  assert.match(read(`${BICEP}/health.bicep`), /var cpImageTag = string\(controlPlaneConfig\.\?imageTag \?\? 'v0\.1'\)/);
+});
+
+test('B2d step script: FHIR tag MISSING (exit 3) fails the deploy before any import; UNPROVEN (exit 4) fails without claiming it is missing', () => {
+  const miss = runStep({ resolveSeq: ['3 x'], assertRc: 3 });
+  assert.equal(miss.status, 1, miss.out);
+  assert.equal(imports(miss.calls).length, 0, 'no import may run once the FHIR image is known missing');
+  assert.match(miss.out, /MISSING: the registry answered and loom-health-fhir:v0\.1 is not in it/);
+  const unproven = runStep({ resolveSeq: ['3 x'], assertRc: 4 });
+  assert.equal(unproven.status, 1, unproven.out);
+  assert.match(unproven.out, /UNPROVEN: .* This is not a claim that it is missing/);
+  assert.doesNotMatch(unproven.out, /MISSING: the registry answered/);
 });
 
 test.after(() => rmSync(tmp, { recursive: true, force: true }));

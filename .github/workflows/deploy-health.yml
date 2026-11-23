@@ -997,7 +997,7 @@ jobs:
       # only from this registry through the private endpoint, so an image that is not here is an ImagePullBackOff.
       # An empty or malformed spec digest FAILS the step for either image (never skipped), before any Azure call.
       - name: Ensure the digest-pinned stamp images (PDP, PG client) are in the registry (az acr import)
-        id: pdpimport
+        id: stampimages
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
         env:
           ACR: ${{ steps.hub.outputs.acr }}
@@ -1041,41 +1041,58 @@ jobs:
             echo "::error::The stamp's private endpoint connection $PE on registry $ACR is '${PESTATE:-not found}', not Approved, so the nodes cannot pull. Approve it: az acr private-endpoint-connection approve -r $ACR -g $HUB_RG -n <connection name from: az acr private-endpoint-connection list -r $ACR -g $HUB_RG>"
             exit 1
           fi
-          ensure_image() {
-          SPEC="$1"
-          SRC=$(jq -r '.source' "$SPEC"); REPO=$(jq -r '.acrRepository' "$SPEC")
-          TAG=$(jq -r '.tag' "$SPEC"); DIGEST=$(jq -r '.digest' "$SPEC")
-          N=$(basename "$SPEC" .json)
-          # 2. Present already? exit 0 present, 3 answered absent, 4 could not be read (NOT a claim of absence).
-          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > "temp/$N-have.out" 2> "temp/$N-have.err"
+          # 1b. The FHIR engine image (loom-health-fhir:<tag>) is built by the build lane, not imported, and the Trivy gate
+          #     UNTAGS refused images, so its absence is realistic. This step only runs when the PDP deployed, which is exactly
+          #     when health.bicep emits LOOM_HEALTH_CP_FHIR_IMAGE, so a stamp without the PDP is not failed. The tag is read
+          #     from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed.
+          FHIR_TAG=v0.1
+          if [ -f temp/cp.json ]; then
+            FHIR_TAG=$(jq -r '.imageTag // "v0.1"' temp/cp.json) || { echo "::error::could not read imageTag from temp/cp.json."; exit 1; }
+          fi
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$HUB_RG" --lease "loom-health-fhir:$FHIR_TAG"
           RC=$?
-          cat "temp/$N-have.err"
           case "$RC" in
-            0) echo "::notice::$REPO@$DIGEST is already in $ACR; import skipped."; echo "Stamp image $N: $REPO@$DIGEST already in $ACR." >> "$GITHUB_STEP_SUMMARY"; return 0 ;;
-            3) echo "$REPO@$DIGEST is absent from $ACR; importing from $SRC." ;;
-            *) echo "::error::Could not establish whether $REPO@$DIGEST is in $ACR (resolve-acr-digest.sh exit $RC; 4 = the registry could not be read, which is NOT a claim that the image is missing). See the output above."; exit 1 ;;
+            0) ;;
+            3) echo "::error::MISSING: the registry answered and loom-health-fhir:$FHIR_TAG is not in it (the Trivy gate untags refused images). The first fhir-tenant.* job would hit ImagePullBackOff. Build it: full-app-deploy-commercial.yml (Commercial) or gov-provision-dataplane-images.yml with apply=true (GCC-High)."; exit 1 ;;
+            4) echo "::error::UNPROVEN: the registry could not be read, so whether loom-health-fhir:$FHIR_TAG exists is unknown. This is not a claim that it is missing; re-run."; exit 1 ;;
+            5) echo "::error::loom-health-fhir:$FHIR_TAG was verified present but re-locking the registry firewall is unproven; check the registry network rules before continuing."; exit 1 ;;
+            *) echo "::error::assert-acr-image-tags.sh exited $RC (usage or unclassified)."; exit 1 ;;
           esac
-          az acr import --name "$ACR" --resource-group "$HUB_RG" --source "$SRC@$DIGEST" --image "$REPO:$TAG" --force > "temp/$N-import.out" 2> "temp/$N-import.err"
-          RC=$?
-          if [ "$RC" != "0" ]; then
-            echo "::error::az acr import of $SRC@$DIGEST into $ACR exited $RC: $(head -c 600 "temp/$N-import.err"). Established: the image was NOT imported by this step. NOT established: why. Likely causes (unverified): the registry has 'allow trusted services' turned off (required for import into a network-restricted registry), the deploy identity lacks Contributor on the registry, or the source registry throttled an anonymous pull."
-            exit 1
-          fi
-          # 3. Read it back: an import that returned 0 is not proof the digest is there. The lookup is BY DIGEST
-          #    (content-addressed), so the registry resolving "$REPO@$DIGEST" (exit 0) proves exactly that content
-          #    is present -- the same rule the pre-import check uses. The digest the CLI PRINTS is not compared:
-          #    for a multi-arch manifest list it is a platform child (run 45070074523: the pinned OPA index
-          #    sha256:60b6af32... read back as its linux/arm64 child sha256:aab80a7e..., measured against Docker Hub).
-          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > "temp/$N-after.out" 2> "temp/$N-after.err"
-          RC=$?
-          cat "temp/$N-after.err"
-          GOT=$(grep -Eo 'sha256:[0-9a-f]{64}' "temp/$N-after.out" | tail -n 1)
-          if [ "$RC" != "0" ]; then
-            echo "::error::az acr import exited 0 but $ACR did not resolve $REPO@$DIGEST afterwards (resolve-acr-digest.sh exit $RC; 3 = the registry answered not found, 4 = it could not be read). The image is NOT confirmed present."
-            exit 1
-          fi
-          echo "::notice::Imported $SRC@$DIGEST into $ACR as $REPO:$TAG; the registry resolves $REPO@$DIGEST (it reports ${GOT:-no digest}, a platform child when the source is a manifest list)."
-          echo "Stamp image $N: imported $REPO@$DIGEST into $ACR and read back." >> "$GITHUB_STEP_SUMMARY"
+          ensure_image() {
+            SPEC="$1"
+            SRC=$(jq -r '.source' "$SPEC"); REPO=$(jq -r '.acrRepository' "$SPEC")
+            TAG=$(jq -r '.tag' "$SPEC"); DIGEST=$(jq -r '.digest' "$SPEC")
+            N=$(basename "$SPEC" .json)
+            # 2. Present already? exit 0 present, 3 answered absent, 4 could not be read (NOT a claim of absence).
+            bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > "temp/$N-have.out" 2> "temp/$N-have.err"
+            RC=$?
+            cat "temp/$N-have.err"
+            case "$RC" in
+              0) echo "::notice::$REPO@$DIGEST is already in $ACR; import skipped."; echo "Stamp image $N: $REPO@$DIGEST already in $ACR." >> "$GITHUB_STEP_SUMMARY"; return 0 ;;
+              3) echo "$REPO@$DIGEST is absent from $ACR; importing from $SRC." ;;
+              *) echo "::error::Could not establish whether $REPO@$DIGEST is in $ACR (resolve-acr-digest.sh exit $RC; 4 = the registry could not be read, which is NOT a claim that the image is missing). See the output above."; exit 1 ;;
+            esac
+            az acr import --name "$ACR" --resource-group "$HUB_RG" --source "$SRC@$DIGEST" --image "$REPO:$TAG" --force > "temp/$N-import.out" 2> "temp/$N-import.err"
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::az acr import of $SRC@$DIGEST into $ACR exited $RC: $(head -c 600 "temp/$N-import.err"). Established: the image was NOT imported by this step. NOT established: why. Likely causes (unverified): the registry has 'allow trusted services' turned off (required for import into a network-restricted registry), the deploy identity lacks Contributor on the registry, or the source registry throttled an anonymous pull."
+              exit 1
+            fi
+            # 3. Read it back: an import that returned 0 is not proof the digest is there. The lookup is BY DIGEST
+            #    (content-addressed), so the registry resolving "$REPO@$DIGEST" (exit 0) proves exactly that content
+            #    is present -- the same rule the pre-import check uses. The digest the CLI PRINTS is not compared:
+            #    for a multi-arch manifest list it is a platform child (run 45070074523: the pinned OPA index
+            #    sha256:60b6af32... read back as its linux/arm64 child sha256:aab80a7e..., measured against Docker Hub).
+            bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REPO@$DIGEST" --lease > "temp/$N-after.out" 2> "temp/$N-after.err"
+            RC=$?
+            cat "temp/$N-after.err"
+            GOT=$(grep -Eo 'sha256:[0-9a-f]{64}' "temp/$N-after.out" | tail -n 1)
+            if [ "$RC" != "0" ]; then
+              echo "::error::az acr import exited 0 but $ACR did not resolve $REPO@$DIGEST afterwards (resolve-acr-digest.sh exit $RC; 3 = the registry answered not found, 4 = it could not be read). The image is NOT confirmed present."
+              exit 1
+            fi
+            echo "::notice::Imported $SRC@$DIGEST into $ACR as $REPO:$TAG; the registry resolves $REPO@$DIGEST (it reports ${GOT:-no digest}, a platform child when the source is a manifest list)."
+            echo "Stamp image $N: imported $REPO@$DIGEST into $ACR and read back." >> "$GITHUB_STEP_SUMMARY"
           }
           for SPEC in $SPECS; do
             ensure_image "$SPEC"
