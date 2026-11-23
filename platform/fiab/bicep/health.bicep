@@ -271,6 +271,9 @@ module healthAuthEndpoint 'modules/health/afd-issuer.bicep' = if (fdIssuerDeploy
   }
 }
 
+// The one tag the control plane image and the FHIR engine image are both pulled at (one build, one release).
+var cpImageTag = string(controlPlaneConfig.?imageTag ?? 'v0.1')
+
 module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   name: 'lhds-control-plane-${healthStampName}'
   scope: healthRg
@@ -278,7 +281,7 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     location: cpPlatform == 'aks' ? healthLocation : location
     boundary: effectiveBoundary
     platform: cpPlatform
-    image: '${cpAcrLoginServer}/loom-health-cp:${string(controlPlaneConfig.?imageTag ?? 'v0.1')}'
+    image: '${cpAcrLoginServer}/loom-health-cp:${cpImageTag}'
     acrLoginServer: cpAcrLoginServer
     acrName: cpAcrName
     acrResourceGroup: cpAcrResourceGroup
@@ -308,6 +311,12 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     // (pdpName/pdpNamespace), not read from the healthPdp module, which consumes this module's principal id: reading
     // its output here would be a cycle.
     pdpUrl: pdpDeploy ? pdpDecisionEndpoint : ''
+    // #5422 B2d: the images the control plane's fhir-tenant.* jobs deliver, emitted only with the PDP (an engine without a
+    // PDP answers 503, and main.ts registers the jobs only when both images AND the PDP url are set). The FHIR image is
+    // TAG-pinned: build-fiab-images-acr-tasks.yml pushes loom-health-fhir under the same tag as loom-health-cp, so the
+    // two are one release. The PG client image is DIGEST-pinned from pg-client-image.json, the file deploy-health imports.
+    fhirImage: pdpDeploy ? '${cpAcrLoginServer}/loom-health-fhir:${cpImageTag}' : ''
+    pgClientImage: pdpDeploy ? '${cpAcrLoginServer}/${pgClientImageSpec.acrRepository}@${pgClientImageSpec.digest}' : ''
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
   }
@@ -342,6 +351,8 @@ var pdpUrlKnown = startsWith(pdpCpBaseUrlOverride, 'https://') || fdIssuerDeploy
 var pdpDeploy = cpDeploy && !empty(pdpPublicKey) && pdpUrlKnown
 // ONE place for the PDP image: tag (display) + digest (what is deployed and what deploy-health imports). #5422 decision 8.
 var pdpImageSpec = loadJsonContent('modules/health/pdp-image.json')
+// Same for the PG client image the FHIR engine's role job runs (B2d): digest deployed AND imported by deploy-health.
+var pgClientImageSpec = loadJsonContent('modules/health/pg-client-image.json')
 var pdpName = 'loom-health-pdp'
 var pdpNamespace = 'loom-health'
 // MUST equal engines.bicep output decisionEndpoint (pinned by scripts/ci/__tests__/lhds-engine-delivery.test.mjs).
