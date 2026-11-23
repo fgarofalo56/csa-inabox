@@ -309,8 +309,10 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     stampBaseUrl: empty(cpIngressFqdn) ? '' : 'https://${cpIngressFqdn}'
     // #5422: the in-cluster PDP address the control plane writes into tenant engine config. It is computed from inputs
     // (pdpName/pdpNamespace), not read from the healthPdp module, which consumes this module's principal id: reading
-    // its output here would be a cycle.
-    pdpUrl: pdpDeploy ? pdpDecisionEndpoint : ''
+    // its output here would be a cycle. It is the BASE url: the engine plugin (HttpPdpClient.DECISION_PATH) appends
+    // /v1/data/lhds/authz/decision itself. The full endpoint here doubled the path, OPA answered an undefined document
+    // (200, no result), and every token-bearing FHIR request was a 503 (B3 probe run 45201088369).
+    pdpUrl: pdpDeploy ? pdpBaseUrl : ''
     // #5422 B2d: the images the control plane's fhir-tenant.* jobs deliver, emitted only with the PDP (an engine without a
     // PDP answers 503, and main.ts registers the jobs only when both images AND the PDP url are set). The FHIR image is
     // TAG-pinned: build-fiab-images-acr-tasks.yml pushes loom-health-fhir under the same tag as loom-health-cp, so the
@@ -355,8 +357,9 @@ var pdpImageSpec = loadJsonContent('modules/health/pdp-image.json')
 var pgClientImageSpec = loadJsonContent('modules/health/pg-client-image.json')
 var pdpName = 'loom-health-pdp'
 var pdpNamespace = 'loom-health'
-// MUST equal engines.bicep output decisionEndpoint (pinned by scripts/ci/__tests__/lhds-engine-delivery.test.mjs).
-var pdpDecisionEndpoint = 'http://${pdpName}.${pdpNamespace}.svc.cluster.local/v1/data/lhds/authz/decision'
+// The base the CP hands engines (LOOM_HEALTH_CP_PDP_URL). base + the plugin's DECISION_PATH MUST equal engines.bicep
+// output decisionEndpoint (pinned by scripts/ci/__tests__/lhds-engine-delivery.test.mjs).
+var pdpBaseUrl = 'http://${pdpName}.${pdpNamespace}.svc.cluster.local'
 // Object id of the service principal that runs the apply (deploy-health.yml resolves it); empty = no data-role grant.
 var pdpApplyPrincipalId = string(controlPlaneConfig.?pdpApplyPrincipalId ?? '')
 

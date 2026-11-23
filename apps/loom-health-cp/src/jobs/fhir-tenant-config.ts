@@ -135,7 +135,10 @@ export interface RenderInput {
    * The engine pins `<stampBaseUrl>/<tenant>/fhir` as its server address so the base it sends the PDP equals the token `aud` (decision 13).
    */
   stampBaseUrl: string;
-  /** In-cluster PDP decision endpoint base (W1-5). Required: the plugin answers 503 to every request without it. */
+  /**
+   * In-cluster PDP BASE url (W1-5), no path: the plugin appends `/v1/data/lhds/authz/decision` (HttpPdpClient.DECISION_PATH).
+   * Required: the plugin answers 503 to every request without it.
+   */
   pdpUrl: string;
   overrides?: EngineOverrides;
   /** The partitions the engine must hold. Never shrinks (see mergePartitions). */
@@ -192,6 +195,11 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   }
   if (!/^https?:$/.test(pdp.protocol) || pdp.username || pdp.password || pdp.search || pdp.hash) {
     throw new JobFailure('pdp_url_invalid', 'the PDP url must be http(s) without credentials, query or fragment');
+  }
+  if (pdp.pathname !== '/') {
+    // B3 probe run 45201088369: the full decision endpoint here made the plugin call <endpoint>/v1/data/lhds/authz/decision,
+    // OPA answered an undefined document (200, no result) and every token-bearing request was a 503.
+    throw new JobFailure('pdp_url_invalid', 'the PDP url must be the OPA base url with no path (the engine appends /v1/data/lhds/authz/decision itself); with a path every token-bearing request is answered 503, so no engine is configured. Fix LOOM_HEALTH_CP_PDP_URL (health.bicep pdpBaseUrl) and re-run');
   }
   let stampBase: URL;
   try {

@@ -76,20 +76,28 @@ test('engines.bicep exposes the manifest, and the manifest still renders the PDP
   assert.doesNotMatch(src, /PRIVATE KEY/);
 });
 
-test('health.bicep: the CP env address equals the module output, and the PDP module receives the same name and namespace', () => {
+test('health.bicep: the CP env carries the PDP BASE, and base + every consumer\'s appended path equals the module output', () => {
   const health = read(`${BICEP}/health.bicep`);
   const mod = read(`${BICEP}/modules/health/engines.bicep`);
-  const fromHealth = health.match(/var pdpDecisionEndpoint = '(.+)'/)[1];
+  // The value control-plane.bicep emits as LOOM_HEALTH_CP_PDP_URL: lift the variable health.bicep passes as pdpUrl,
+  // then that variable's template. Breaks if pdpUrl is wired to any other variable (the pre-fix wiring passed the
+  // FULL decision endpoint; B3 probe run 45201088369 got a 503 on every token-bearing request).
+  const passed = health.match(/^\s+pdpUrl: pdpDeploy \? (\w+) : ''$/m)[1];
+  const fromHealth = health.match(new RegExp(`^var ${passed} = '(.+)'$`, 'm'))[1];
   const fromModule = mod.match(/output decisionEndpoint string = '(.+)'/)[1];
-  // Both templates, with the name/namespace variables resolved, must give one string. Breaks if either side
-  // changes the path or scheme: the CP would hand engines an address the PDP does not serve.
-  const resolveHealth = fromHealth.replace('${pdpName}', 'N').replace('${pdpNamespace}', 'S');
-  const resolveModule = fromModule.replace('${name}', 'N').replace('${aksNamespace}', 'S');
-  assert.equal(resolveHealth, resolveModule);
-  assert.ok(resolveHealth.endsWith('/v1/data/lhds/authz/decision'), resolveHealth);
+  const base = fromHealth.replace('${pdpName}', 'n').replace('${pdpNamespace}', 's');
+  const endpoint = fromModule.replace('${name}', 'n').replace('${aksNamespace}', 's');
+  // Breaks on the pre-fix value: new URL('http://n.s.svc.cluster.local/v1/data/lhds/authz/decision').pathname is not '/'.
+  assert.equal(new URL(base).pathname, '/', `LOOM_HEALTH_CP_PDP_URL must be a base url with no path, got ${base}`);
+  // The paths the two engine consumers APPEND, lifted from their source (never transcribed). Breaks if either side
+  // changes its path, or if base + path stops being an address the PDP module serves.
+  const javaPath = read('apps/loom-health-fhir/plugin/src/main/java/ai/loom/health/fhir/pdp/HttpPdpClient.java')
+    .match(/static final String DECISION_PATH = "([^"]+)";/)[1];
+  const dicomPath = read('apps/loom-health-dicom-gateway/src/pdp.ts').match(/`\$\{pdpUrl\}(\/[^`]+)`/)[1];
+  assert.equal(base + javaPath, endpoint);
+  assert.equal(base + dicomPath, endpoint);
   // Breaks if health.bicep stops passing its own name/namespace (the module defaults would silently diverge from CP env).
   assert.match(health, /name: pdpName\n\s+aksNamespace: pdpNamespace/);
-  assert.match(health, /pdpUrl: pdpDeploy \? pdpDecisionEndpoint : ''/);
   assert.match(health, /manifest: healthPdp!\.outputs\.manifest/);
 });
 

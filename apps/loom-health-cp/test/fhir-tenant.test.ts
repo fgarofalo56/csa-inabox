@@ -171,6 +171,16 @@ describe('renderEngineConfig', () => {
     expect(() => renderEngineConfig({ ...baseInput, pdpUrl: 'not a url' })).toThrow(/PDP url is not a URL/);
     expect(() => renderEngineConfig({ ...baseInput, pdpUrl: 'http://u:p@pdp:8181' })).toThrow(/without credentials/);
   });
+
+  it('refuses a PDP url with a path: the plugin appends the decision path, so a path doubles it (B3 run 45201088369)', () => {
+    // BREAKS on: the value health.bicep emitted before this fix (the FULL decision endpoint). Accepting it is the 503 defect.
+    const endpoint = 'http://loom-health-pdp.loom-health.svc.cluster.local/v1/data/lhds/authz/decision';
+    expect(() => renderEngineConfig({ ...baseInput, pdpUrl: endpoint })).toThrow(/OPA base url with no path/);
+    // Positive: the bare base (with and without a trailing slash) is accepted and rendered without a trailing slash.
+    for (const base of ['http://loom-health-pdp.loom-health.svc.cluster.local', 'http://loom-health-pdp.loom-health.svc.cluster.local/']) {
+      expect(renderEngineConfig({ ...baseInput, pdpUrl: base }).env.LOOM_HEALTH_PDP_URL).toBe('http://loom-health-pdp.loom-health.svc.cluster.local');
+    }
+  });
 });
 
 describe('config/application.yaml (static policy)', () => {
