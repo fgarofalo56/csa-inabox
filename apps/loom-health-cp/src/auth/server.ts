@@ -3,10 +3,14 @@
 // handle(req, res) returns false when the path is not one of ours, so the host
 // can chain it in front of the control-plane app. Routes:
 //   GET  {issuerPath}/jwks.json
+//   GET  {issuerPath}/.well-known/openid-configuration  (tenant-independent; APIM validate-jwt, #5160)
 //   GET  {issuerPath}/callback                          (Entra redirect target)
 //   GET  {issuerPath}/{tenant}/.well-known/smart-configuration
+//   GET  {issuerPath}/{tenant}/.well-known/openid-configuration  (per-tenant OIDC issuer for id_tokens, #5454)
+//   GET  /{tenant}/fhir/.well-known/smart-configuration  (the FHIR base path the edge forwards unchanged, #5454)
 //   GET  {issuerPath}/{tenant}/authorize
 //   POST {issuerPath}/{tenant}/token
+//   OPTIONS on the discovery, jwks and token paths answers the CORS preflight.
 //   admin (control-plane bearer auth): /api/health/auth/{clients,tenants/{t}/bindings,launch,readiness}
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -28,10 +32,12 @@ import type { Signer } from './signer.js';
 import { ACCESS_TOKEN_TTL_S, mintAccessToken, mintIdToken } from './tokens.js';
 import {
   OAuthError,
+  normalizeFhirContext,
   sha256hex,
   type AuthStores,
   type BindingDoc,
   type ClientDoc,
+  type FhirContextItem,
   type GrantDoc,
   type RoleBinding,
 } from './types.js';
@@ -179,14 +185,53 @@ const BindingsSchema = z.strictObject({
   v1Scopes: z.boolean().default(true),
 });
 
+// SMART App Launch STU2.2 fhirContext entry. Each string member is bounded at 200 characters, as the
+// pre-STU2.2 string form was; a bare string is still accepted and becomes {reference} (#5454).
+const FhirContextObject = z
+  .strictObject({
+    reference: z.string().min(1).max(200).optional(),
+    canonical: z.string().min(1).max(200).optional(),
+    identifier: z.strictObject({ system: z.string().max(200).optional(), value: z.string().min(1).max(200) }).optional(),
+    type: z.string().regex(/^[A-Za-z]{1,64}$/).optional(),
+    role: z.string().min(1).max(200).optional(),
+  })
+  .refine((o) => !!(o.reference || o.canonical || o.identifier), 'needs one of reference, canonical or identifier');
+const FhirContextEntry = z.union([
+  z.string().min(1).max(200).transform((reference): FhirContextItem => ({ reference })),
+  FhirContextObject,
+]);
+
 const LaunchSchema = z.strictObject({
   tenant: z.string().regex(SLUG),
   oid: z.string().refine(isGuid, 'must be a GUID'),
   clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/),
   patient: z.string().regex(FHIR_ID),
   encounter: z.string().regex(FHIR_ID).optional(),
-  fhirContext: z.array(z.string().max(200)).max(10).optional(),
+  fhirContext: z.array(FhirContextEntry).max(10).optional(),
 });
+
+/** CORS for browser-based (public) SMART apps. Never Allow-Credentials: nothing here reads a cookie cross-origin. */
+const CORS_ANY: Record<string, string> = { 'access-control-allow-origin': '*' };
+function preflight(res: ServerResponse, methods: string): void {
+  res.writeHead(204, {
+    ...CORS_ANY,
+    'access-control-allow-methods': `${methods}, OPTIONS`,
+    'access-control-allow-headers': 'content-type, authorization',
+    'access-control-max-age': '600',
+    'cache-control': 'no-store',
+  });
+  res.end();
+}
+
+/** The `iss` of a client assertion without verifying it; '' when absent or not a JWT. Identification only, never trust. */
+function assertionIss(assertion: string | null): string {
+  if (!assertion) return '';
+  try {
+    return String(decodeJwt(assertion).iss ?? '');
+  } catch {
+    return '';
+  }
+}
 
 const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k'];
 
@@ -238,6 +283,14 @@ export function createAuthServer(deps: AuthServerDeps) {
   }
 
   // ---- discovery / jwks ----
+  /**
+   * OpenID issuer of a tenant's id_tokens (#5454). Per tenant, so `{issuer}/{tenant}/.well-known/openid-configuration`
+   * is its discovery document. ACCESS tokens keep the tenant-independent `issuer` (the PDP and APIM pin it).
+   */
+  const oidcIssuerFor = (tenant: string): string => `${issuer}/${tenant}`;
+  const TOKEN_AUTH_METHODS = ['private_key_jwt', 'none'];
+  const SCOPES_SUPPORTED = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'];
+
   async function smartConfiguration(tenant: string): Promise<unknown> {
     const t = await activeTenant(tenant);
     const b = await bindingFor(t.id);
@@ -245,18 +298,35 @@ export function createAuthServer(deps: AuthServerDeps) {
       'context-ehr-patient', 'context-standalone-patient', 'permission-offline', 'permission-patient', 'permission-user', 'permission-v2'];
     if (b?.v1Scopes) caps.push('permission-v1');
     return {
-      issuer,
+      issuer: oidcIssuerFor(t.id),
       jwks_uri: `${issuer}/jwks.json`,
       authorization_endpoint: `${issuer}/${t.id}/authorize`,
       token_endpoint: `${issuer}/${t.id}/token`,
       grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
-      token_endpoint_auth_methods_supported: ['private_key_jwt'],
+      token_endpoint_auth_methods_supported: TOKEN_AUTH_METHODS,
       token_endpoint_auth_signing_alg_values_supported: ['RS384', 'ES384'],
       code_challenge_methods_supported: ['S256'], // never "plain"
-      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'],
+      scopes_supported: SCOPES_SUPPORTED,
       response_types_supported: ['code'],
       capabilities: caps,
       lhds_scope_map: SCOPE_MAP_VERSION,
+    };
+  }
+
+  async function openidConfiguration(tenant: string): Promise<unknown> {
+    const t = await activeTenant(tenant);
+    return {
+      issuer: oidcIssuerFor(t.id),
+      authorization_endpoint: `${issuer}/${t.id}/authorize`,
+      token_endpoint: `${issuer}/${t.id}/token`,
+      jwks_uri: `${issuer}/jwks.json`,
+      response_types_supported: ['code'],
+      subject_types_supported: ['public'],
+      // The signer's alg (ES384). RS256, which OIDC makes the default, waits on the held RSA key (W1b-3a A7).
+      id_token_signing_alg_values_supported: [deps.signer.alg],
+      scopes_supported: SCOPES_SUPPORTED,
+      token_endpoint_auth_methods_supported: TOKEN_AUTH_METHODS,
+      code_challenge_methods_supported: ['S256'],
     };
   }
 
@@ -368,7 +438,7 @@ export function createAuthServer(deps: AuthServerDeps) {
 
     let patient: string | undefined;
     let encounter: string | undefined;
-    let fhirContext: string[] | undefined;
+    let fhirContext: FhirContextItem[] | undefined;
     if (ar.launchHandle) {
       const h = await stores.grants.get(ar.launchHandle);
       // Single-use; bound to tenant + oid + client_id (A3). Any mismatch reads the same.
@@ -382,7 +452,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       }
       patient = h.patient;
       encounter = h.encounter;
-      fhirContext = h.fhirContext;
+      fhirContext = normalizeFhirContext(h.fhirContext);
     }
     // Standalone `launch/patient` needs the patient picker; it is not built in W1, so no patient
     // context exists here and every patient/ scope is dropped by computeGrant.
@@ -442,6 +512,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     patient?: string;
     encounter?: string;
     fhirUser?: string;
+    fhirContext?: FhirContextItem[];
     nonce?: string;
     aud: string;
     roles: string[];
@@ -480,9 +551,10 @@ export function createAuthServer(deps: AuthServerDeps) {
       out.need_patient_banner = !g.launched; // an EHR launch already showed the patient
     }
     if (g.encounter) out.encounter = g.encounter;
+    if (g.fhirContext && g.fhirContext.length > 0) out.fhirContext = g.fhirContext; // SMART STU2.2: objects, never strings
     if (g.scope.includes('openid')) {
       out.id_token = await mintIdToken(deps.signer, {
-        issuer,
+        issuer: oidcIssuerFor(g.tenant),
         clientId: g.clientId,
         sub: g.oid,
         ...(g.nonce ? { nonce: g.nonce } : {}),
@@ -508,6 +580,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         ...(g.patient ? { patient: g.patient } : {}),
         ...(g.encounter ? { encounter: g.encounter } : {}),
         ...(g.fhirUser ? { fhirUser: g.fhirUser } : {}),
+        ...(g.fhirContext && g.fhirContext.length > 0 ? { fhirContext: g.fhirContext } : {}),
         ...(g.nonce ? { clientNonce: g.nonce } : {}),
         ...(g.launched ? { launchHandle: 'bound' } : {}),
       });
@@ -515,6 +588,11 @@ export function createAuthServer(deps: AuthServerDeps) {
     }
     return out;
   }
+
+  const fhirContextOf = (doc: GrantDoc): { fhirContext?: FhirContextItem[] } => {
+    const fc = normalizeFhirContext(doc.fhirContext);
+    return fc ? { fhirContext: fc } : {};
+  };
 
   async function markUsed(doc: GrantDoc): Promise<void> {
     try {
@@ -547,19 +625,18 @@ export function createAuthServer(deps: AuthServerDeps) {
     publicJwk: () => deps.signer.publicJwk(),
   };
 
-  async function token(tenantSlug: string, p: URLSearchParams): Promise<Record<string, unknown>> {
+  /**
+   * `cors.publicClient` is set once the request is resolved to an active public app client, so the response
+   * (success OR OAuth error) carries `access-control-allow-origin: *` for the browser app (#5454). Confidential
+   * and backend clients never get it.
+   */
+  async function token(tenantSlug: string, p: URLSearchParams, cors: { publicClient: boolean }): Promise<Record<string, unknown>> {
     await activeTenant(tenantSlug);
     const tokenUrl = `${issuer}/${tenantSlug}/token`;
     const grantType = p.get('grant_type');
 
     if (grantType === 'client_credentials') {
-      const assertion = p.get('client_assertion');
-      let clientId = '';
-      try {
-        clientId = String(assertion ? decodeJwt(assertion).iss ?? '' : '');
-      } catch {
-        clientId = '';
-      }
+      const clientId = assertionIss(p.get('client_assertion'));
       const client = clientId ? await getClient(clientId) : undefined;
       // Unknown, disabled, wrong-tenant and non-backend all read as the same invalid_client.
       if (!client || client.status !== 'active' || client.clientType !== 'backend' || client.tenant !== tenantSlug) {
@@ -592,10 +669,21 @@ export function createAuthServer(deps: AuthServerDeps) {
     }
 
     if (grantType === 'authorization_code' || grantType === 'refresh_token') {
-      const client = await getClient(p.get('client_id') ?? '');
+      // RFC 7523 section 3: a client authenticating with an assertion may omit client_id, and is then identified by
+      // the assertion iss (Inferno's asymmetric exchange sends none). Both present and different is refused.
+      const formId = p.get('client_id') ?? '';
+      const assertion = p.get('client_assertion');
+      const assertedId = assertionIss(assertion);
+      if (formId && assertion && assertedId !== formId) throw new OAuthError('invalid_client', 'client authentication failed');
+      const client = await getClient(formId || assertedId);
       if (!client || client.status !== 'active' || client.clientType !== 'app' || client.tenant !== tenantSlug) {
         throw new OAuthError('invalid_client', 'client authentication failed');
       }
+      const confidential = !!(client.jwks || client.jwksUrl);
+      // An unverified iss names a client but proves nothing; only a confidential client, whose assertion
+      // authenticateClient then VERIFIES, may be identified that way. A public client must send client_id.
+      if (!formId && !confidential) throw new OAuthError('invalid_client', 'client authentication failed');
+      if (!confidential) cors.publicClient = true;
       await authenticateClient(client, p, tokenUrl);
 
       if (grantType === 'authorization_code') {
@@ -619,6 +707,7 @@ export function createAuthServer(deps: AuthServerDeps) {
           ...(doc.patient ? { patient: doc.patient } : {}),
           ...(doc.encounter ? { encounter: doc.encounter } : {}),
           ...(doc.fhirUser ? { fhirUser: doc.fhirUser } : {}),
+          ...fhirContextOf(doc),
           ...(doc.clientNonce ? { nonce: doc.clientNonce } : {}),
           aud: doc.aud as string,
           roles: await rolesForUser(doc.tenant, doc.oid as string),
@@ -682,6 +771,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         ...(doc.patient ? { patient: doc.patient } : {}),
         ...(doc.encounter ? { encounter: doc.encounter } : {}),
         ...(doc.fhirUser ? { fhirUser: doc.fhirUser } : {}),
+        ...fhirContextOf(doc),
         ...(doc.clientNonce ? { nonce: doc.clientNonce } : {}),
         aud: doc.aud as string,
         roles,
@@ -843,15 +933,27 @@ export function createAuthServer(deps: AuthServerDeps) {
     return rest;
   };
 
+  // Tenant-scoped routes under the issuer path, and the FHIR-base discovery path the edge forwards unchanged.
+  const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|token)$/;
+  const FHIR_DISCOVERY = /^\/([a-z0-9-]{2,40})\/fhir\/\.well-known\/smart-configuration$/;
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const method = req.method ?? 'GET';
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     const isAdmin = path.startsWith('/api/health/auth/');
     const inBase = path === `${base}/jwks.json` || path === `${base}/callback` || path.startsWith(`${base}/`);
-    if (!isAdmin && !inBase) return false;
+    const tenantRoute = !isAdmin && inBase ? TENANT_ROUTE.exec(path.slice(base.length)) : null;
+    // The issuer-path route wins on the one ambiguous shape: with issuer path /auth, a tenant named `fhir` owns
+    // /auth/fhir/.well-known/smart-configuration, so a tenant named `auth` has no FHIR-base discovery on this host.
+    const fhirDiscovery = !isAdmin && !tenantRoute ? FHIR_DISCOVERY.exec(path) : null;
+    if (!isAdmin && !inBase && !fhirDiscovery) return false;
     const started = Date.now();
     let status = 500;
+    // CORS headers for this response, success or error (#5454). Discovery and jwks are public documents; the token
+    // endpoint gets them only once token() resolves the caller to a public client.
+    let cors: Record<string, string> = {};
+    const tokenCors = { publicClient: false };
     try {
       if (isAdmin) {
         const r = await admin(req, method, path);
@@ -860,15 +962,27 @@ export function createAuthServer(deps: AuthServerDeps) {
         sendJson(res, status, { ok: true, data: r.data });
         return true;
       }
+      const leaf = fhirDiscovery ? '.well-known/smart-configuration' : tenantRoute?.[2];
+      const tenant = (fhirDiscovery ?? tenantRoute)?.[1] ?? '';
+      const isDiscovery =
+        path === `${base}/jwks.json` || path === `${base}/.well-known/openid-configuration` ||
+        leaf === '.well-known/smart-configuration' || leaf === '.well-known/openid-configuration';
+      if (isDiscovery) cors = CORS_ANY;
+      if (method === 'OPTIONS' && (isDiscovery || leaf === 'token')) {
+        status = 204;
+        preflight(res, isDiscovery ? 'GET' : 'POST');
+        return true;
+      }
       if (path === `${base}/jwks.json` && method === 'GET') {
         status = 200;
-        sendJson(res, 200, { keys: [await deps.signer.publicJwk()] });
+        sendJson(res, 200, { keys: [await deps.signer.publicJwk()] }, cors);
         return true;
       }
       if (path === `${base}/.well-known/openid-configuration` && method === 'GET') {
-        // Tenant-independent OIDC discovery for the APIM validate-jwt (#5160): no tenant lookup.
+        // Tenant-independent OIDC discovery for the APIM validate-jwt (#5160): no tenant lookup. Its body is
+        // pinned byte-for-byte by a test; the per-tenant document below is the id_token issuer's.
         status = 200;
-        sendJson(res, 200, { issuer, jwks_uri: `${issuer}/jwks.json` });
+        sendJson(res, 200, { issuer, jwks_uri: `${issuer}/jwks.json` }, cors);
         return true;
       }
       if (path === `${base}/callback` && method === 'GET') {
@@ -876,12 +990,15 @@ export function createAuthServer(deps: AuthServerDeps) {
         await callback(res, url.searchParams, req.headers.cookie);
         return true;
       }
-      const m = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|authorize|token)$/.exec(path.slice(base.length));
-      if (!m) return false;
-      const [, tenant, leaf] = m as unknown as [string, string, string];
+      if (!leaf) return false;
       if (leaf === '.well-known/smart-configuration' && method === 'GET') {
         status = 200;
-        sendJson(res, 200, await smartConfiguration(tenant));
+        sendJson(res, 200, await smartConfiguration(tenant), cors);
+        return true;
+      }
+      if (leaf === '.well-known/openid-configuration' && method === 'GET') {
+        status = 200;
+        sendJson(res, 200, await openidConfiguration(tenant), cors);
         return true;
       }
       if (leaf === 'authorize' && method === 'GET') {
@@ -890,21 +1007,22 @@ export function createAuthServer(deps: AuthServerDeps) {
         return true;
       }
       if (leaf === 'token' && method === 'POST') {
-        const out = await token(tenant, await readForm(req));
+        const out = await token(tenant, await readForm(req), tokenCors);
         status = 200;
-        sendJson(res, 200, out);
+        sendJson(res, 200, out, tokenCors.publicClient ? CORS_ANY : {});
         return true;
       }
       status = 405;
-      sendJson(res, 405, { error: 'invalid_request', error_description: 'method not allowed' });
+      sendJson(res, 405, { error: 'invalid_request', error_description: 'method not allowed' }, cors);
       return true;
     } catch (e) {
+      if (tokenCors.publicClient) cors = CORS_ANY;
       if (e instanceof OAuthError) {
         status = e.status;
-        sendJson(res, status, { error: e.code, error_description: e.description }, status === 401 ? { 'www-authenticate': 'Basic realm="lhds"' } : {});
+        sendJson(res, status, { error: e.code, error_description: e.description }, { ...cors, ...(status === 401 ? { 'www-authenticate': 'Basic realm="lhds"' } : {}) });
       } else if (e instanceof HttpError) {
         status = e.status;
-        sendJson(res, status, { ok: false, error: { code: e.code, message: authoredMessage(e) } }, status === 401 ? { 'www-authenticate': 'Bearer' } : {});
+        sendJson(res, status, { ok: false, error: { code: e.code, message: authoredMessage(e) } }, { ...cors, ...(status === 401 ? { 'www-authenticate': 'Bearer' } : {}) });
       } else {
         status = 500;
         // Step + sanitised message + SDK status/code: enough to diagnose a 500 from the log alone
@@ -912,7 +1030,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         const step = e instanceof StepFailure ? e.step : 'request';
         const origin = e instanceof StepFailure ? e.origin : e;
         deps.log('auth.internal_error', { error: origin instanceof Error ? origin.name : 'unknown', step, ...classifyError(origin) });
-        sendJson(res, 500, { error: 'server_error', error_description: 'internal error' });
+        sendJson(res, 500, { error: 'server_error', error_description: 'internal error' }, cors);
       }
       return true;
     } finally {

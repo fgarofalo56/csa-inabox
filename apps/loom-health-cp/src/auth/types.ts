@@ -59,6 +59,15 @@ export interface ReplayDoc extends Doc {
   ttl: number;
 }
 
+/** One SMART App Launch STU2.2 `fhirContext` entry: at least one of reference, canonical or identifier. */
+export interface FhirContextItem {
+  reference?: string;
+  canonical?: string;
+  identifier?: { system?: string; value: string };
+  type?: string;
+  role?: string;
+}
+
 export interface GrantDoc extends Doc {
   kind: 'authreq' | 'code' | 'refresh' | 'launch' | 'revoked';
   /** authreq: sha256 of the browser-binding cookie secret (#5134). */
@@ -85,11 +94,18 @@ export interface GrantDoc extends Doc {
   grantedScope?: string[]; // v2 form, includes context scopes
   patient?: string;
   encounter?: string;
-  fhirContext?: string[];
+  /** SMART STU2.2 fhirContext objects. Documents written before #5454 may still hold bare strings (normalised on read). */
+  fhirContext?: Array<FhirContextItem | string>;
   fhirUser?: string;
   echo?: Record<string, string>;
   /** Enforced in code on every read; `ttl` is only Cosmos-side cleanup. */
   expiresAt: string;
+}
+
+/** Reads a stored fhirContext: a pre-STU2.2 bare string becomes `{reference}`. */
+export function normalizeFhirContext(v: GrantDoc['fhirContext']): FhirContextItem[] | undefined {
+  if (!v || v.length === 0) return undefined;
+  return v.map((x) => (typeof x === 'string' ? { reference: x } : x));
 }
 
 export interface AuthStores {
