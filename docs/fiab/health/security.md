@@ -3,9 +3,16 @@
 > **Status: A1-A11 are the design; A12 records the W1-4 server code. Merged
 > is not deployed.** This page currently holds only the **authorization
 > section** (PRP item W1-4). The Authorization Server code lives in
-> `apps/loom-health-cp/src/auth/` and is **not wired into `compose.ts` /
-> `main.ts`, not deployed, and not run against Entra, Key Vault or Graph**
-> (A12 lists what was and was not measured). The rest of this page (network,
+> `apps/loom-health-cp/src/auth/`. It is **wired** (`main.ts` builds it from
+> `wire.ts`; `compose.ts` mounts it in front of the control-plane app) and
+> **deployed on Commercial dev01**:
+> - The issuer has been served through Front Door on `/auth/*` since #5413.
+> - Key Vault token minting was verified live (deploy-health 44947837477).
+> - The W1b-3a discovery and CORS changes were verified live on 2026-11-24 (#5461).
+>
+> Not exercised live: an interactive Entra authorization-code sign-in, the
+> Graph membership check, and anything in GCC-High (#5123). A12 lists what
+> was and was not measured. The rest of this page (network,
 > keys, audit, evidence pack) belongs to W1-9 and later waves. Mapping only, no ATO, FedRAMP or HIPAA-compliance claim
 > (`PRPs/active/loom-health-data-services/SECURITY-AND-COMPLIANCE.md:3-10`).
 
@@ -530,7 +537,7 @@ Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `ro
 
 **Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
 
-**Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which does not exist yet, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). Not wired into `compose.ts` / `main.ts`, so no route is live. Gate-registry registration of the consent gate is a console change.
+**Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which does not exist yet, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). The AS routes, the picker included, are live on Commercial dev01 behind the Front Door `/auth/*` route (see the status note at the top). Gate-registry registration of the consent gate is a console change.
 
 **UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
 
