@@ -375,6 +375,9 @@ class FakeCluster implements AksRunCommand {
   jobsDeleted: string[] = [];
   deleteLeavesWorkload = false;
   workloadPresent = false;
+  /** The engine NetworkPolicy is modelled apart from the Deployment so a teardown that leaves ONLY it behind is expressible. */
+  policyPresent = false;
+  deleteLeavesPolicy = false;
   /** The tenant database was dropped by tenant.destroy. */
   dbAbsent = false;
   /** Entra object id the existing role is bound to. */
@@ -399,6 +402,7 @@ class FakeCluster implements AksRunCommand {
       this.partsAnnotation = d.metadata.annotations['loom.health/partitions'] ?? '';
       if (this.engineReconciles) this.reconcileFrom(d.spec.template.spec.containers[0].env);
       this.workloadPresent = true;
+      this.policyPresent = m.items.some((i: any) => i.kind === 'NetworkPolicy');
       return this.rolloutExit === 0 ? ok('LOOM_APPLIED=1\ndeployment successfully rolled out') : { exitCode: this.rolloutExit, logs: 'LOOM_APPLIED=1\nerror: timed out waiting for the condition' };
     }
     if (/kubectl get job\//.test(command)) return ok(this.jobStuck ? 'SUCCEEDED= FAILED=' : this.jobFails ? 'SUCCEEDED= FAILED=1' : 'SUCCEEDED=1 FAILED=');
@@ -438,9 +442,14 @@ class FakeCluster implements AksRunCommand {
         this.deployment = undefined;
         this.workloadPresent = false;
       }
+      if (!this.deleteLeavesPolicy) this.policyPresent = false;
       return ok();
     }
-    if (command.includes('-o name')) return ok(this.workloadPresent ? `deployment.apps/fhir-${SLUG}\n` : '');
+    if (command.includes('-o name')) {
+      // The read-back only lists what the GET names: a get that omits networkpolicy/<name> cannot see the policy.
+      const lines = [this.workloadPresent ? `deployment.apps/fhir-${SLUG}` : '', this.policyPresent && command.includes(`networkpolicy/fhir-${SLUG}`) ? `networkpolicy.networking.k8s.io/fhir-${SLUG}` : ''].filter(Boolean);
+      return ok(lines.length ? `${lines.join('\n')}\n` : '');
+    }
     return { exitCode: 127, logs: `fake cluster: unscripted command ${command.slice(0, 60)}` };
   }
 
@@ -755,6 +764,17 @@ describe('RunCommandFhirEngineHost', () => {
     await hostOver(stuck).applyEngineConfig(cfgFor());
     stuck.deleteLeavesWorkload = true;
     await expect(hostOver(stuck).removeEngine(SLUG)).rejects.toMatchObject({ code: 'teardown_incomplete' });
+  });
+
+  it('removeEngine reads the NetworkPolicy back: a policy left behind ALONE is teardown_incomplete', async () => {
+    const c = new FakeCluster();
+    await hostOver(c).applyEngineConfig(cfgFor());
+    expect(c.policyPresent).toBe(true); // positive: the fake saw the policy in the applied manifest
+    c.deleteLeavesPolicy = true; // deployment, service and serviceaccount go; ONLY the policy stays
+    await expect(hostOver(c).removeEngine(SLUG)).rejects.toMatchObject({ code: 'teardown_incomplete', message: expect.stringContaining(`networkpolicy.networking.k8s.io/fhir-${SLUG}`) });
+    expect(c.workloadPresent).toBe(false);
+    const get = c.commands.find((x) => x.startsWith('kubectl get deployment/') && x.includes('-o name'));
+    expect(get).toContain(`networkpolicy/fhir-${SLUG}`); // breaks when the read-back GET drops the policy
   });
 
   it('refuses an unpinned PG client image at construction', () => {
