@@ -72,6 +72,17 @@ describe('GET /api/health/tenants/[id] phase (#5388)', () => {
     // Breaks if the route reports failed for a live job: a running create would show as failed in G1.
     expect((await read('running')).phase).toBe('provisioning');
   });
+
+  it('follows the ENGINE job while the engine rolls out (#5442): the job the editor shows is the engine one, not the create job', async () => {
+    loadOwnedItem.mockResolvedValue({ id: 'item-1', workspaceId: 'ws-1', itemType: 'health-tenant', displayName: 'Mercy General', state: { healthTenant: { ...binding, status: 'bound', engine: { status: 'provisioning', jobId: 'job-engine' } } } });
+    vi.spyOn(cp, 'getTenant').mockResolvedValue({ id: 'mercy-general', status: 'active' } as any);
+    const getJob = vi.spyOn(cp, 'getJob').mockImplementation(async (id: string) => ({ ...job('running'), id }));
+    const j = await (await GET(req(), ctx)).json();
+    // Breaks if the route keeps reading binding.createJobId ('job-1'): the engine's receipts would never reach the editor.
+    expect(getJob).toHaveBeenCalledWith('job-engine');
+    expect(getJob).not.toHaveBeenCalledWith('job-1');
+    expect(j.job.id).toBe('job-engine');
+  });
 });
 
 describe('POST /api/health/tenants/[id]', () => {

@@ -17,6 +17,7 @@
  *   --stamp           / LHDS_STAMP            the stamp the tenant MUST be on (refused otherwise)
  *   --idempotency-key / LHDS_IDEMPOTENCY_KEY  required; the same key re-reads the same job
  *   --allow-non-synthetic true|false (false)  --allow-missing-storage true|false (false)
+ *   --allow-missing-engine true|false (false)  skip the FHIR engine teardown when its host/stamp is unreachable
  *   --timeout-s (1800)  --interval-s (15)
  *   bearer token: env LHDS_CP_TOKEN ONLY (never an argument, never printed).
  *
@@ -63,6 +64,7 @@ export function readConfig(argv, env) {
     idempotencyKey: pick('idempotency-key', 'LHDS_IDEMPOTENCY_KEY'),
     allowNonSynthetic: pick('allow-non-synthetic', 'LHDS_ALLOW_NON_SYNTHETIC', 'false') === 'true',
     allowMissingStorage: pick('allow-missing-storage', 'LHDS_ALLOW_MISSING_STORAGE', 'false') === 'true',
+    allowMissingEngine: pick('allow-missing-engine', 'LHDS_ALLOW_MISSING_ENGINE', 'false') === 'true',
     timeoutS: int('timeout-s', 'LHDS_TIMEOUT_S', 1800),
     intervalS: int('interval-s', 'LHDS_INTERVAL_S', 15),
     token: String(env.LHDS_CP_TOKEN ?? '').replace(/[\r\n]/g, ''),
@@ -149,7 +151,7 @@ export async function runDestroy(c, deps = {}) {
   }
 
   // 2. Submit. The same idempotency key returns the existing job (200) instead of a second one.
-  const input = { confirmTenantId: c.tenant, ...(c.allowMissingStorage ? { allowMissingStorage: true } : {}) };
+  const input = { confirmTenantId: c.tenant, ...(c.allowMissingStorage ? { allowMissingStorage: true } : {}), ...(c.allowMissingEngine ? { allowMissingEngine: true } : {}) };
   const s = await call(c, d, 'POST', '/api/health/jobs', {
     kind: 'tenant.destroy', subjectType: 'tenant', subjectId: c.tenant, idempotencyKey: c.idempotencyKey, input,
   });
