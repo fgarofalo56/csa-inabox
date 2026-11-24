@@ -11,7 +11,8 @@
 //   GET  {issuerPath}/{tenant}/authorize
 //   POST {issuerPath}/{tenant}/token
 //   OPTIONS on the discovery, jwks and token paths answers the CORS preflight.
-//   admin (control-plane bearer auth): /api/health/auth/{clients,tenants/{t}/bindings,launch,readiness}
+//   admin (control-plane bearer auth): /api/health/auth/{clients,clients/{id},tenants/{t}/bindings,
+//     tenants/{t}/fhir-users[/{oid}],launch,readiness}
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -23,6 +24,7 @@ import { SLUG, type TenantDoc } from '../registry/types.js';
 import { authoredMessage, classifyError } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backend-auth.js';
+import { FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
@@ -38,6 +40,7 @@ import {
   type BindingDoc,
   type ClientDoc,
   type FhirContextItem,
+  type FhirUserDoc,
   type GrantDoc,
   type RoleBinding,
 } from './types.js';
@@ -55,7 +58,10 @@ export interface AuthServerDeps {
   fhirBaseFor: (tenant: string) => string;
   authenticate: Authenticator;
   fetchJwks: JwksFetcher;
-  /** Practitioner/Patient/RelatedPerson URL for an Entra oid; undefined means fhirUser is not granted (A3). */
+  /**
+   * Absolute FHIR URL of the resource an Entra oid is in a tenant (wire.ts: the fhir-users mapping, #5454 A4).
+   * undefined means fhirUser is not granted; a throw fails the sign-in closed. Absent => fhirUser is never granted.
+   */
   resolveFhirUser?: (oid: string, tenant: string) => Promise<string | undefined>;
   /** Admin-consent URL for the Graph permission gate. */
   graphConsentUrl?: string;
@@ -177,6 +183,7 @@ const ClientCreateSchema = z.strictObject({
   allowedScopes: z.array(z.string()).min(1).max(100),
   roleIds: z.array(z.string()).max(20).default([]),
   redirectUris: z.array(redirectUri).max(10).default([]),
+  launchUri: redirectUri.optional(),
   pou: z.string().regex(/^[A-Z]{2,10}$/).default('TREAT'),
 });
 
@@ -191,7 +198,7 @@ const FhirContextObject = z
   .strictObject({
     reference: z.string().min(1).max(200).optional(),
     canonical: z.string().min(1).max(200).optional(),
-    identifier: z.strictObject({ system: z.string().max(200).optional(), value: z.string().min(1).max(200) }).optional(),
+    identifier: z.strictObject({ system: z.string().min(1).max(200).optional(), value: z.string().min(1).max(200) }).optional(),
     type: z.string().regex(/^[A-Za-z]{1,64}$/).optional(),
     role: z.string().min(1).max(200).optional(),
   })
@@ -200,6 +207,16 @@ const FhirContextEntry = z.union([
   z.string().min(1).max(200).transform((reference): FhirContextItem => ({ reference })),
   FhirContextObject,
 ]);
+
+// PATCH /clients/{id}: status as before, and/or the launch URI (null clears it). At least one member.
+const ClientPatchSchema = z
+  .strictObject({ status: z.enum(['active', 'disabled']).optional(), launchUri: redirectUri.nullable().optional() })
+  .refine((o) => o.status !== undefined || o.launchUri !== undefined, 'supply status and/or launchUri');
+
+const FhirUserPutSchema = z.strictObject({
+  resource: z.string().regex(FHIR_USER_RESOURCE, 'must be Practitioner|Patient|RelatedPerson|Person/<id>'),
+});
+const FHIR_USER_LIST_MAX = 500;
 
 const LaunchSchema = z.strictObject({
   tenant: z.string().regex(SLUG),
@@ -457,7 +474,17 @@ export function createAuthServer(deps: AuthServerDeps) {
     // Standalone `launch/patient` needs the patient picker; it is not built in W1, so no patient
     // context exists here and every patient/ scope is dropped by computeGrant.
 
-    const fhirUser = await deps.resolveFhirUser?.(identity.oid, ar.tenant);
+    // fhirUser is resolved only when the app asked for it (#5454 A4). A store failure fails the sign-in CLOSED with
+    // server_error: silently dropping the scope would hand the app a session that lost fhirUser without saying so.
+    let fhirUser: string | undefined;
+    if (parsed.context.includes('fhirUser') && deps.resolveFhirUser) {
+      try {
+        fhirUser = await deps.resolveFhirUser(identity.oid, ar.tenant);
+      } catch (e) {
+        deps.log('auth.fhir_user_error', { error: e instanceof Error ? e.name : 'unknown' });
+        return back({ error: 'server_error', error_description: 'the user identity could not be resolved' });
+      }
+    }
     const client = await getClient(ar.clientId);
     if (!client || client.status !== 'active') return back({ error: 'access_denied', error_description: 'client is not available' });
     const g = computeGrant({
@@ -626,14 +653,17 @@ export function createAuthServer(deps: AuthServerDeps) {
   };
 
   /**
-   * `cors.publicClient` is set once the request is resolved to an active public app client, so the response
-   * (success OR OAuth error) carries `access-control-allow-origin: *` for the browser app (#5454). Confidential
-   * and backend clients never get it.
+   * `cors.publicClient` makes the response (success OR OAuth error) carry `access-control-allow-origin: *` for a
+   * browser app (#5454). It is set for a request with NO client_assertion, so an error raised before the client is
+   * resolved (unknown client_id) is readable too: such a request can only ever earn a token as a public client,
+   * because confidential and backend clients must send an assertion. It is also set once a request resolves to a
+   * public app client. A confidential client's token response never carries it.
    */
   async function token(tenantSlug: string, p: URLSearchParams, cors: { publicClient: boolean }): Promise<Record<string, unknown>> {
     await activeTenant(tenantSlug);
     const tokenUrl = `${issuer}/${tenantSlug}/token`;
     const grantType = p.get('grant_type');
+    if (!p.get('client_assertion')) cors.publicClient = true;
 
     if (grantType === 'client_credentials') {
       const clientId = assertionIss(p.get('client_assertion'));
@@ -812,6 +842,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       for (const r of c.roleIds) if (!ROLE_IDS.has(r)) throw badRequest(`roleIds: unknown role ${r.slice(0, 60)}`);
       if (c.clientType === 'backend' && c.roleIds.length === 0) throw badRequest('a backend client needs at least one role');
       if (c.clientType === 'app' && c.redirectUris.length === 0) throw badRequest('an app client needs at least one redirectUri');
+      if (c.clientType === 'backend' && c.launchUri) throw badRequest('launchUri: only an app client has a launch URI');
       if (c.pou === 'BTG') throw badRequest('BTG is not issued in this release');
       const doc: ClientDoc = {
         id: `client-${c.clientId}`,
@@ -829,6 +860,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         updatedBy: who.id,
         ...(c.jwksUrl ? { jwksUrl: c.jwksUrl } : {}),
         ...(c.jwks ? { jwks: c.jwks as ClientDoc['jwks'] } : {}),
+        ...(c.launchUri ? { launchUri: c.launchUri } : {}),
       };
       try {
         return ok(publicClient(await stores.clients.create(doc)), 201);
@@ -840,11 +872,24 @@ export function createAuthServer(deps: AuthServerDeps) {
     const cm = /^\/api\/health\/auth\/clients\/([A-Za-z0-9._-]{3,64})$/.exec(path);
     if (cm && method === 'PATCH') {
       const who = await deps.authenticate(auth, 'write');
-      const p = z.strictObject({ status: z.enum(['active', 'disabled']) }).safeParse(await readJson(req));
-      if (!p.success) throw badRequest('status: must be active or disabled');
+      const p = ClientPatchSchema.safeParse(await readJson(req));
+      if (!p.success) {
+        const i = p.error.issues[0];
+        throw badRequest(i?.path[0] === 'status' ? 'status: must be active or disabled' : `${i?.path.join('.') || 'body'}: ${i?.message ?? 'invalid'}`);
+      }
       const cur = await stores.clients.get(`client-${cm[1]}`);
-      if (!cur) throw notFound('client');
-      return ok(publicClient(await stores.clients.replace({ ...cur, status: p.data.status, updatedAt: now().toISOString(), updatedBy: who.id })));
+      if (!cur || cur.kind !== 'client') throw notFound('client');
+      if (p.data.launchUri && cur.clientType !== 'app') throw badRequest('launchUri: only an app client has a launch URI');
+      const next: ClientDoc = { ...cur, updatedAt: now().toISOString(), updatedBy: who.id };
+      if (p.data.status) next.status = p.data.status;
+      if (p.data.launchUri === null) delete next.launchUri;
+      else if (p.data.launchUri) next.launchUri = p.data.launchUri;
+      try {
+        return ok(publicClient(await stores.clients.replace(next)));
+      } catch (e) {
+        if (e instanceof StoreConflictError) throw conflict('client changed concurrently; retry');
+        throw e;
+      }
     }
     const bm = /^\/api\/health\/auth\/tenants\/([a-z0-9-]{2,40})\/bindings$/.exec(path);
     if (bm && method === 'GET') {
@@ -873,6 +918,46 @@ export function createAuthServer(deps: AuthServerDeps) {
         return ok(cur ? await stores.bindings.replace({ ...next, _etag: cur._etag as string }) : await stores.bindings.create(next));
       } catch (e) {
         if (e instanceof StoreConflictError) throw conflict('bindings changed concurrently; retry');
+        throw e;
+      }
+    }
+    const fl = /^\/api\/health\/auth\/tenants\/([a-z0-9-]{2,40})\/fhir-users$/.exec(path);
+    if (fl && method === 'GET') {
+      await deps.authenticate(auth, 'read');
+      const slug = fl[1] as string;
+      if ((await deps.tenants.get(slug)) === undefined) throw notFound('tenant');
+      const rows = await stores.fhirUsers.listForTenant(slug, FHIR_USER_LIST_MAX);
+      // The query filters by tenant; the second filter keeps a mis-keyed row out of another tenant's list.
+      return ok({ fhirUsers: rows.filter((d) => d.kind === 'fhiruser' && d.tenant === slug).map(publicFhirUser) });
+    }
+    const fu = /^\/api\/health\/auth\/tenants\/([a-z0-9-]{2,40})\/fhir-users\/([^/]{1,64})$/.exec(path);
+    if (fu && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
+      const who = await deps.authenticate(auth, method === 'GET' ? 'read' : 'write');
+      const slug = fu[1] as string;
+      const oidIn = fu[2] as string;
+      if (!isGuid(oidIn)) throw badRequest('oid: must be a GUID');
+      const oid = oidIn.toLowerCase();
+      if ((await deps.tenants.get(slug)) === undefined) throw notFound('tenant');
+      const id = fhirUserDocId(slug, oid);
+      if (method === 'GET') {
+        const d = await stores.fhirUsers.get(id);
+        if (!d || d.kind !== 'fhiruser' || d.tenant !== slug) throw notFound('fhirUser mapping');
+        return ok(publicFhirUser(d));
+      }
+      if (method === 'DELETE') {
+        await stores.fhirUsers.delete(id); // idempotent: deleting an absent mapping is the goal state
+        return ok(null, 204);
+      }
+      const p = FhirUserPutSchema.safeParse(await readJson(req));
+      if (!p.success) throw badRequest(`${p.error.issues[0]?.path.join('.') || 'body'}: ${p.error.issues[0]?.message ?? 'invalid'}`);
+      const next: Omit<FhirUserDoc, '_etag'> = {
+        id, kind: 'fhiruser', tenant: slug, oid, resource: p.data.resource, updatedAt: now().toISOString(), updatedBy: who.id,
+      };
+      const cur = await stores.fhirUsers.get(id);
+      try {
+        return ok(publicFhirUser(cur ? await stores.fhirUsers.replace({ ...next, _etag: cur._etag as string }) : await stores.fhirUsers.create(next)));
+      } catch (e) {
+        if (e instanceof StoreConflictError) throw conflict('mapping changed concurrently; retry');
         throw e;
       }
     }
@@ -932,6 +1017,10 @@ export function createAuthServer(deps: AuthServerDeps) {
     void _etag;
     return rest;
   };
+  const publicFhirUser = (d: FhirUserDoc) => ({
+    tenant: d.tenant, oid: d.oid, resource: d.resource, fhirUser: `${deps.fhirBaseFor(d.tenant)}/${d.resource}`,
+    updatedAt: d.updatedAt, updatedBy: d.updatedBy,
+  });
 
   // Tenant-scoped routes under the issuer path, and the FHIR-base discovery path the edge forwards unchanged.
   const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|token)$/;
@@ -959,6 +1048,11 @@ export function createAuthServer(deps: AuthServerDeps) {
         const r = await admin(req, method, path);
         if (!r) return false;
         status = r.status;
+        if (status === 204) {
+          res.writeHead(204, { 'cache-control': 'no-store' }); // no body on 204
+          res.end();
+          return true;
+        }
         sendJson(res, status, { ok: true, data: r.data });
         return true;
       }

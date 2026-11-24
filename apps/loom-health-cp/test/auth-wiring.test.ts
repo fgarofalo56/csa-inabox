@@ -7,9 +7,10 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadAuthServerConfig } from '../src/auth/config.js';
 import { LocalSigner } from '../src/auth/signer.js';
-import type { AuthStores } from '../src/auth/types.js';
+import type { AuthStores, FhirUserDoc } from '../src/auth/types.js';
+import { authServerInitFromConfig } from '../src/auth/wire.js';
 import { compose } from '../src/compose.js';
-import { ConfigError } from '../src/config.js';
+import { ConfigError, type Config } from '../src/config.js';
 import type { TenantArm } from '../src/jobs/tenant-arm.js';
 import type { TenantDoc } from '../src/registry/types.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, memoryStores, testKeyResolver } from './helpers.js';
@@ -77,6 +78,23 @@ describe('authorization server is served by compose()', () => {
     const on = await boot(true);
     expect((await on.get('/healthz')).status).toBe(200); // breaks if the chain swallows paths the AS does not own
     expect((await on.get('/api/health/stamps')).status).toBe(401); // reaches the control-plane authenticator
+  });
+});
+
+describe('production wiring resolves fhirUser from the mapping store (#5454 A4)', () => {
+  it('authServerInitFromConfig wires resolveFhirUser over stores.fhirUsers and the FHIR edge base', async () => {
+    const cfg = { cloud: 'gcc-high', authorityHost: AUTHORITY, entraTenantId: TENANT, cosmosEndpoint: 'https://cosmos.test:443/', cosmosDatabase: 'db' } as unknown as Config;
+    const init = authServerInitFromConfig(cfg, { issuer: ISSUER, fhirEdgeBase: 'https://edge.test', asClientId: 'x', signingKeyId: `https://kv-x.vault.usgovcloudapi.net/keys/lhds-sign/${'a'.repeat(32)}` });
+    const seen: string[] = [];
+    // Swap the Cosmos read for a fake on the SAME store object the resolver closed over (no network).
+    init.stores.fhirUsers.get = async (id: string) => {
+      seen.push(id);
+      return { id, kind: 'fhiruser', tenant: 'visn-01', oid: 'o', resource: 'Practitioner/p1', updatedAt: 't', updatedBy: 'u' } as FhirUserDoc;
+    };
+    // Breaks (TypeError: not a function) if wire.ts stops wiring the resolver, or on another base / a relative value.
+    expect(await init.resolveFhirUser!('o', 'visn-01')).toBe('https://edge.test/visn-01/fhir/Practitioner/p1');
+    expect(seen).toEqual(['fhiruser-visn-01-o']); // the tenant-keyed id, not the oid alone
+    expect(await init.resolveFhirUser!('o', 'visn-02')).toBeUndefined(); // a doc for another tenant is refused
   });
 });
 

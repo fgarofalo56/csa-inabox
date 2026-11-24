@@ -78,7 +78,41 @@ that differs from the assertion `iss` is `invalid_client`. Discovery and JWKS
 responses carry `Access-Control-Allow-Origin: *`. The token endpoint sends it
 only to public clients. No response allows credentials. A launch
 `fhirContext` takes STU2.2 objects (a bare string becomes `{reference}`), and
-the token response carries it.
+the token response carries it. An `identifier.system` in it, when present,
+must be non-empty.
+
+**fhirUser, launchUri and token-endpoint CORS (W1b-3a A3/A4, #5454; merged, not
+deployed).** `fhirUser` now comes from an operator-managed mapping, one per
+(tenant, Entra `oid`), held in `health-auth-config` as a `kind: fhiruser`
+document with id `fhiruser-{tenant}-{oid}`. It holds a relative reference to a
+`Practitioner`, `Patient`, `RelatedPerson` or `Person`. Sign-in turns it into
+the absolute URL `{tenant FHIR base}/{reference}`, and that same value goes
+into the id_token `fhirUser` claim and the access-token `fhirUser` claim. The
+mapping is read only when the app requests the `fhirUser` scope. With no
+mapping the scope is not granted and neither token carries the claim (Q5 is
+answered by explicit mapping, not identifier matching). If the mapping store
+fails, the sign-in **fails closed**: the app gets an OAuth `server_error`
+redirect with no code, and the CP logs `auth.fhir_user_error`. Dropping the
+scope silently would hand out a session that had lost `fhirUser` without
+saying so. An app client may carry a `launchUri`, its EHR-launch URL. It is
+validated like a `redirect_uri` (https or loopback http, no credentials, no
+fragment) and refused on a backend client. The token endpoint also sends
+`Access-Control-Allow-Origin: *` on any response to a request with **no**
+`client_assertion`, so a browser app can read an `invalid_client` raised
+before its client resolves (an unknown `client_id`). Such a request can only
+ever earn a token as a public client. A request that carries a
+`client_assertion` gets the header only once it resolves to a public client
+(a public client whose assertion `iss` equals its `client_id`; the assertion is
+then ignored). A confidential client's response, token or error, never
+carries it. Since #5461, a public client that sends `client_id` together with a
+`client_assertion` that is not a JWT receives `invalid_client`, because the
+assertion `iss` cannot match the `client_id`.
+
+Two limits apply. First, deleting a mapping does not reach sessions already
+issued. A refresh carries the `fhirUser` stored at sign-in and does not re-read
+the mapping, so an existing refresh token keeps the old value until it expires
+(30 days). To end those sessions, disable the client. Second, mappings are not
+removed when their tenant is destroyed (#5463).
 
 ### A2. Scope grammar LHDS accepts
 
@@ -111,7 +145,7 @@ the spec requires S256 to be listed and `plain` never to be.
 |---|---|---|---|
 | Standalone, patient picked | `launch/patient` + `patient/...` scopes | After Entra sign-in, the AS shows a patient picker for the tenant. The picker searches with the **user's own** `user/Patient.rs` ceiling. A user without that ceiling cannot pick, so every `patient/` scope is dropped | `patient` = chosen id; `need_patient_banner: true`; `tenant` = tenant slug |
 | EHR launch | `launch` scope + `launch=<handle>` | The handle is minted by the Loom item editor (ADR-010:20). It is **single-use**, valid for 5 minutes or less, and bound to (tenant, Entra `oid`, `client_id`, patient, optional encounter / `fhirContext`). A different user, a different client, a second use or expiry is refused | `patient`, `encounter` when bound, `fhirContext` when bound, `need_patient_banner: false`, `tenant` |
-| Identity | `openid fhirUser` | `id_token` signed by the AS. `fhirUser` is the absolute URL of the Practitioner, Patient or RelatedPerson whose identifier matches the Entra user (Q5). **If no match exists, `fhirUser` is not granted.** Inventing a URL is forbidden | `id_token` |
+| Identity | `openid fhirUser` | `id_token` signed by the AS. `fhirUser` is the absolute URL of the Practitioner, Patient, RelatedPerson or Person the operator mapped to the Entra user in that tenant (Q5; the fhir-users admin routes, A12). **If no match exists, `fhirUser` is not granted.** Inventing a URL is forbidden | `id_token` |
 | Refresh | `offline_access` | A refresh token is issued only when at least one data scope is granted. **Every refresh re-runs the full mapping (A4)**, so a removed group membership shrinks the scopes at the next refresh. A refresh never adds scopes beyond the original grant | new `access_token`, `scope` |
 
 `patient/` scopes without an established patient context are dropped at
@@ -452,9 +486,9 @@ leaves A7 unchanged (ADR-010:39-41).
 
 Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `role-map.ts` loader over the JSON, `grant.ts`, `signer.ts`, `tokens.ts`, `backend-auth.ts`, `federation.ts`, `server.ts`, `cosmos.ts`). Tests: `test/auth-core.test.ts`, `test/auth-server.test.ts`.
 
-**Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Three Cosmos containers (Q6): `health-auth-config` (bindings and clients), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
+**Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
 
-**Not built, by design or dependency.** The standalone patient picker (needs a FHIR engine, W2, and a UI): `launch/patient` without an EHR launch handle grants no patient context, so every `patient/` scope is dropped. `fhirUser` is granted only when an injected resolver returns a URL (none is wired; Q5). Not wired into `compose.ts` / `main.ts`, so no route is live. Gate-registry registration of the consent gate is a console change.
+**Not built, by design or dependency.** The standalone patient picker (needs a FHIR engine, W2, and a UI): `launch/patient` without an EHR launch handle grants no patient context, so every `patient/` scope is dropped. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). Not wired into `compose.ts` / `main.ts`, so no route is live. Gate-registry registration of the consent gate is a console change.
 
 **UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
 
