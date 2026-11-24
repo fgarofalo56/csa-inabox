@@ -184,3 +184,13 @@ test('a submit answer whose job id is not the CP format (job-<32 hex>) is refuse
   assert.ok(bad.text.includes('REFUSED by the control plane'), bad.text);
   assert.equal(bad.calls.filter((c) => c.key.startsWith('GET /api/health/jobs/')).length, 0, 'an unvalidated id must never be put in a URL');
 });
+
+test('allowMissingEngine=true is passed through only when set, and is read from --allow-missing-engine', async () => {
+  const { calls } = await run(cfg({ allowMissingEngine: true }), { [`GET ${T}`]: [tenantOk()], 'POST /api/health/jobs': [json(202, { ok: true, data: job('succeeded') })] });
+  const body = JSON.parse(calls.find((c) => c.key.startsWith('POST')).opts.body);
+  assert.deepEqual(body.input, { confirmTenantId: 'g1-202611200813', allowMissingEngine: true });
+  const off = await run(cfg({}), { [`GET ${T}`]: [tenantOk()], 'POST /api/health/jobs': [json(202, { ok: true, data: job('succeeded') })] });
+  assert.deepEqual(JSON.parse(off.calls.find((c) => c.key.startsWith('POST')).opts.body).input, { confirmTenantId: 'g1-202611200813' }, 'absent by default');
+  assert.equal(readConfig(['--tenant', 'g1-000000000001', '--allow-missing-engine', 'true'], {}).allowMissingEngine, true, 'breaks if the flag is not read');
+  assert.equal(readConfig(['--tenant', 'g1-000000000001'], {}).allowMissingEngine, false);
+});

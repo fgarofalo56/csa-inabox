@@ -759,3 +759,51 @@ describe('FHIR engine chaining (#5442)', () => {
     });
   });
 });
+
+describe('tenant.destroy allowMissingEngine (#5442 review)', () => {
+  const failing = (code: string): FhirChain => ({
+    submitCreate: async () => ({ jobId: 'j', created: true }),
+    teardown: async () => { throw new JobFailure(code, `host said ${code}`); },
+  });
+  async function destroyWith(code: string, input: Record<string, unknown>) {
+    const s = setup('healthy', 'creating', failing(code));
+    await s.run('tenant.create', 'k1');
+    const job = await s.run('tenant.destroy', `d-${JSON.stringify(input).length}`, { confirmTenantId: SLUG, ...input });
+    return { s, job };
+  }
+
+  it('default: an unreachable engine host fails closed, deletes and shreds nothing, and names allowMissingEngine as the escape hatch', async () => {
+    const { s, job } = await destroyWith('stamp_manifest_missing', {});
+    expect(job.state).toBe('failed');
+    expect(job.error?.code).toBe('stamp_manifest_missing');
+    expect(job.error?.message).toContain('allowMissingEngine=true');
+    expect(s.arm.deleteCalls).toEqual([]); // 8 would mean the flag-less path proceeded
+    expect(s.arm.keyOps).toEqual([]);
+  });
+
+  it('allowMissingEngine=true + an unreachable host: destroy proceeds, the receipt names the cause and that the engine may be left in place', async () => {
+    const { s, job } = await destroyWith('arm_error', { allowMissingEngine: true });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    const r = job.receipts.find((x) => x.step === 'engine.teardown_skipped');
+    expect(r?.detail).toContain('arm_error');
+    expect(r?.detail).toContain('may be left in place');
+    expect(s.arm.deleteCalls).toHaveLength(8); // the tenant really was torn down
+    expect(s.arm.keyOps.filter((o) => o.startsWith('delete:'))).toHaveLength(4);
+  });
+
+  it('allowMissingEngine=true does NOT skip a REAL teardown error on a reachable host (engine_remove_failed / teardown_incomplete / permission)', async () => {
+    for (const code of ['engine_remove_failed', 'teardown_incomplete', 'permission']) {
+      const { s, job } = await destroyWith(code, { allowMissingEngine: true });
+      expect(job.state, code).toBe('failed');
+      expect(job.error?.code, code).toBe(code);
+      expect(job.error?.message, code).not.toContain('allowMissingEngine'); // no misleading escape hatch
+      expect(s.arm.deleteCalls, code).toEqual([]);
+    }
+  });
+
+  it('the flag is a typed boolean: a string "true" is refused at submit', async () => {
+    const s = setup('healthy', 'creating', failing('arm_error'));
+    await s.run('tenant.create', 'k1');
+    await expect(s.run('tenant.destroy', 'd-str', { confirmTenantId: SLUG, allowMissingEngine: 'true' })).rejects.toThrow(/input/);
+  });
+});
