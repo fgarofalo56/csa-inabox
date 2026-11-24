@@ -11,8 +11,11 @@
  *   cleanup  (run under `if: always()`) disable every `ep-` client of the two tenants, then
  *            destroy each tenant through health-tenant-destroy.mjs. A tenant that was never
  *            created is reported as such, not as a failure.
+ *   probe --mode admin-contract  (#5454) mints nothing: runs lhds-admin-contract-probe.mjs (fhirUser
+ *            mapping, client launchUri, public per-tenant discovery) and records what it creates in the
+ *            owned-file, which cleanup reads to delete the mapping and disable the clients.
  *
- * Args: --phase --cp-url --stamp --tenant-a --tenant-b [--mode mint-only|probe]
+ * Args: --phase --cp-url --stamp --tenant-a --tenant-b [--mode mint-only|probe|admin-contract]
  *       [--edge-base-url] [--quota-rpm] [--timeout-s] [--issuer-path]
  * Bearer: env LHDS_CP_TOKEN only. Exit 0 pass, 1 defect/refused/failed, 2 unmeasured.
  */
@@ -20,6 +23,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { cpCall, disableClient, mintTenantToken, MintError, verdictLines, redact, SLUG_RE } from './mint-tenant-token.mjs';
 import { readConfig as readProbeConfig, runProbe } from './edge-probe.mjs';
 import { runDestroy } from '../../csa-loom/health-tenant-destroy.mjs';
+import { runAdminContract } from './lhds-admin-contract-probe.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const JOB_ID_RE = /^job-[0-9a-f]{32}$/;
@@ -45,7 +49,7 @@ export function validate(c) {
   if (!Number.isInteger(c.quota) || c.quota < 1 || c.quota > 600) return 'quota-rpm must be 1-600';
   if (!Number.isInteger(c.timeoutS) || c.timeoutS < 1 || c.timeoutS > 2400) return 'timeout-s must be 1-2400';
   if (c.phase !== 'probe' && !c.ownedFile) return 'owned-file is required for create and cleanup (the slugs this run created; cleanup destroys only those)';
-  if (!['mint-only', 'probe'].includes(c.mode)) return 'mode must be mint-only or probe';
+  if (!['mint-only', 'probe', 'admin-contract'].includes(c.mode)) return 'mode must be mint-only, probe or admin-contract';
   if (c.phase === 'probe' && c.mode === 'probe' && !/^https:\/\//.test(c.edge)) return 'edge-base-url (https) is required for mode probe';
   return null;
 }
@@ -94,6 +98,13 @@ export async function phaseCreate(c, deps = {}) {
 }
 
 export async function phaseProbe(c, deps = {}) {
+  if (c.mode === 'admin-contract') {
+    // No token is minted: the checks are the CP admin contract and public discovery (#5454).
+    let code;
+    try { code = (await runAdminContract(c, deps)).exit; } catch (e) { say(`unexpected ${redact(e?.name ?? 'error', 40)}: ${redact(e?.message ?? '', 200)}`); code = 1; }
+    say(`VERDICT ${code === 0 ? 'PASS' : code === 1 ? 'FAIL' : 'UNMEASURED'} mode=${c.mode}`);
+    return code;
+  }
   const minted = [];
   let code = 0;
   const tokens = {};
@@ -142,9 +153,19 @@ export function readOwned(file) {
 export async function phaseCleanup(c, deps = {}) {
   let rc = 0;
   const owned = readOwned(c.ownedFile);
+  // admin-contract records `fhiruser:<tenant>:<oid>` (synthetic oid) and `client:<id>` lines. A mapping is deleted
+  // only under a tenant this run owns; 404 means the tenant or the mapping is already gone.
+  for (const line of owned) {
+    const m = /^fhiruser:([a-z0-9-]{2,40}):([0-9a-f-]{36})$/.exec(line);
+    if (!m || !owned.has(m[1])) continue;
+    const d = await api(c, deps, 'DELETE', `/api/health/auth/tenants/${encodeURIComponent(m[1])}/fhir-users/${encodeURIComponent(m[2])}`);
+    say(`cleanup fhir-user mapping tenant=${m[1]}: HTTP ${d.status}`);
+    if (d.status !== 204 && d.status !== 404) rc = 1;
+  }
   const list = await api(c, deps, 'GET', '/api/health/auth/clients');
   if (list.status === 200 && Array.isArray(list.json?.data?.clients)) {
-    for (const cl of list.json.data.clients.filter((x) => owned.has(x.tenant) && String(x.clientId).startsWith('ep-') && x.status !== 'disabled')) {
+    const mine = (x) => (owned.has(x.tenant) && String(x.clientId).startsWith('ep-')) || owned.has(`client:${x.clientId}`);
+    for (const cl of list.json.data.clients.filter((x) => mine(x) && x.status !== 'disabled')) {
       const ok = await disableClient({ ...deps, cpUrl: c.cpUrl, cpToken: c.cpToken }, cl.clientId).catch(() => false);
       say(`cleanup client ${cl.clientId} disabled=${ok}`);
       if (!ok) rc = 1;
