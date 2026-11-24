@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { SmartAppsTab } from './smart-apps-tab';
 import { HonestGate, GateFixitDialog } from '@/lib/components/shared/honest-gate';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { getGate, type GateDef } from '@/lib/gates/registry';
@@ -173,7 +174,7 @@ function OverviewLayout({ card, details }: { card: ReactNode; details: ReactNode
 
 export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [tab, setTab] = useState<'overview' | 'services' | 'quotas'>('overview');
+  const [tab, setTab] = useState<'overview' | 'services' | 'quotas' | 'apps'>('overview');
   const [qDraft, setQDraft] = useState<{ rpm: string; gib: string } | null>(null);
   const [qMsg, setQMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const [view, setView] = useState<View>(EMPTY);
@@ -285,6 +286,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
         { label: 'Overview', onClick: () => setTab('overview') },
         { label: 'Services', onClick: () => setTab('services') },
         { label: 'Quotas', onClick: () => setTab('quotas') },
+        { label: 'Apps', onClick: () => setTab('apps') },
       ] },
     ] },
   ], [act, open, busy, view.gate]);
@@ -299,10 +301,11 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={s.tabs}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'overview' | 'services' | 'quotas')}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'overview' | 'services' | 'quotas' | 'apps')}>
             <Tab value="overview">Overview</Tab>
             <Tab value="services">Services</Tab>
             <Tab value="quotas">Quotas</Tab>
+            <Tab value="apps">Apps</Tab>
           </TabList>
         </div>
         <div className={s.pad}>
@@ -443,6 +446,17 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
               )}
               {qMsg && <MessageBar intent={qMsg.intent} layout="multiline"><MessageBarBody>{qMsg.text}</MessageBarBody></MessageBar>}
             </div>
+          )}
+
+          {tab === 'apps' && (
+            b ? <SmartAppsTab id={id} /> : (
+              <MessageBar intent="info" layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>No tenant yet</MessageBarTitle>
+                  {view.phase === 'provisioning' ? 'SMART apps can be registered as soon as the tenant finishes provisioning.' : 'SMART apps can be registered once the tenant is provisioned.'}
+                </MessageBarBody>
+              </MessageBar>
+            )
           )}
 
           {tab === 'services' && (

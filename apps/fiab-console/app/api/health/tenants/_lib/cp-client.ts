@@ -137,7 +137,52 @@ export interface CpJob {
   finishedAt?: string;
 }
 
+/** A SMART client as the control plane's admin API returns it (publicClient(): no key material). */
+export interface CpSmartClient {
+  clientId: string;
+  tenant: string;
+  clientType: 'backend' | 'app';
+  displayName: string;
+  status: 'active' | 'disabled';
+  allowedScopes: string[];
+  roleIds: string[];
+  redirectUris: string[];
+  jwksUrl?: string;
+  /** Present when the client registered an inline JWKS; the console never sends one. */
+  jwks?: unknown;
+  launchUri?: string;
+  pou?: string;
+  updatedAt?: string;
+}
+
+export interface CpPatientSummary { id: string; name: string; birthDate?: string; gender?: string }
+
+/**
+ * The AS admin patient search (#5454 A6), HTTP 200 for every shape: `{patients}`, `{unavailable:true, reason}`, or
+ * `{notPermitted:true, patients:[]}`.
+ */
+export interface CpPatientSearchResult {
+  patients?: CpPatientSummary[];
+  unavailable?: true;
+  reason?: string;
+  notPermitted?: true;
+}
+
 export const cp = {
+  // ── SMART clients + EHR launch (Authorization Server admin API, #5454 A6) ──
+  listClients: () => cpRequest<{ clients: CpSmartClient[] }>('GET', '/api/health/auth/clients').then((r) => r.clients),
+  createClient: (b: {
+    clientId: string; tenant: string; clientType: 'app'; displayName: string; allowedScopes: string[];
+    redirectUris: string[]; launchUri?: string; jwksUrl?: string;
+  }) => cpRequest<CpSmartClient>('POST', '/api/health/auth/clients', b),
+  updateClient: (clientId: string, b: { status?: 'active' | 'disabled'; launchUri?: string | null }) =>
+    cpRequest<CpSmartClient>('PATCH', `/api/health/auth/clients/${encodeURIComponent(clientId)}`, b),
+  /** `iss` is the tenant FHIR base the CP mints tokens for; absent only on a CP that predates #5454 A6. */
+  mintLaunch: (b: { tenant: string; oid: string; clientId: string; patient?: string }) =>
+    cpRequest<{ launch: string; expiresAt: string; iss?: string }>('POST', '/api/health/auth/launch', b),
+  patientSearch: (tenant: string, b: { oid: string; q: string; birthdate?: string }) =>
+    cpRequest<CpPatientSearchResult>('POST', `/api/health/auth/tenants/${encodeURIComponent(tenant)}/patient-search`, b),
+
   listStamps: () => cpRequest<{ stamps: CpStamp[] }>('GET', '/api/health/stamps').then((r) => r.stamps),
   listTenants: () => cpRequest<{ tenants: CpTenant[] }>('GET', '/api/health/tenants').then((r) => r.tenants),
   /** null ONLY on a 404 from a reachable control plane; every other failure throws. */

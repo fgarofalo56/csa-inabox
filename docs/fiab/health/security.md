@@ -172,6 +172,36 @@ state (HTTP 503, Cancel only). The AS never fabricates a patient. The flow is
 tested only against a fake `PatientSearch` and a fake `fetch`; no live receipt
 exists for any boundary.
 
+**EHR launcher and admin patient search (W1b-3a A6, #5454; merged, not
+deployed).** The health-tenant editor's **Apps** tab lists, registers,
+enables/disables and launches the tenant's SMART app clients through the
+control-plane admin routes. Launch calls `POST /api/health/auth/launch` with
+the signed-in console user's `oid` taken from the console session (never a
+request body) and sends the browser to
+`launchUri?iss=<tenant FHIR base>&launch=<handle>`. The FHIR base is the `iss`
+the launch route now returns: `fhirBaseFor(tenant)`, the same value as the
+token audience. `patient` on that route is now **optional**. An EHR launch
+with no patient is valid SMART: the handle carries no patient, the token
+response has no `patient` and no `need_patient_banner`, and every `patient/`
+scope is dropped as for a standalone launch without a patient. When a patient
+is supplied it must still be a valid FHIR id, and the flow is unchanged.
+
+`POST /api/health/auth/tenants/{t}/patient-search` (control-plane write auth,
+like `launch`; body `{oid, q, birthdate?}`, `q` 1-100 characters, `birthdate`
+a FHIR date) runs the picker's search for that `oid`. It uses the same 60 s
+user token, with `user/Patient.rs` intersected with that user's role
+ceilings and `idp_tid` set to the control plane's own Entra tenant. Every
+honest failure is **HTTP 200 with a flag**, never invented rows:
+`{unavailable: true, reason}` when the FHIR search throws
+`PatientSearchUnavailableError` or role membership cannot be established,
+and `{notPermitted: true, patients: []}` when no role carries
+`user/Patient.rs` (the FHIR search is then not called). A 400 means a bad
+request and a 5xx means a control-plane fault. While the FHIR edge does not
+exist, the console shows "Patient search is unavailable" and offers
+"Launch without a patient" as the primary action. Search terms travel only
+in POST bodies. Tests: `test/auth-server.test.ts` (EHR launch without a
+patient; admin patient search).
+
 Two limits apply. First, deleting a mapping does not reach sessions already
 issued. A refresh carries the `fhirUser` stored at sign-in and does not re-read
 the mapping, so an existing refresh token keeps the old value until it expires
@@ -208,7 +238,7 @@ the spec requires S256 to be listed and `plain` never to be.
 | Flow | Request | AS behaviour | Token response / claims |
 |---|---|---|---|
 | Standalone, patient picked | `launch/patient` + `patient/...` scopes | After Entra sign-in, the AS shows a patient picker for the tenant. The picker searches with the **user's own** `user/Patient.rs` ceiling. A user without that ceiling cannot pick; the picker says so and offers only Cancel (`access_denied`). When no `patient/` scope would be granted at all, there is no picker and the code is issued without a patient | `patient` = chosen id; `need_patient_banner: true`; `tenant` = tenant slug |
-| EHR launch | `launch` scope + `launch=<handle>` | The handle is minted by the Loom item editor (ADR-010:20). It is **single-use**, valid for 5 minutes or less, and bound to (tenant, Entra `oid`, `client_id`, patient, optional encounter / `fhirContext`). A different user, a different client, a second use or expiry is refused | `patient`, `encounter` when bound, `fhirContext` when bound, `need_patient_banner: false`, `tenant` |
+| EHR launch | `launch` scope + `launch=<handle>` | The handle is minted by the Loom item editor (ADR-010:20). It is **single-use**, valid for 5 minutes or less, and bound to (tenant, Entra `oid`, `client_id`, and an optional patient, encounter and `fhirContext`). A different user, a different client, a second use or expiry is refused | `patient` and `need_patient_banner: false` when a patient is bound (neither when none is, #5454 A6), `encounter` when bound, `fhirContext` when bound, `tenant` |
 | Identity | `openid fhirUser` | `id_token` signed by the AS. `fhirUser` is the absolute URL of the Practitioner, Patient, RelatedPerson or Person the operator mapped to the Entra user in that tenant (Q5; the fhir-users admin routes, A12). **If no match exists, `fhirUser` is not granted.** Inventing a URL is forbidden | `id_token` |
 | Refresh | `offline_access` | A refresh token is issued only when at least one data scope is granted. **Every refresh re-runs the full mapping (A4)**, so a removed group membership shrinks the scopes at the next refresh. A refresh never adds scopes beyond the original grant | new `access_token`, `scope` |
 
@@ -550,7 +580,7 @@ leaves A7 unchanged (ADR-010:39-41).
 
 Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `role-map.ts` loader over the JSON, `grant.ts`, `signer.ts`, `tokens.ts`, `backend-auth.ts`, `federation.ts`, `server.ts`, `cosmos.ts`; the patient picker in `patient-search.ts` and `picker-page.ts`). Tests: `test/auth-core.test.ts`, `test/auth-server.test.ts`, `test/patient-picker.test.ts`, `test/cosmos-fhir-users.test.ts`.
 
-**Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
+**Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Added by #5454 (A6): `POST .../launch` accepts no `patient` and returns `iss` (the tenant FHIR base) beside `launch` and `expiresAt`. `POST .../tenants/{t}/patient-search` needs write (see A1, "EHR launcher and admin patient search"). Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
 
 **Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which does not exist yet, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). The AS routes, the picker included, are live on Commercial dev01 behind the Front Door `/auth/*` route (see the status note at the top). Gate-registry registration of the consent gate is a console change.
 
