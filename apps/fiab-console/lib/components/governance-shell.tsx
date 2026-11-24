@@ -18,12 +18,24 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useId } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { GOVERNANCE_SECTIONS } from '@/lib/nav/governance-sections';
-import { makeStyles, mergeClasses, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
+import { useNavCollapse, CollapseChevron } from '@/lib/components/nav-collapse';
+import { makeStyles, mergeClasses, tokens, Subtitle2, Title3, Badge, Button, Tooltip } from '@fluentui/react-components';
+import { ArrowExpandAll20Regular, ArrowCollapseAll20Regular } from '@fluentui/react-icons';
+
+/**
+ * Per-group expand/collapse map for the governance sidebar (#5467). Its own
+ * key, distinct from the main left nav's and the admin sidebar's, so a group
+ * folded here never folds a same-named group anywhere else.
+ */
+export const GOVERNANCE_GROUP_COLLAPSE_LS_KEY = 'loom.governance.nav.groups.collapsed.v1';
+
+const isActiveHref = (pathname: string | null, href: string) =>
+  pathname === href || (href !== '/governance' && !!pathname?.startsWith(href));
 
 const useStyles = makeStyles({
   layout: {
@@ -83,6 +95,34 @@ const useStyles = makeStyles({
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3,
   },
+  // #5467 — the group header is a real <button> (click / Enter / Space toggles
+  // the group). Resets native chrome on top of the groupLabel caption; hover +
+  // visible focus ring match the left-nav section headers.
+  groupHeaderBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    width: '100%',
+    textAlign: 'left',
+    fontFamily: tokens.fontFamilyBase,
+    backgroundColor: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': {
+      outline: `${tokens.strokeWidthThick} solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: `calc(-1 * ${tokens.strokeWidthThick})`,
+    },
+  },
+  groupHeaderChevron: { display: 'inline-flex', flexShrink: 0, color: tokens.colorNeutralForeground3 },
+  // Expand all / Collapse all row at the top of the sidebar.
+  sidebarHead: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+  },
   body: { minWidth: 0 },
   sectionHead: {
     display: 'flex',
@@ -103,6 +143,22 @@ export function GovernanceShell({ sectionTitle, sectionBadge, explainer, childre
   const groups = GOVERNANCE_SECTIONS
     .map((g) => ({ ...g, items: g.items.filter((sec) => !sec.adminOnly || isTenantAdmin) }))
     .filter((g) => g.items.length > 0);
+  const groupLabels = groups.map((g) => g.label);
+  const groupIdPrefix = useId();
+  const {
+    collapsed: isGroupCollapsed,
+    toggle: toggleGroup,
+    setCollapsed: setGroupsCollapsed,
+    expand: expandGroup,
+  } = useNavCollapse(GOVERNANCE_GROUP_COLLAPSE_LS_KEY);
+  // The group holding the current page is forced open on load and on every
+  // navigation (queued after the hook's hydration, so it wins over a
+  // persisted "collapsed" for that group). Matched against the unfiltered
+  // registry so the decision does not wait on the admin probe.
+  const activeGroup = GOVERNANCE_SECTIONS.find((g) => g.items.some((sec) => isActiveHref(pathname, sec.href)))?.label;
+  useEffect(() => {
+    if (activeGroup) expandGroup(activeGroup);
+  }, [activeGroup, pathname, expandGroup]);
   return (
     <PageShell
       title="Governance"
@@ -110,20 +166,57 @@ export function GovernanceShell({ sectionTitle, sectionBadge, explainer, childre
     >
       <div className={s.layout}>
         <nav className={s.sidebar} aria-label="Governance sections">
-          {groups.map((g) => (
-            <div key={g.label} role="group" aria-label={g.label}>
-              <span className={s.groupLabel}>{g.label}</span>
-              {g.items.map((sec) => {
-                const active = pathname === sec.href || (sec.href !== '/governance' && pathname?.startsWith(sec.href));
-                return (
-                  <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
-                    <Subtitle2>{sec.label}</Subtitle2>
-                    <span className={s.desc}>{sec.desc}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
+          <div className={s.sidebarHead}>
+            <Tooltip content="Expand all groups" relationship="label">
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<ArrowExpandAll20Regular />}
+                onClick={() => setGroupsCollapsed(groupLabels, false)}
+                aria-label="Expand all groups"
+              />
+            </Tooltip>
+            <Tooltip content="Collapse all groups" relationship="label">
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<ArrowCollapseAll20Regular />}
+                onClick={() => setGroupsCollapsed(groupLabels, true)}
+                aria-label="Collapse all groups"
+              />
+            </Tooltip>
+          </div>
+          {groups.map((g, groupIndex) => {
+            const groupCollapsed = isGroupCollapsed(g.label);
+            const regionId = `${groupIdPrefix}governance-group-${groupIndex}`;
+            return (
+              <div key={g.label} role="group" aria-label={g.label}>
+                <button
+                  type="button"
+                  className={mergeClasses(s.groupLabel, s.groupHeaderBtn)}
+                  aria-expanded={!groupCollapsed}
+                  aria-controls={regionId}
+                  onClick={() => toggleGroup(g.label)}
+                >
+                  <span className={s.groupHeaderChevron} aria-hidden>
+                    <CollapseChevron open={!groupCollapsed} />
+                  </span>
+                  {g.label}
+                </button>
+                <div id={regionId} hidden={groupCollapsed}>
+                  {g.items.map((sec) => {
+                    const active = isActiveHref(pathname, sec.href);
+                    return (
+                      <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
+                        <Subtitle2>{sec.label}</Subtitle2>
+                        <span className={s.desc}>{sec.desc}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </nav>
         <div className={s.body}>
           {sectionTitle && (

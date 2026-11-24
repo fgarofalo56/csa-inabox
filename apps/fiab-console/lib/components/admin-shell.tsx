@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ReactNode, useState, useEffect } from 'react';
+import { ReactNode, useState, useEffect, useId } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
 import { LearnPopover, type LearnPopoverProps } from '@/lib/components/ui/learn-popover';
 import {
@@ -23,9 +23,12 @@ import {
   DatabaseLink24Regular,
   Alert24Regular,
   ArrowSwap24Regular,
+  ArrowExpandAll20Regular,
+  ArrowCollapseAll20Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 import { ADMIN_SECTIONS, type AdminDestination } from '@/lib/nav/admin-sections';
+import { useNavCollapse, CollapseChevron } from '@/lib/components/nav-collapse';
 
 /**
  * Presentation map: one Fluent icon per admin destination. The destinations
@@ -130,6 +133,28 @@ const useStyles = makeStyles({
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3,
   },
+  // #5467 — the group header is a real <button> so each group expands and
+  // collapses on click / Enter / Space. Resets native chrome on top of the
+  // groupLabel caption styling; hover + visible focus ring match left-nav.
+  groupHeaderBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    width: '100%',
+    textAlign: 'left',
+    fontFamily: tokens.fontFamilyBase,
+    backgroundColor: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': {
+      outline: `${tokens.strokeWidthThick} solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: `calc(-1 * ${tokens.strokeWidthThick})`,
+    },
+  },
+  groupHeaderChevron: { display: 'inline-flex', flexShrink: 0, color: tokens.colorNeutralForeground3 },
+  headActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   // A hairline above each group in the collapsed (icon-only) rail, where the
   // text headers are hidden and would otherwise leave the groups undivided.
   groupDividerCollapsed: {
@@ -151,10 +176,36 @@ const useStyles = makeStyles({
 
 const STORAGE_KEY = 'loom-admin-nav-collapsed';
 
+/**
+ * Per-group expand/collapse map for the admin sidebar (#5467). Deliberately
+ * distinct from the main left nav's NAV_COLLAPSE_LS_KEY so the two never
+ * collide, and from STORAGE_KEY (the whole-sidebar icon-rail toggle).
+ */
+export const ADMIN_GROUP_COLLAPSE_LS_KEY = 'loom.admin.nav.groups.collapsed.v1';
+
+const ADMIN_GROUP_LABELS = ADMIN_SECTIONS.map((g) => g.label);
+
 export function AdminShell({ sectionTitle, learn, children }: { sectionTitle?: string; learn?: LearnPopoverProps; children: ReactNode }) {
   const styles = useStyles();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const groupIdPrefix = useId();
+  const {
+    collapsed: isGroupCollapsed,
+    toggle: toggleGroup,
+    setCollapsed: setGroupsCollapsed,
+    expand: expandGroup,
+  } = useNavCollapse(ADMIN_GROUP_COLLAPSE_LS_KEY);
+
+  // The group holding the current page is forced open on load and on every
+  // navigation, so the active row is never hidden inside a collapsed group.
+  // Runs after the hook's hydration effect (same commit, declared later), and
+  // both are queued state updates, so the persisted map is read first and
+  // this expansion is applied on top of it.
+  const activeGroup = ADMIN_SECTIONS.find((g) => g.items.some((s) => s.href === pathname))?.label;
+  useEffect(() => {
+    if (activeGroup) expandGroup(activeGroup);
+  }, [activeGroup, pathname, expandGroup]);
 
   // Restore the user's collapsed preference.
   useEffect(() => {
@@ -183,6 +234,30 @@ export function AdminShell({ sectionTitle, learn, children }: { sectionTitle?: s
                 aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
               />
             </Tooltip>
+            {/* Expand all / Collapse all (#5467) — expanded rail only; the
+                icon rail has no group headers, so there is nothing to fold. */}
+            {!collapsed && (
+              <span className={styles.headActions}>
+                <Tooltip content="Expand all groups" relationship="label">
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<ArrowExpandAll20Regular />}
+                    onClick={() => setGroupsCollapsed(ADMIN_GROUP_LABELS, false)}
+                    aria-label="Expand all groups"
+                  />
+                </Tooltip>
+                <Tooltip content="Collapse all groups" relationship="label">
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<ArrowCollapseAll20Regular />}
+                    onClick={() => setGroupsCollapsed(ADMIN_GROUP_LABELS, true)}
+                    aria-label="Collapse all groups"
+                  />
+                </Tooltip>
+              </span>
+            )}
           </div>
           {ADMIN_SECTIONS.map((group, groupIndex) => {
             const renderItem = (s: AdminDestination) => {
@@ -216,6 +291,10 @@ export function AdminShell({ sectionTitle, learn, children }: { sectionTitle?: s
             // Expanded rail: a text header per group. Collapsed (icon-only) rail:
             // headers are hidden (nothing to read), so a hairline separates the
             // later groups instead — matching the left-nav rail pattern.
+            // Per-group collapse (#5467) applies only to the expanded rail: the
+            // icon rail has no header to click, so it always shows every icon.
+            const groupCollapsed = !collapsed && isGroupCollapsed(group.label);
+            const regionId = `${groupIdPrefix}admin-group-${groupIndex}`;
             return (
               <div
                 key={group.label}
@@ -223,8 +302,23 @@ export function AdminShell({ sectionTitle, learn, children }: { sectionTitle?: s
                 aria-label={group.label}
                 className={collapsed && groupIndex > 0 ? styles.groupDividerCollapsed : undefined}
               >
-                {!collapsed && <span className={styles.groupLabel}>{group.label}</span>}
-                {group.items.map(renderItem)}
+                {!collapsed && (
+                  <button
+                    type="button"
+                    className={mergeClasses(styles.groupLabel, styles.groupHeaderBtn)}
+                    aria-expanded={!groupCollapsed}
+                    aria-controls={regionId}
+                    onClick={() => toggleGroup(group.label)}
+                  >
+                    <span className={styles.groupHeaderChevron} aria-hidden>
+                      <CollapseChevron open={!groupCollapsed} />
+                    </span>
+                    {group.label}
+                  </button>
+                )}
+                <div id={regionId} hidden={groupCollapsed}>
+                  {group.items.map(renderItem)}
+                </div>
               </div>
             );
           })}
