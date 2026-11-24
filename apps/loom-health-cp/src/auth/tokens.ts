@@ -32,6 +32,8 @@ export interface AccessTokenInput {
   roles: string[];
   pou: string[];
   now: Date;
+  /** Lifetime in seconds; default ACCESS_TOKEN_TTL_S. The patient picker's search token uses 60 (#5454 A5). */
+  ttlS?: number;
 }
 
 export async function mintAccessToken(signer: Signer, i: AccessTokenInput): Promise<string> {
@@ -40,7 +42,7 @@ export async function mintAccessToken(signer: Signer, i: AccessTokenInput): Prom
     iss: i.issuer,
     aud: i.audience,
     iat,
-    exp: iat + ACCESS_TOKEN_TTL_S,
+    exp: iat + (i.ttlS ?? ACCESS_TOKEN_TTL_S),
     jti: randomUUID(),
     lhds_ver: LHDS_AT_VERSION,
     tenant: i.tenant,

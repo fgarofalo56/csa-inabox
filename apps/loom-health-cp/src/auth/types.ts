@@ -3,7 +3,7 @@
 // the control plane:
 //   health-auth-config  tenant role bindings + client registrations + fhirUser mappings
 //   health-auth-replay  client-assertion jti cache (TTL; create-if-absent => 409 = replay)
-//   health-auth-grants  auth requests, authorization codes, refresh tokens, launch handles (TTL)
+//   health-auth-grants  auth requests, authorization codes, refresh tokens, launch handles, patient picks (TTL)
 // Secrets (codes, refresh tokens, launch handles) are stored only as SHA-256.
 
 import { createHash } from 'node:crypto';
@@ -91,9 +91,13 @@ export interface FhirContextItem {
 }
 
 export interface GrantDoc extends Doc {
-  kind: 'authreq' | 'code' | 'refresh' | 'launch' | 'revoked';
-  /** authreq: sha256 of the browser-binding cookie secret (#5134). */
+  kind: 'authreq' | 'code' | 'refresh' | 'launch' | 'revoked' | 'pick';
+  /** authreq + pick: sha256 of the browser-binding cookie secret (#5134; the pick cookie is its own, #5454 A5). */
   browserBinding?: string;
+  /** pick: sha256 of the CSRF value in the picker form; rotated on every render. */
+  csrf?: string;
+  /** pick: the tenant's v1 scope flag at sign-in, so requestedScope re-parses the same way when the code is issued. */
+  v1Scopes?: boolean;
   /** code + refresh: id shared by every rotation of one sign-in; revoking it kills the chain (#5134). */
   family?: string;
   ttl: number;
