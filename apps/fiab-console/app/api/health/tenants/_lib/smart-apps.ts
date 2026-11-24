@@ -105,6 +105,11 @@ export function parseRegister(body: unknown): { app: RegisterInput } | { error: 
   return { app: { clientId, displayName, redirectUris, launchUri, allowedScopes, kind: 'asymmetric', jwksUrl } };
 }
 
+/** True when `new URL(v)` would not throw. */
+export function isParsableUrl(v: string): boolean {
+  try { new URL(v); return true; } catch { return false; }
+}
+
 /** The SMART EHR launch URL: the app's launch URI with `iss` (FHIR base) and `launch` (handle) set, URL-encoded. */
 export function buildLaunchUrl(launchUri: string, iss: string, handle: string): string {
   const u = new URL(launchUri);

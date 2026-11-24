@@ -494,6 +494,24 @@ describe('admin patient search for the console EHR launcher (#5454 A6)', () => {
     expect((await c.admin('POST', path('visn-99'), { oid: USER, q: 'ada' })).status).toBe(404);
     expect((await c.admin('POST', path(), { oid: USER, q: 'ada' })).status).toBe(200); // paired permit
   });
+  it('the DEFAULT FHIR search mints a 60 s user token whose idp_tid is the CP Entra tenant', async () => {
+    // An injected patientSearch bypasses token minting, so this uses createFhirPatientSearch over a fake fetch.
+    const seen: Array<{ url: string; auth: string }> = [];
+    const fetchFhir = (async (u: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(u), auth: String((init?.headers as Record<string, string>)?.authorization ?? '') });
+      return new Response(JSON.stringify({ resourceType: 'Bundle', entry: [{ resource: { resourceType: 'Patient', id: 'pat-1', name: [{ text: 'Ada Smith' }] } }] }), { status: 200, headers: { 'content-type': 'application/fhir+json' } });
+    }) as typeof fetch;
+    const c = await boot({ fetchFhir });
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const r = await c.admin('POST', path(), { oid: USER, q: 'ada' });
+    expect(r.json.data).toEqual({ patients: [{ id: 'pat-1', name: 'Ada Smith' }] });
+    expect(seen.map((x) => x.url)).toEqual([`${fhir('visn-01')}/Patient?name=ada&_count=20`]);
+    const tok = await claims(c, seen[0]!.auth.replace(/^Bearer /, ''));
+    // Breaks if searchAs is handed anything but deps.entraTenantId (e.g. undefined: the claim would be absent).
+    expect(tok.idp_tid).toBe(TENANT);
+    expect([tok.sub, tok.sub_type, tok.scope, tok.client_id, tok.aud, tok.exp - tok.iat]).toEqual([USER, 'user', 'user/Patient.rs', 'lhds-patient-picker', fhir('visn-01'), 60]);
+  });
 });
 
 describe('authorize state is bound to the browser session (#5134)', () => {

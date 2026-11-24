@@ -84,7 +84,10 @@ describe('parseRegister', () => {
   });
   it('every offered scope is one the CP grammar accepts (patient|user / type / v2 perms)', () => {
     // Breaks if a v1 (.read) or system/ scope is added to the picker list; the CP would 400 every registration using it.
-    for (const c of SMART_SCOPE_CHOICES) expect([c.scope, /^(patient|user)\/(\*|[A-Z][A-Za-z]+)\.c?r?u?d?s?$/.test(c.scope)]).toEqual([c.scope, true]);
+    const V2 = /^(patient|user)\/(\*|[A-Z][A-Za-z]+)\.(?=[cruds])c?r?u?d?s?$/;
+    for (const c of SMART_SCOPE_CHOICES) expect([c.scope, V2.test(c.scope)]).toEqual([c.scope, true]);
+    // The probe itself must refuse what the CP refuses: an empty permission, v1, system/, and out-of-order perms.
+    for (const bad of ['patient/*.', 'patient/*.read', 'system/*.rs', 'user/*.sr']) expect([bad, V2.test(bad)]).toEqual([bad, false]);
   });
 });
 
@@ -123,6 +126,16 @@ describe('POST /apps/[clientId]/launch', () => {
     expect((await launch({ patient: 'a/b' })).status).toBe(400);
     expect(mint).not.toHaveBeenCalled();
     expect((await launch({})).status).toBe(200); // paired permit
+  });
+
+  it('a malformed stored launch URI is a 409 launch_uri_invalid, not a raw 500, and no handle is minted', async () => {
+    vi.spyOn(cp, 'listClients').mockResolvedValue([client({ launchUri: 'not a url' })]);
+    const mint = vi.spyOn(cp, 'mintLaunch').mockResolvedValue({ launch: 'h', expiresAt: 'x', iss: FHIR_BASE });
+    const res = await launch({});
+    // Breaks without the parse check: buildLaunchUrl's `new URL('not a url')` throws and withSession answers 500.
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'launch_uri_invalid' });
+    expect(mint).not.toHaveBeenCalled();
   });
 
   it('a CP that returns no iss is a 502 that says so, not a URL with iss=undefined', async () => {

@@ -318,6 +318,23 @@ function EditLaunchDialog({ app, onClose, save }: { app: AppRow; onClose: () => 
   );
 }
 
+/**
+ * The unavailable MessageBar text for the CP's `reason`, stated no more strongly than the CP established it
+ * (deploy-integrity R7). Only `timeout` / `no response` mean the endpoint did not answer; an `HTTP <n>` means it DID
+ * answer; a role-check failure is not about the edge at all. Anything else is shown verbatim.
+ */
+export function unavailableText(reason: string): string {
+  if (reason === 'timeout' || reason === 'no response') {
+    return `The tenant's FHIR endpoint did not answer (${reason}). The FHIR edge may not be deployed for this tenant yet. Launch the app without a patient meanwhile.`;
+  }
+  if (reason === 'role membership could not be established') {
+    return 'Your role membership in this tenant could not be checked, so the search did not run. Try again, or launch the app without a patient.';
+  }
+  const http = /^HTTP (\d{3})$/.exec(reason);
+  if (http) return `The tenant's FHIR endpoint answered HTTP ${http[1]}, so no patients can be listed. Launch the app without a patient, or try again later.`;
+  return `The search did not complete: ${reason}. Launch the app without a patient meanwhile.`;
+}
+
 type SearchState =
   | { kind: 'idle' }
   | { kind: 'searching' }
@@ -385,7 +402,7 @@ function LaunchDialog({ base, app, navigate, onClose }: { base: string; app: App
                 <MessageBar intent="warning" layout="multiline">
                   <MessageBarBody>
                     <MessageBarTitle>Patient search is unavailable</MessageBarTitle>
-                    The search runs against this tenant's FHIR service through the FHIR edge, which did not answer ({search.reason}). Until the FHIR edge is deployed for this tenant, launch the app without a patient.
+                    {unavailableText(search.reason)}
                   </MessageBarBody>
                 </MessageBar>
               )}

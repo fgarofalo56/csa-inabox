@@ -17,7 +17,7 @@
 import { withHealthTenantAdmin } from '../../../../_lib/tenant-admin-gate';
 import { apiError, apiOk } from '@/lib/api/respond';
 import { cp } from '../../../../_lib/cp-client';
-import { CLIENT_ID, FHIR_ID, appsOfTenant, boundTenant, buildLaunchUrl, cpFailure } from '../../../../_lib/smart-apps';
+import { CLIENT_ID, FHIR_ID, appsOfTenant, boundTenant, buildLaunchUrl, cpFailure, isParsableUrl } from '../../../../_lib/smart-apps';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,6 +41,11 @@ export const POST = withHealthTenantAdmin<{ id: string; clientId: string }>('Rea
     if (!client) return apiError('Unknown app', 404);
     if (client.status !== 'active') return apiError('This app is disabled. Enable it to launch it.', 409);
     if (!client.launchUri) return apiError('This app has no launch URL. Set one with "Edit launch URL" first.', 409);
+    // A malformed stored launch URI would make buildLaunchUrl's `new URL` throw (a raw 500). Checked BEFORE minting
+    // so no launch handle is spent on a URL the browser cannot be sent to.
+    if (!isParsableUrl(client.launchUri)) {
+      return apiError('This app\'s stored launch URL is not a valid URL. Fix it with "Edit launch URL".', 409, { code: 'launch_uri_invalid' });
+    }
     const minted = await cp.mintLaunch({ tenant, oid, clientId: client.clientId, ...(patient ? { patient } : {}) });
     if (typeof minted.iss !== 'string' || !minted.iss) {
       return apiError('The control plane did not return the tenant FHIR base (iss); it predates the EHR launcher (#5454 A6) and needs a roll.', 502, { code: 'iss_missing' });

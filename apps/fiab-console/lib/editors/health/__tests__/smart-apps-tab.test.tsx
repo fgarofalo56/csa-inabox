@@ -8,7 +8,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import { renderWithProviders, installFetchMock, makeItem } from '../../__tests__/test-helpers';
-import { SmartAppsTab, SCOPE_CHOICES } from '../smart-apps-tab';
+import { SmartAppsTab, SCOPE_CHOICES, unavailableText } from '../smart-apps-tab';
 import { HealthTenantEditor } from '../tenant-editor';
 import { SMART_SCOPE_CHOICES } from '@/app/api/health/tenants/_lib/smart-apps';
 
@@ -35,7 +35,41 @@ describe('SCOPE_CHOICES', () => {
   });
 });
 
+describe('unavailableText (deploy-integrity R7: claim only what the CP established)', () => {
+  const EDGE = /did not answer|FHIR edge/;
+  it('edge wording ONLY for timeout / no response', () => {
+    // Breaks if the edge wording is dropped for the two reasons that mean "no answer".
+    expect(unavailableText('timeout')).toMatch(/did not answer \(timeout\).*FHIR edge/);
+    expect(unavailableText('no response')).toMatch(/did not answer \(no response\).*FHIR edge/);
+  });
+  it('an HTTP 403 says the endpoint ANSWERED 403 and never claims it did not answer', () => {
+    // Breaks if every reason gets the edge wording (the pre-fix behaviour): 'HTTP 403' would match EDGE.
+    expect(unavailableText('HTTP 403')).toMatch(/answered HTTP 403/);
+    expect(unavailableText('HTTP 403')).not.toMatch(EDGE);
+  });
+  it('a role-check failure says role membership could not be checked, not the edge', () => {
+    const t = unavailableText('role membership could not be established');
+    expect(t).toMatch(/role membership in this tenant could not be checked/);
+    expect(t).not.toMatch(EDGE); // breaks on the pre-fix wording
+  });
+  it('any other reason is shown verbatim', () => {
+    expect(unavailableText('response was not a Bundle')).toContain('response was not a Bundle');
+    expect(unavailableText('response was not a Bundle')).not.toMatch(EDGE);
+  });
+});
+
 describe('SmartAppsTab', () => {
+  it('renders an HTTP 403 unavailable reason without the edge wording', async () => {
+    bff({ search: { unavailable: true, reason: 'HTTP 403', patients: [] } });
+    renderWithProviders(<SmartAppsTab id="item-1" navigate={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Launch Growth Chart' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Patient name' }), { target: { value: 'ada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText(/answered HTTP 403/)).toBeTruthy(); // breaks if the reason is not passed through
+    expect(screen.queryByText(/did not answer/)).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Matching patients' })).toBeNull();
+  });
+
   it('with no apps shows the EmptyState launcher with Register app, and no error banner', async () => {
     bff({ apps: [] });
     renderWithProviders(<SmartAppsTab id="item-1" />);
@@ -57,7 +91,7 @@ describe('SmartAppsTab', () => {
   });
 
   it('patient search unavailable renders the MessageBar and ZERO patient rows; Launch without a patient navigates to the BFF url', async () => {
-    const { calls } = bff({ search: { unavailable: true, reason: 'FHIR edge unreachable', patients: [] } });
+    const { calls } = bff({ search: { unavailable: true, reason: 'no response', patients: [] } });
     const navigate = vi.fn();
     renderWithProviders(<SmartAppsTab id="item-1" navigate={navigate} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Launch Growth Chart' }));
@@ -65,7 +99,7 @@ describe('SmartAppsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     // Breaks if the unavailable flag is ignored (no title) or rendered as an empty result set.
     expect(await screen.findByText('Patient search is unavailable')).toBeTruthy();
-    expect(screen.getByText(/FHIR edge unreachable/)).toBeTruthy();
+    expect(screen.getByText(/did not answer \(no response\)/)).toBeTruthy();
     expect(screen.queryByRole('table', { name: 'Matching patients' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Launch without a patient' }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith(LAUNCH_URL));
