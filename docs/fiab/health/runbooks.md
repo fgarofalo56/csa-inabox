@@ -82,6 +82,7 @@
   (tenant, iss, exp, scope) and prints only a redacted verdict. `mode=probe` also runs
   `scripts/measure/health/edge-probe.mjs` against `edge_base_url` in the same process,
   so no token or key reaches a log, file or output. Cleanup runs under `always()`.
+- `mode=admin-contract` (#5454, not yet exercised live) mints nothing: it checks the fhirUser mapping API (synthetic GUID oid, cross-tenant 404), client `launchUri`, and per-tenant OIDC/SMART discovery on the public issuer, one `PASS|FAIL|UNMEASURED <check> <observed>` line each (`scripts/measure/health/lhds-admin-contract-probe.mjs`).
 - The issuer is DISCOVERED from the control plane
   (`/auth/.well-known/openid-configuration`), never typed in; the client assertion
   `aud` is the discovered issuer's token URL.

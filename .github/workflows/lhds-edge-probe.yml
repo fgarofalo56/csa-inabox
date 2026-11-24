@@ -17,7 +17,11 @@ name: lhds edge probe
 #               DELETE for clients, so a client is disabled, not removed (follow-up filed).
 #
 # mode=mint-only needs no edge: it proves tokens are mintable. mode=probe needs the APIM edge
-# (lane L3) and edge_base_url.
+# (lane L3) and edge_base_url. mode=admin-contract (#5454) mints nothing and needs no edge: it checks
+# the CP admin contract on A/B (fhirUser mapping for a per-run synthetic GUID oid incl. a cross-tenant
+# 404, client launchUri on an app client it creates) and the per-tenant OIDC/SMART discovery through
+# the PUBLIC issuer (scripts/measure/health/lhds-admin-contract-probe.mjs). What it creates is recorded
+# in the owned-file; the cleanup step deletes the mapping and disables the clients before the destroy.
 #
 # SCOPE: Commercial dev01 only (the in-VNet `loom-aca` fleet exists only there; Gov has no
 # equivalent runner, a disclosed gap per cloud-parity.md). Caller: the deploy SP (HealthCP.Admin +
@@ -30,11 +34,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: mint-only proves tokens can be minted; probe also runs the edge probe (needs the APIM edge)
+        description: mint-only proves tokens can be minted; probe also runs the edge probe (needs the APIM edge); admin-contract checks the CP admin + discovery contract (#5454)
         type: choice
         options:
           - mint-only
           - probe
+          - admin-contract
         default: mint-only
       edge_base_url:
         description: https://<gateway> of the APIM edge (required for mode=probe)
@@ -74,7 +79,7 @@ jobs:
       - name: Validate inputs and name the synthetic tenants
         run: |
           set -euo pipefail
-          [[ "$MODE" =~ ^(mint-only|probe)$ ]] || { echo "::error::mode must be mint-only or probe"; exit 1; }
+          [[ "$MODE" =~ ^(mint-only|probe|admin-contract)$ ]] || { echo "::error::mode must be mint-only, probe or admin-contract"; exit 1; }
           [[ "$QUOTA_RPM" =~ ^[0-9]{1,3}$ ]] && [ "$QUOTA_RPM" -ge 1 ] && [ "$QUOTA_RPM" -le 600 ] || { echo "::error::quota_rpm must be 1-600"; exit 1; }
           if [ "$MODE" = "probe" ] && ! [[ "$EDGE_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
             echo "::error::edge_base_url must be a bare https://<host> origin for mode=probe"; exit 1
@@ -159,7 +164,7 @@ jobs:
             --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
             --quota-rpm "$QUOTA_RPM" --timeout-s 1500
 
-      - name: Mint tokens, verify claims, and (mode=probe) probe the edge in-process
+      - name: Mint and verify tokens, probe the edge (mode=probe), or check the admin + discovery contract (mode=admin-contract)
         run: |
           set -euo pipefail
           # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
@@ -172,7 +177,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           set +e
-          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase probe --mode "$MODE" \
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-edge-probe-run.mjs --phase probe --mode "$MODE" --owned-file "$OWNED_FILE" \
             --cp-url "$LOOM_HEALTH_CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
             --edge-base-url "$EDGE_BASE_URL" --quota-rpm "$QUOTA_RPM" | tee -a "$GITHUB_STEP_SUMMARY"
           rc="${PIPESTATUS[0]}"
@@ -181,7 +186,7 @@ jobs:
           echo "exit code: $rc (0 = pass, 1 = defect/failed, 2 = UNMEASURED: nothing here is a claim the edge is broken)"
           exit "$rc"
 
-      - name: Cleanup - disable clients, destroy both tenants
+      - name: Cleanup - delete recorded fhirUser mappings, disable clients, destroy both tenants
         if: always() && steps.require.outcome == 'success'
         run: |
           set -euo pipefail
