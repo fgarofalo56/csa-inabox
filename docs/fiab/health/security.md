@@ -101,10 +101,18 @@ fragment) and refused on a backend client. The token endpoint also sends
 `client_assertion`, so a browser app can read an `invalid_client` raised
 before its client resolves (an unknown `client_id`). Such a request can only
 ever earn a token as a public client. A request that carries a
-`client_assertion` is treated as confidential and gets no CORS header. As a
-result, a public client that sends `client_id` together with a
-`client_assertion` that is not a JWT now receives `invalid_client`: the
+`client_assertion` gets the header only once it resolves to a public client
+(a public client whose assertion `iss` equals its `client_id`; the assertion is
+then ignored). A confidential client's response, token or error, never
+carries it. Since #5461, a public client that sends `client_id` together with a
+`client_assertion` that is not a JWT receives `invalid_client`, because the
 assertion `iss` cannot match the `client_id`.
+
+Two limits apply. First, deleting a mapping does not reach sessions already
+issued. A refresh carries the `fhirUser` stored at sign-in and does not re-read
+the mapping, so an existing refresh token keeps the old value until it expires
+(30 days). To end those sessions, disable the client. Second, mappings are not
+removed when their tenant is destroyed (#5463).
 
 ### A2. Scope grammar LHDS accepts
 
