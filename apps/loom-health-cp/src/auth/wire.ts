@@ -12,17 +12,20 @@ import { TOKEN_EXCHANGE_SCOPE_BY_CLOUD } from './clouds.js';
 import type { AuthServerConfig } from './config.js';
 import { createCosmosAuthStores } from './cosmos.js';
 import { createEntraFederation, createGraphMembership } from './federation.js';
+import { createFhirUserResolver } from './fhir-user.js';
 import type { AuthServerInit } from './server.js';
 import { KeyVaultSigner } from './signer.js';
 
 export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): AuthServerInit {
   const credential = new DefaultAzureCredential({ authorityHost: `https://${cfg.authorityHost}` });
   const getToken = async (scope: string): Promise<string> => (await credential.getToken(scope)).token;
+  const stores = createCosmosAuthStores(cfg);
+  const fhirBaseFor = (tenant: string): string => `${a.fhirEdgeBase}/${tenant}/fhir`;
   return {
     issuer: a.issuer,
     cloud: cfg.cloud,
     entraTenantId: cfg.entraTenantId,
-    stores: createCosmosAuthStores(cfg),
+    stores,
     signer: new KeyVaultSigner({ cloud: cfg.cloud, keyId: a.signingKeyId, getToken }),
     federation: createEntraFederation({
       authorityHost: cfg.authorityHost,
@@ -35,7 +38,9 @@ export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): Auth
       }),
     }),
     graph: createGraphMembership({ cloud: cfg.cloud, getToken }),
-    fhirBaseFor: (tenant) => `${a.fhirEdgeBase}/${tenant}/fhir`,
+    fhirBaseFor,
+    // SMART fhirUser from the operator-managed mapping (#5454 A4); same base as the token audience.
+    resolveFhirUser: createFhirUserResolver(stores.fhirUsers, fhirBaseFor),
     fetchJwks: cachingJwksFetcher(httpsJwksFetcher(), () => new Date()),
     ...(a.graphConsentUrl ? { graphConsentUrl: a.graphConsentUrl } : {}),
   };

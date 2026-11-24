@@ -1,7 +1,7 @@
 // Persistence shapes for the LHDS Authorization Server. Three Cosmos containers
 // (operator decision, security.md Q6), all partitioned on /id like the rest of
 // the control plane:
-//   health-auth-config  tenant role bindings + client registrations
+//   health-auth-config  tenant role bindings + client registrations + fhirUser mappings
 //   health-auth-replay  client-assertion jti cache (TTL; create-if-absent => 409 = replay)
 //   health-auth-grants  auth requests, authorization codes, refresh tokens, launch handles (TTL)
 // Secrets (codes, refresh tokens, launch handles) are stored only as SHA-256.
@@ -49,9 +49,31 @@ export interface ClientDoc extends Doc {
   /** Backend clients only: roles acting for the client (no user to resolve groups for). */
   roleIds: string[];
   redirectUris: string[];
+  /** App clients only: the SMART app's launch URL for an EHR launch (`launchUri?iss=...&launch=...`, #5454 A3). */
+  launchUri?: string;
   pou: string;
   updatedAt: string;
   updatedBy: string;
+}
+
+/** Entra oid -> the FHIR resource that user IS in one tenant (SMART `fhirUser`, #5454 A3). Id: fhirUserDocId(). */
+export interface FhirUserDoc extends Doc {
+  kind: 'fhiruser';
+  tenant: string;
+  /** Lower-case Entra object id. */
+  oid: string;
+  /** Relative reference, e.g. `Practitioner/abc`. Tokens carry it as an absolute URL on the tenant FHIR base. */
+  resource: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** The mappings share the config container, so they need a delete and a tenant-scoped list the Collection seam lacks. */
+export interface FhirUserStore extends Collection<FhirUserDoc> {
+  /** True when a document was removed, false when none existed. */
+  delete(id: string): Promise<boolean>;
+  /** Mappings of ONE tenant, ordered by id, at most `limit`. */
+  listForTenant(tenant: string, limit: number): Promise<FhirUserDoc[]>;
 }
 
 export interface ReplayDoc extends Doc {
@@ -111,6 +133,7 @@ export function normalizeFhirContext(v: GrantDoc['fhirContext']): FhirContextIte
 export interface AuthStores {
   bindings: Collection<BindingDoc>;
   clients: Collection<ClientDoc>;
+  fhirUsers: FhirUserStore;
   replay: Collection<ReplayDoc>;
   grants: Collection<GrantDoc>;
 }

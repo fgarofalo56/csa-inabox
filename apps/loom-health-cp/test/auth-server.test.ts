@@ -13,7 +13,8 @@ import { createAuthServer } from '../src/auth/server.js';
 import { ASSERTION_TYPE } from '../src/auth/backend-auth.js';
 import { GraphConsentRequiredError, type Federation, type GraphMembership } from '../src/auth/federation.js';
 import { LocalSigner } from '../src/auth/signer.js';
-import type { AuthStores } from '../src/auth/types.js';
+import { createFhirUserResolver } from '../src/auth/fhir-user.js';
+import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.js';
 import type { TenantDoc } from '../src/registry/types.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
 
@@ -25,6 +26,17 @@ const G_SMART = 'bbbbbbbb-0000-0000-0000-000000000001';
 const G_READER = 'bbbbbbbb-0000-0000-0000-000000000002';
 const G_ADMIN = 'bbbbbbbb-0000-0000-0000-000000000003';
 const G_EXPORT = 'bbbbbbbb-0000-0000-0000-000000000004';
+
+/** The fhirUser store seam: MemoryCollection plus the delete and tenant-scoped list the Cosmos store adds. */
+class MemoryFhirUsers extends MemoryCollection<FhirUserDoc> implements FhirUserStore {
+  async delete(id: string): Promise<boolean> {
+    if (this.failWith) throw this.failWith;
+    return this.docs.delete(id);
+  }
+  async listForTenant(tenant: string, limit: number): Promise<FhirUserDoc[]> {
+    return (await this.list(10_000)).filter((d) => d.kind === 'fhiruser' && d.tenant === tenant).slice(0, limit);
+  }
+}
 
 class FakeFed implements Federation {
   identity = { oid: USER, tid: TENANT };
@@ -58,7 +70,7 @@ interface Ctx {
   url: string;
   fed: FakeFed;
   graph: FakeGraph;
-  stores: AuthStores & { replay: MemoryCollection<never>; grants: MemoryCollection<never> };
+  stores: AuthStores & { replay: MemoryCollection<never>; grants: MemoryCollection<never>; fhirUsers: MemoryFhirUsers };
   tenants: MemoryCollection<TenantDoc>;
   jwksFetched: string[];
   jwksByUrl: Map<string, JWK[]>;
@@ -85,6 +97,7 @@ async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Recor
   const stores = {
     bindings: new MemoryCollection(),
     clients: new MemoryCollection(),
+    fhirUsers: new MemoryFhirUsers(),
     replay: new MemoryCollection(),
     grants: new MemoryCollection(),
   } as unknown as Ctx['stores'];
@@ -103,6 +116,8 @@ async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Recor
     federation: fed,
     graph,
     fhirBaseFor: fhir,
+    // The production resolver over the fake store, exactly as wire.ts builds it (#5454 A4).
+    resolveFhirUser: createFhirUserResolver(stores.fhirUsers, fhir),
     authenticate: createAuthenticator({ authorityHost: AUTHORITY, entraTenantId: TENANT, audiences: [AUDIENCE], allowedCallerAppIds: [], keyResolver: testKeyResolver }),
     fetchJwks: async (u) => {
       jwksFetched.push(u);
@@ -939,7 +954,9 @@ describe('fhirContext objects (SMART STU2.2, #5454 A1)', () => {
     expect(t.json.fhirContext).toBeUndefined();
     expect((await launch(c, [{ type: 'Observation' }])).status).toBe(400); // breaks (201) without the at-least-one refine
     expect((await launch(c, [{ reference: 'x'.repeat(201) }])).status).toBe(400); // breaks if the 200-char bound is lost
+    expect((await launch(c, [{ identifier: { system: '', value: 'v1' } }])).status).toBe(400); // breaks (201) without system .min(1)
     expect((await launch(c, [{ identifier: { system: 'urn:x', value: 'v1' } }])).status).toBe(201); // paired permit
+    expect((await launch(c, [{ identifier: { value: 'v1' } }])).status).toBe(201); // system stays optional
   });
 
   it('a stored pre-STU2.2 string fhirContext is normalised to {reference} on read', async () => {
@@ -950,5 +967,214 @@ describe('fhirContext objects (SMART STU2.2, #5454 A1)', () => {
     c.stores.grants.docs.set(doc.id, { ...doc, fhirContext: ['Encounter/enc-9'] } as never);
     const t = (await flow(c, 'launch patient/*.rs', { launch: l.json.data.launch })).token!;
     expect(t.json.fhirContext).toEqual([{ reference: 'Encounter/enc-9' }]); // breaks (['Encounter/enc-9']) without normalizeFhirContext
+  });
+});
+
+// ---- W1b-3a A3 + A4 (#5454): fhirUser mapping, launchUri, review notes from PR 1 ----
+
+const FU = (t: string, oid: string) => `/api/health/auth/tenants/${t}/fhir-users/${oid}`;
+
+describe('fhirUser mapping admin API (#5454 A3)', () => {
+  it('read routes need a reader, write routes need write, and no bearer is 401', async () => {
+    const c = await boot();
+    const body = { resource: 'Practitioner/p1' };
+    // No bearer: every verb is 401 (breaks if a route skips deps.authenticate).
+    expect((await c.call('PUT', FU('visn-01', USER), { json: body })).status).toBe(401);
+    expect((await c.call('GET', FU('visn-01', USER))).status).toBe(401);
+    expect((await c.call('DELETE', FU('visn-01', USER))).status).toBe(401);
+    expect((await c.call('GET', '/api/health/auth/tenants/visn-01/fhir-users')).status).toBe(401);
+    // Reader: write verbs 403 (breaks if PUT/DELETE ask for 'read'), read verbs allowed.
+    const reader = await readerToken();
+    expect((await c.call('PUT', FU('visn-01', USER), { token: reader, json: body })).status).toBe(403);
+    expect((await c.call('DELETE', FU('visn-01', USER), { token: reader })).status).toBe(403);
+    expect(c.stores.fhirUsers.docs.size).toBe(0); // the refused PUT wrote nothing
+    expect((await c.admin('PUT', FU('visn-01', USER), body)).status).toBe(200); // paired: admin writes
+    expect((await c.call('GET', FU('visn-01', USER), { token: reader })).status).toBe(200);
+    expect((await c.call('GET', '/api/health/auth/tenants/visn-01/fhir-users', { token: reader })).status).toBe(200);
+  });
+
+  it('PUT/GET/list/DELETE round-trip; the mapping is returned as an absolute URL on the tenant FHIR base', async () => {
+    const c = await boot();
+    const put = await c.admin('PUT', FU('visn-01', USER.toUpperCase()), { resource: 'Practitioner/p1' });
+    expect(put.status).toBe(200);
+    // oid normalised to lower case (breaks if an upper-case PUT makes a key sign-in never reads)
+    expect(put.json.data).toMatchObject({ tenant: 'visn-01', oid: USER, resource: 'Practitioner/p1', fhirUser: `${fhir('visn-01')}/Practitioner/p1` });
+    expect(put.json.data.updatedBy).toBeTruthy();
+    expect((await c.admin('PUT', FU('visn-01', USER), { resource: 'Patient/pat-9' })).json.data.resource).toBe('Patient/pat-9'); // replace
+    expect((await c.admin('GET', FU('visn-01', USER))).json.data.resource).toBe('Patient/pat-9');
+    await c.admin('PUT', FU('visn-01', OTHER_USER), { resource: 'RelatedPerson/r1' });
+    await c.tenants.create({ id: 'visn-03', displayName: 'V3', status: 'active', stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' });
+    await c.admin('PUT', FU('visn-03', USER), { resource: 'Person/x1' });
+    const list = (await c.admin('GET', '/api/health/auth/tenants/visn-01/fhir-users')).json.data.fhirUsers;
+    // breaks if the route lists another tenant (visn-03's Person/x1 appears) or drops a visn-01 row
+    expect(list.map((x: { oid: string; resource: string }) => `${x.oid}=${x.resource}`).sort()).toEqual([`${USER}=Patient/pat-9`, `${OTHER_USER}=RelatedPerson/r1`].sort());
+    expect(JSON.stringify(list)).not.toContain('_etag');
+    const del = await c.call('DELETE', FU('visn-01', USER), { token: await adminToken() });
+    expect(del.status).toBe(204);
+    expect((await c.admin('GET', FU('visn-01', USER))).status).toBe(404); // breaks if DELETE is a no-op
+    expect((await c.admin('GET', FU('visn-03', USER))).status).toBe(200); // paired: the other tenant's row survives
+    expect((await c.call('DELETE', FU('visn-01', USER), { token: await adminToken() })).status).toBe(204); // idempotent
+  });
+
+  it('refuses a non-SMART resource type, a bad id, a non-GUID oid and an unknown tenant', async () => {
+    const c = await boot();
+    const put = async (t: string, oid: string, resource: unknown) => (await c.admin('PUT', FU(t, oid), { resource })).status;
+    expect(await put('visn-01', USER, 'Organization/o1')).toBe(400); // breaks if any resource type is accepted
+    expect(await put('visn-01', USER, 'Practitioner/a b')).toBe(400); // id outside the FHIR id rule
+    expect(await put('visn-01', USER, 'Practitioner/p1/_history/2')).toBe(400);
+    expect(await put('visn-01', USER, 'https://evil.test/fhir/Practitioner/p1')).toBe(400); // only a relative reference
+    expect(await put('visn-01', 'not-a-guid', 'Practitioner/p1')).toBe(400);
+    expect(await put('no-such', USER, 'Practitioner/p1')).toBe(404);
+    expect((await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1', extra: 1 })).status).toBe(400); // strict body
+    expect(c.stores.fhirUsers.docs.size).toBe(0);
+    for (const r of ['Practitioner/p1', 'Patient/p1', 'RelatedPerson/p1', 'Person/p1']) expect(await put('visn-01', USER, r), r).toBe(200); // paired permits
+  });
+});
+
+describe('fhirUser claim from the mapping (#5454 A4)', () => {
+  async function setup() {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return c;
+  }
+  const SCOPE = 'openid fhirUser user/*.rs';
+
+  it('with a mapping: fhirUser is granted and the SAME absolute URL is in the id_token and the access token; without one: neither', async () => {
+    const c = await setup();
+    const without = (await flow(c, SCOPE)).token!;
+    expect(without.status).toBe(200);
+    expect(without.json.id_token).toBeTruthy(); // positive control for the absences below
+    expect(without.json.scope.split(' ')).not.toContain('fhirUser'); // breaks if fhirUser is granted with no mapping
+    expect(decodeJwt(without.json.id_token).fhirUser).toBeUndefined();
+
+    expect((await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' })).status).toBe(200);
+    const withMap = (await flow(c, SCOPE)).token!;
+    expect(withMap.status).toBe(200);
+    const url = `${fhir('visn-01')}/Practitioner/p1`;
+    expect(withMap.json.scope.split(' ')).toContain('fhirUser'); // breaks if resolveFhirUser is not wired
+    expect(decodeJwt(withMap.json.id_token).fhirUser).toBe(url); // breaks on a relative reference or another base
+    expect((await claims(c, withMap.json.access_token)).fhirUser).toBe(url); // the two claims agree
+  });
+
+  it('a mapping in one tenant gives nothing in another tenant (cross-tenant)', async () => {
+    const c = await setup();
+    await c.tenants.create({ id: 'visn-03', displayName: 'V3', status: 'active', stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' });
+    await c.registerApp('app-3', { tenant: 'visn-03' });
+    await c.bind({ [G_READER]: 'fhir-data-reader' }, false, 'visn-03');
+    await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' });
+    const run = async (client: string, tenant: string) => {
+      const { verifier, challenge } = pkce();
+      const { redirect } = await c.authorizeAndLogin({ client, tenant, scope: SCOPE, challenge });
+      return (await c.exchange({ client, tenant, redirect, verifier })).json;
+    };
+    const home = await run('app-1', 'visn-01');
+    expect(decodeJwt(home.id_token).fhirUser).toBe(`${fhir('visn-01')}/Practitioner/p1`); // paired permit, same user
+    const away = await run('app-3', 'visn-03');
+    expect(away.id_token).toBeTruthy();
+    // Breaks if the mapping is looked up by oid alone: visn-03 would get `${fhir('visn-03')}/Practitioner/p1`.
+    expect(decodeJwt(away.id_token).fhirUser).toBeUndefined();
+    expect(away.scope.split(' ')).not.toContain('fhirUser');
+  });
+
+  it('a store failure fails the sign-in closed (server_error, no code); a request without fhirUser never consults the store', async () => {
+    const logs: string[] = [];
+    const c = await boot({ log: (e) => logs.push(e) });
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' });
+    c.stores.fhirUsers.failWith = new Error('cosmos down');
+    const failed = await flow(c, SCOPE);
+    // Breaks (a code) if the error is swallowed into a session that silently lost fhirUser.
+    expect(failed.redirect.searchParams.get('error')).toBe('server_error');
+    expect(failed.redirect.searchParams.get('code')).toBeNull();
+    expect(failed.redirect.searchParams.get('state')).toBe('client-state'); // the app gets a proper OAuth error redirect, not a 500
+    expect(logs).toContain('auth.fhir_user_error');
+    const noAsk = (await flow(c, 'openid user/*.rs')).token!;
+    expect(noAsk.status).toBe(200); // breaks if the resolver runs (and throws) when fhirUser was not requested
+    expect(decodeJwt(noAsk.json.id_token).fhirUser).toBeUndefined();
+  });
+
+  it('a mapping is not disclosed when the app did not ask for fhirUser', async () => {
+    const c = await setup();
+    await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' });
+    const t = (await flow(c, 'openid user/*.rs')).token!;
+    expect(t.json.id_token).toBeTruthy(); // positive control
+    expect(decodeJwt(t.json.id_token).fhirUser).toBeUndefined(); // breaks if the resolver runs regardless of scope
+    expect((await claims(c, t.json.access_token)).fhirUser).toBeUndefined();
+  });
+});
+
+describe('client launchUri (#5454 A3)', () => {
+  const app = (over: Record<string, unknown> = {}) => ({
+    clientId: 'app-l', tenant: 'visn-01', clientType: 'app', displayName: 'l', allowedScopes: ['user/*.rs'], redirectUris: ['https://app.test/cb'], ...over,
+  });
+  const backendBody = (over: Record<string, unknown> = {}) => ({
+    clientId: 'svc-l', tenant: 'visn-01', clientType: 'backend', displayName: 'b', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwksUrl: 'https://x.test/jwks', ...over,
+  });
+
+  it('is validated like a redirectUri on create, refused for a backend client, and returned in the list', async () => {
+    const c = await boot();
+    const post = async (b: Record<string, unknown>) => (await c.admin('POST', '/api/health/auth/clients', b)).status;
+    expect(await post(app({ launchUri: 'http://app.test/launch' }))).toBe(400); // breaks if plain http off loopback is accepted
+    expect(await post(app({ launchUri: 'https://app.test/launch#x' }))).toBe(400); // fragment
+    expect(await post(app({ launchUri: 'https://u:p@app.test/launch' }))).toBe(400); // credentials
+    expect(await post(backendBody({ launchUri: 'https://app.test/launch' }))).toBe(400); // breaks if a backend client may carry one
+    expect(await post(backendBody())).toBe(201); // paired: the same backend without it
+    expect(await post(app({ launchUri: 'https://app.test/launch' }))).toBe(201);
+    expect(await post(app({ clientId: 'app-lo', launchUri: 'http://localhost:9000/launch' }))).toBe(201); // loopback http allowed
+    expect(await post(app({ clientId: 'app-none' }))).toBe(201); // optional
+    const l = (await c.admin('GET', '/api/health/auth/clients')).json.data.clients as Array<{ clientId: string; launchUri?: string }>;
+    const by = Object.fromEntries(l.map((x) => [x.clientId, x.launchUri]));
+    expect(by).toEqual({ 'app-l': 'https://app.test/launch', 'app-lo': 'http://localhost:9000/launch', 'app-none': undefined, 'svc-l': undefined });
+  });
+
+  it('PATCH sets and clears it, keeps status behaviour, and refuses a bad URI, a backend client and an empty body', async () => {
+    const c = await boot();
+    expect((await c.admin('POST', '/api/health/auth/clients', app())).status).toBe(201);
+    expect((await c.admin('POST', '/api/health/auth/clients', backendBody())).status).toBe(201);
+    const patch = (id: string, b: unknown) => c.admin('PATCH', `/api/health/auth/clients/${id}`, b);
+    const set = await patch('app-l', { launchUri: 'https://app.test/launch' });
+    expect(set.status).toBe(200);
+    expect(set.json.data.launchUri).toBe('https://app.test/launch');
+    expect(set.json.data.status).toBe('active'); // a launchUri-only PATCH leaves status alone
+    const both = await patch('app-l', { status: 'disabled', launchUri: 'https://app.test/launch2' });
+    expect([both.json.data.status, both.json.data.launchUri]).toEqual(['disabled', 'https://app.test/launch2']);
+    const st = await patch('app-l', { status: 'active' });
+    expect(st.json.data.launchUri).toBe('https://app.test/launch2'); // a status-only PATCH keeps the launchUri
+    const cleared = await patch('app-l', { launchUri: null });
+    expect(cleared.status).toBe(200);
+    expect('launchUri' in cleared.json.data).toBe(false); // breaks if null is ignored or stored
+    expect(cleared.json.data.clientId).toBe('app-l'); // positive control for the absence
+    expect((await patch('app-l', { launchUri: 'http://app.test/x' })).status).toBe(400);
+    expect((await patch('app-l', { launchUri: 'https://app.test/x#f' })).status).toBe(400);
+    expect((await patch('svc-l', { launchUri: 'https://app.test/launch' })).status).toBe(400); // backend refused
+    expect((await patch('svc-l', { status: 'disabled' })).status).toBe(200); // paired: status still works on it
+    expect((await patch('app-l', {})).status).toBe(400); // at least one member
+    const bad = await patch('app-l', { status: 'gone' });
+    expect([bad.status, bad.json.error.message]).toEqual([400, 'status: must be active or disabled']); // unchanged message
+    expect((await patch('no-such', { status: 'active' })).status).toBe(404);
+    expect((await c.call('PATCH', '/api/health/auth/clients/app-l', { token: await readerToken(), json: { launchUri: null } })).status).toBe(403);
+  });
+});
+
+describe('token CORS before the client is resolved (#5454 review)', () => {
+  it('no client_assertion: an invalid_client for an unknown client carries ACAO *; with an assertion it does not', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    const form = { grant_type: 'authorization_code', code: 'x', redirect_uri: 'https://app.test/cb', code_verifier: 'v'.repeat(43) };
+    const unknown = await c.call('POST', '/auth/visn-01/token', { form: { ...form, client_id: 'nobody' } });
+    expect([unknown.status, unknown.json.error]).toEqual([401, 'invalid_client']);
+    // Breaks (null) if the header is still set only after the client resolves: a browser app could not read this error.
+    expect(unknown.headers.get('access-control-allow-origin')).toBe('*');
+    // A public client sending client_id plus a non-JWT client_assertion is refused, and the request named an
+    // assertion, so it is treated as a confidential caller: no CORS.
+    const withAssertion = await c.call('POST', '/auth/visn-01/token', {
+      form: { ...form, client_id: 'app-1', client_assertion_type: ASSERTION_TYPE, client_assertion: 'not-a-jwt' },
+    });
+    expect([withAssertion.status, withAssertion.json.error]).toEqual([401, 'invalid_client']);
+    expect(withAssertion.headers.get('access-control-allow-origin')).toBeNull(); // breaks ('*') if CORS is applied to every request
   });
 });
