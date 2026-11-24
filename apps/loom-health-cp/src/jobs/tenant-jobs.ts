@@ -27,7 +27,19 @@ import {
   type TenantArm,
   type TenantManifest,
 } from './tenant-arm.js';
+import { publicErrorMessage } from '../safe-error.js';
 import { JobFailure, type JobContext, type JobHandler } from './types.js';
+
+/**
+ * The FHIR engine half of a tenant (#5442, auto-bind-by-default). Supplied by compose.ts ONLY when the fhir-tenant.*
+ * kinds are registered (FhirEngineHost + pdpUrl); without it tenant.create/destroy still succeed and say so in a receipt.
+ */
+export interface FhirChain {
+  /** Submit fhir-tenant.create through the JobRunner (its job id is derived from kind+subject+key, so a repeat is the same job). */
+  submitCreate(tenantId: string, idempotencyKey: string): Promise<{ jobId: string; created: boolean }>;
+  /** The body of fhir-tenant.teardown, run inside the destroy job so the engine is gone before the database and identity are. */
+  teardown(ctx: JobContext): Promise<void>;
+}
 
 export interface TenantJobDeps {
   stamps: Collection<StampDoc>;
@@ -39,6 +51,8 @@ export interface TenantJobDeps {
   /** Shred read-back: reads per key, and the wait between rounds (#5392). Defaults SHRED_READS / SHRED_POLL_MS. */
   shredReads?: number;
   shredPollMs?: number;
+  /** Chain the FHIR engine to create/destroy. Absent = engine kinds are not registered on this control plane. */
+  fhir?: FhirChain;
 }
 
 /**
@@ -55,6 +69,18 @@ export interface TenantJobDeps {
  * is about 313 s (25 s of sleep plus the 403 retries). That fits inside 600 s.
  */
 export const SHRED_READS = 6;
+
+/**
+ * JobFailure codes that mean the engine host or its stamp could not be REACHED or LOCATED (stamp or manifest absent; ARM or
+ * runCommand did not answer or refused to run). Only these may be skipped by allowMissingEngine. The distinction is by code, and it is
+ * not perfectly clean: a stopped AKS cluster surfaces as `arm_error` (ARM rejects runCommand), which is also what ARM answers for other
+ * rejections, so `arm_error` and `transient` cannot be proven to be "unreachable". Codes that say a reachable host did the work and it
+ * did not finish (engine_remove_failed, teardown_incomplete) and `permission` are NOT here: they fail even with the flag.
+ */
+const ENGINE_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
+  'stamp_missing', 'stamp_manifest_missing', 'stamp_manifest_unreadable', 'stamp_manifest_incomplete',
+  'transient', 'arm_error', 'run_command_no_result', 'run_command_timeout', 'run_command_unreadable',
+]);
 export const SHRED_POLL_MS = 5000;
 
 export function tenantHandlers(deps: TenantJobDeps): JobHandler[] {
@@ -221,8 +247,27 @@ export function tenantCreateHandler(deps: TenantJobDeps): JobHandler {
         await deps.registry.updateTenant(r.tenant.id, { status: 'active' }, 'job:tenant.create');
         await ctx.receipt('tenant.active', `tenant=${r.tenant.id}`);
       }
+      if (r.tenant.status === 'creating' || r.tenant.status === 'active') await chainEngine(ctx, deps, r.tenant.id);
     },
   };
+}
+
+/**
+ * After the tenant is active (readback passed): bind its FHIR engine. The key is derived from THIS job's key, so the
+ * first create (`create-<incarnation>`) and each daily verify (`verify-<day>`) get their own engine job, and a repeat of
+ * either dedups in the runner. Never fails the tenant: the stamp resources are already read back and true.
+ */
+async function chainEngine(ctx: JobContext, deps: TenantJobDeps, tenantId: string): Promise<void> {
+  if (!deps.fhir) {
+    await ctx.receipt('engine.not_chained', 'fhir-tenant.create was NOT submitted: this control plane has no FHIR engine host and PDP url configured, so the fhir-tenant kinds are not registered');
+    return;
+  }
+  try {
+    const { jobId, created } = await deps.fhir.submitCreate(tenantId, `engine-${ctx.job.idempotencyKey}`.slice(0, 80));
+    await ctx.receipt('engine.chained', `fhir-tenant.create job=${jobId} created=${created}`);
+  } catch (e) {
+    await ctx.receipt('engine.chain_failed', publicErrorMessage(e, 'fhir-tenant.create could not be submitted; the next ensure re-submits it'));
+  }
 }
 
 export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
@@ -231,7 +276,7 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
     subjectType: 'tenant',
     // The caller must restate the tenant id: a destroy is not something a stray retry or a
     // wrong-subject submit may trigger.
-    inputSchema: z.strictObject({ confirmTenantId: z.string().min(1).max(60), allowMissingStorage: z.boolean().optional() }),
+    inputSchema: z.strictObject({ confirmTenantId: z.string().min(1).max(60), allowMissingStorage: z.boolean().optional(), allowMissingEngine: z.boolean().optional() }),
     async run(ctx) {
       if (ctx.input.confirmTenantId !== ctx.job.subjectId) {
         throw new JobFailure('confirmation_mismatch', 'confirmTenantId does not equal the tenant id; nothing was changed');
@@ -259,6 +304,21 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
       }
       if (settle.state === 'terminal') {
         await ctx.receipt('deployment.settled', `deployment=lhds-tenant-${r.tenant.id} provisioningState=${settle.provisioningState} reads=${settle.polls}`);
+      }
+
+      // The engine goes BEFORE the database, identity and keys it uses. Fails closed: a leaked engine is the defect.
+      if (deps.fhir) {
+        try {
+          await deps.fhir.teardown(ctx);
+        } catch (e) {
+          if (!(e instanceof JobFailure) || !ENGINE_UNREACHABLE_CODES.has(e.code)) throw e;
+          if (ctx.input.allowMissingEngine !== true) {
+            throw new JobFailure(e.code, `${e.message} Nothing was deleted and no key was shredded. If the stamp's engine host is unreachable (for example the stamp is paused) and you accept that any engine there is left in place, resubmit with allowMissingEngine=true.`);
+          }
+          await ctx.receipt('engine.teardown_skipped', `allowMissingEngine=true; teardown failed with ${e.code} (host or stamp unreachable); the engine, if any, may be left in place: ${e.message}`);
+        }
+      } else {
+        await ctx.receipt('engine.teardown_skipped', 'no FHIR engine host is configured on this control plane, so no engine was removed or looked for');
       }
 
       let lookup;

@@ -5,7 +5,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createAuthServer, type AuthServerInit } from './auth/server.js';
 import { tenantHandlers } from './jobs/tenant-jobs.js';
-import { fhirTenantHandlers, type FhirEngineHost } from './jobs/fhir-tenant-jobs.js';
+import { fhirTenantHandlers, fhirTenantTeardownHandler, type FhirEngineHost } from './jobs/fhir-tenant-jobs.js';
 import type { TenantArm } from './jobs/tenant-arm.js';
 import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
@@ -63,14 +63,24 @@ export function compose(input: ComposeInput) {
   }
   const scheduleRestarts = () => scheduleStampRestarts({ stamps: stores.stamps, jobs, now });
   const authenticate = createAuthenticator(input.auth);
-  // W1-2: registered only when an ARM adapter is supplied (main.ts always passes one, #5162); without one the tenant.* kinds answer "unknown job kind".
-  if (input.tenantArm) {
-    for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm })) jobs.register(h);
-  }
   // W2-2b B2c: fail CLOSED. No host, no ARM adapter, or no PDP url = no engine kinds at all.
-  if (input.tenantArm && input.fhirEngine && input.fhirEngine.pdpUrl.trim() !== '') {
-    for (const h of fhirTenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, arm: input.tenantArm, engine: input.fhirEngine.host, pdpUrl: input.fhirEngine.pdpUrl })) jobs.register(h);
+  const fhirDeps =
+    input.tenantArm && input.fhirEngine && input.fhirEngine.pdpUrl.trim() !== ''
+      ? { stamps: stores.stamps, tenants: stores.tenants, arm: input.tenantArm, engine: input.fhirEngine.host, pdpUrl: input.fhirEngine.pdpUrl }
+      : undefined;
+  // W1-2: registered only when an ARM adapter is supplied (main.ts always passes one, #5162); without one the tenant.* kinds answer "unknown job kind".
+  // #5442: with the engine configured, tenant.create chains fhir-tenant.create and tenant.destroy runs the teardown first.
+  if (input.tenantArm) {
+    const fhir = fhirDeps && {
+      submitCreate: async (tenantId: string, idempotencyKey: string) => {
+        const { job, created } = await jobs.submit({ kind: 'fhir-tenant.create', subjectType: 'tenant', subjectId: tenantId, idempotencyKey, requestedBy: 'job:tenant.create' });
+        return { jobId: job.id, created };
+      },
+      teardown: fhirTenantTeardownHandler(fhirDeps).run,
+    };
+    for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm, fhir })) jobs.register(h);
   }
+  if (fhirDeps) for (const h of fhirTenantHandlers(fhirDeps)) jobs.register(h);
   const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, bundleKey: input.bundleKey, log });
   // W1-4: the Authorization Server answers its own paths and hands everything else to the control-plane app.
   const authServer = input.authServer

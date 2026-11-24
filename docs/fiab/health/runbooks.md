@@ -37,6 +37,14 @@
 
 - Create: `POST /api/health/tenants` registers the tenant; job `tenant.create`
   (empty input) deploys `tenant.bicep` and reads back resource ids.
+- FHIR engine (#5442, auto-bind): once the tenant is `active`, `tenant.create` submits
+  `fhir-tenant.create` under the key `engine-<its own key>` (receipt `engine.chained`; the JobRunner
+  dedups a repeat, and each daily `verify-<day>` re-submits so an engine deleted out of band is rebuilt).
+  When the control plane has no engine host and PDP url the fhir-tenant kinds are not registered:
+  the tenant still goes `active` and the receipt `engine.not_chained` says why. A failed submit is
+  `engine.chain_failed` and never fails the tenant. The Console ensure re-submits the same job when
+  the item's binding has no `engine: ready` (older tenants, a failed engine job, a host configured
+  later) and the editor follows the engine job's receipts while it rolls out.
 - Destroy: job `tenant.destroy` requires `confirmTenantId` equal to the job
   subject. Deleting the health-tenant item in the console submits it.
   - If the tenant deployment `lhds-tenant-<slug>` is still `Running` or
@@ -107,9 +115,10 @@ Commercial dev01 only (no Gov in-VNet runner: a disclosed gap). Dispatch
    retries only a 403/503 for up to `retry_window_s`: the response cannot tell a PDP that has
    not loaded the new bundle from a real deny; the reason is in the engine audit log.
 4. `cleanup` (always) disables the minted clients, runs `tenant.destroy` for the tenants
-   `create` recorded as owned, then `fhir-tenant.teardown`. `tenant.destroy` does NOT remove
-   the engine, its PG principal or its cluster objects; teardown does, and only works once
-   the tenant is `destroying`, hence this order. Read the `role.skipped` receipt if shown.
+   `create` recorded as owned, then `fhir-tenant.teardown`. Since #5442 `tenant.destroy` itself
+   runs the engine teardown first (receipt `engine.removed`, or `engine.teardown_skipped` when no
+   engine host is configured), so the probe's explicit teardown is a no-op re-run; it works because
+   the tenant stays `destroying`. Read the `role.skipped` receipt if shown.
 
 Exit codes: 0 pass, 1 defect, 2 UNMEASURED (az or the pod gave no answer; nothing here is a
 claim the engine is broken).

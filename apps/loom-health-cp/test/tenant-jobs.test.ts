@@ -12,11 +12,13 @@ import {
   type TenantArm,
   type TenantManifest,
 } from '../src/jobs/tenant-arm.js';
-import { tenantHandlers } from '../src/jobs/tenant-jobs.js';
-import type { JobDoc } from '../src/jobs/types.js';
+import { tenantHandlers, type FhirChain } from '../src/jobs/tenant-jobs.js';
+import type { FhirEngineHost } from '../src/jobs/fhir-tenant-jobs.js';
+import { compose } from '../src/compose.js';
+import { JobFailure, type JobDoc } from '../src/jobs/types.js';
 import { Registry } from '../src/registry/registry.js';
 import type { StampDoc, TenantDoc } from '../src/registry/types.js';
-import { MemoryCollection } from './helpers.js';
+import { ADMIN_APP, AUDIENCE, AUTHORITY, MemoryCollection, memoryStores, TENANT, testKeyResolver } from './helpers.js';
 
 const SUB = '00000000-0000-0000-0000-000000000001';
 const STAMP = 'dev01';
@@ -169,7 +171,7 @@ class FakeArm implements TenantArm {
   }
 }
 
-function setup(stampStatus: StampDoc['status'] = 'healthy', tenantStatus: TenantDoc['status'] = 'creating') {
+function setup(stampStatus: StampDoc['status'] = 'healthy', tenantStatus: TenantDoc['status'] = 'creating', fhir?: FhirChain) {
   const stamps = new MemoryCollection<StampDoc>();
   const tenants = new MemoryCollection<TenantDoc>();
   const jobsStore = new MemoryCollection<JobDoc>();
@@ -190,7 +192,7 @@ function setup(stampStatus: StampDoc['status'] = 'healthy', tenantStatus: Tenant
   const sleep = async (ms: number) => {
     sleeps.push(ms);
   };
-  for (const h of tenantHandlers({ stamps, tenants, registry, arm, sleep, shredReads: 6, shredPollMs: 5000 })) runner.register(h);
+  for (const h of tenantHandlers({ stamps, tenants, registry, arm, sleep, shredReads: 6, shredPollMs: 5000, fhir })) runner.register(h);
   const run = async (kind: 'tenant.create' | 'tenant.destroy', key: string, input: Record<string, unknown> = {}) => {
     const { job } = await runner.submit({ kind, subjectType: 'tenant', subjectId: SLUG, idempotencyKey: key, input, requestedBy: 't' });
     await runner.idle();
@@ -594,5 +596,214 @@ describe('tenant.destroy', () => {
       expect(sleeps).toEqual([]);
       for (const k of tenantNames(STAMP, SLUG).keyNames) expect(arm.readKeyCalls.get(k)).toBe(1);
     });
+  });
+});
+
+// #5442: nothing submitted fhir-tenant.create, so a new tenant had no engine; and nothing tore the engine down.
+describe('FHIR engine chaining (#5442)', () => {
+  /** A chain whose submit goes through a REAL JobRunner, so dedup is the runner's, not a fake's. */
+  function chainWithRunner(events: string[]) {
+    const runner = new JobRunner(new MemoryCollection<JobDoc>(), async () => true, () => {});
+    let runs = 0;
+    runner.register({ kind: 'fhir-tenant.create', subjectType: 'tenant', run: async () => { runs++; } });
+    const chain: FhirChain = {
+      submitCreate: async (tenantId, key) => {
+        events.push(`submit:${key}`);
+        const { job, created } = await runner.submit({ kind: 'fhir-tenant.create', subjectType: 'tenant', subjectId: tenantId, idempotencyKey: key, requestedBy: 't' });
+        return { jobId: job.id, created };
+      },
+      teardown: async (ctx) => { events.push('teardown'); await ctx.receipt('engine.removed', 'configPresent=false'); },
+    };
+    return { chain, runner, runs: () => runs };
+  }
+
+  it('a successful tenant.create submits fhir-tenant.create once, keyed from its own key, AFTER the tenant is active', async () => {
+    const events: string[] = [];
+    const { chain, runner, runs } = chainWithRunner(events);
+    const { run, tenants } = setup('healthy', 'creating', chain);
+    const job = await run('tenant.create', 'create-2026');
+    await runner.idle();
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    // Breaks if the chain is dropped: events is [] and runs() is 0.
+    expect(events).toEqual(['submit:engine-create-2026']);
+    expect(runs()).toBe(1);
+    const steps = job.receipts.map((r) => r.step);
+    expect(steps.indexOf('engine.chained'), 'chain receipt after tenant.active').toBeGreaterThan(steps.indexOf('tenant.active'));
+    expect(job.receipts.find((r) => r.step === 'engine.chained')?.detail).toMatch(/^fhir-tenant\.create job=job-[0-9a-f]{32} created=true$/);
+    expect(tenants.docs.get(SLUG)?.status).toBe('active');
+  });
+
+  it('the SAME engine key dedups in the runner (engine job ran once); a new verify key is a new engine job', async () => {
+    const events: string[] = [];
+    const { chain, runner, runs } = chainWithRunner(events);
+    const { run } = setup('healthy', 'creating', chain);
+    await run('tenant.create', 'verify-20261123');
+    await run('tenant.create', 'verify-20261123'); // same tenant.create job id: returned, not re-run
+    await runner.idle();
+    expect(runs()).toBe(1); // 2 would mean the key is not idempotent
+    await run('tenant.create', 'verify-20261124');
+    await runner.idle();
+    expect(runs()).toBe(2); // 1 would mean the daily verify never re-submits (no self-heal of a missing engine)
+    expect(events).toEqual(['submit:engine-verify-20261123', 'submit:engine-verify-20261124']);
+  });
+
+  it('dedup is the runner\'s: submitting the same engine key twice gives created=false the second time', async () => {
+    const { chain } = chainWithRunner([]);
+    const a = await chain.submitCreate(SLUG, 'engine-k');
+    const b = await chain.submitCreate(SLUG, 'engine-k');
+    expect([a.created, b.created, a.jobId === b.jobId]).toEqual([true, false, true]);
+  });
+
+  it('with no engine configured the tenant still goes active and the receipt says the engine was NOT chained, and why', async () => {
+    const { run, tenants } = setup();
+    const job = await run('tenant.create', 'k1');
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(tenants.docs.get(SLUG)?.status).toBe('active');
+    const r = job.receipts.find((x) => x.step === 'engine.not_chained');
+    expect(r?.detail).toContain('was NOT submitted');
+    expect(r?.detail).toContain('host and PDP url');
+    expect(job.receipts.some((x) => x.step === 'engine.chained')).toBe(false); // never pretends
+  });
+
+  it('a chain submit that throws does not fail the tenant, and the receipt carries a ref, not the raw error', async () => {
+    const chain: FhirChain = { submitCreate: async () => { throw new Error('secret-internal-detail'); }, teardown: async () => {} };
+    const { run, tenants } = setup('healthy', 'creating', chain);
+    const job = await run('tenant.create', 'k1');
+    expect(job.state).toBe('succeeded');
+    expect(tenants.docs.get(SLUG)?.status).toBe('active');
+    const r = job.receipts.find((x) => x.step === 'engine.chain_failed');
+    expect(r?.detail).toMatch(/could not be submitted.*\(ref: [0-9a-f]{8}\)$/);
+    expect(r?.detail).not.toContain('secret-internal-detail');
+  });
+
+  it('a readback failure never chains an engine (the tenant is not active)', async () => {
+    const events: string[] = [];
+    const { chain } = chainWithRunner(events);
+    const { arm, run } = setup('healthy', 'creating', chain);
+    arm.renameOnDeploy = { suffix: `/eventhubs/eh-t-${SLUG}`, to: 'eh-t-other' };
+    const job = await run('tenant.create', 'k1');
+    expect(job.state).toBe('failed');
+    expect(events).toEqual([]);
+  });
+
+  it('tenant.destroy tears the engine down BEFORE the first delete', async () => {
+    const events: string[] = [];
+    const { chain } = chainWithRunner(events);
+    const s = setup('healthy', 'creating', chain);
+    expect((await s.run('tenant.create', 'k1')).state).toBe('succeeded');
+    events.length = 0;
+    const del = s.arm.deleteResource.bind(s.arm);
+    s.arm.deleteResource = async (rid: string) => { events.push('delete'); return del(rid); };
+    const job = await s.run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(events[0], 'teardown precedes the first delete').toBe('teardown');
+    expect(events.filter((e) => e === 'teardown')).toHaveLength(1);
+    expect(job.receipts.some((r) => r.step === 'engine.removed')).toBe(true);
+  });
+
+  it('a failed teardown fails destroy typed and deletes and shreds NOTHING', async () => {
+    const chain: FhirChain = {
+      submitCreate: async () => ({ jobId: 'j', created: true }),
+      teardown: async () => { throw new JobFailure('teardown_incomplete', 'engine still present'); },
+    };
+    const s = setup('healthy', 'creating', chain);
+    await s.run('tenant.create', 'k1');
+    const job = await s.run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.error?.code).toBe('teardown_incomplete');
+    expect(s.arm.deleteCalls).toEqual([]); // 8 deletes would mean the database/identity went while the engine lived
+    expect(s.arm.keyOps).toEqual([]);
+  });
+
+  it('tenant.destroy with no engine configured says so in a receipt and still destroys', async () => {
+    const s = setup();
+    await s.run('tenant.create', 'k1');
+    const job = await s.run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(job.receipts.find((r) => r.step === 'engine.teardown_skipped')?.detail).toContain('no FHIR engine host');
+  });
+
+  describe('compose wiring', () => {
+    const ts = '2026-11-23T00:00:00.000Z';
+    function build(fhirEngine: { host: FhirEngineHost; pdpUrl: string } | undefined) {
+      const stores = memoryStores();
+      (stores.stamps as unknown as MemoryCollection<StampDoc>).docs.set(STAMP, { id: STAMP, displayName: 'Dev', cloud: 'commercial', region: 'eastus2', class: 'S', status: 'healthy', baseUrl: 'https://x.example', engineVersions: {}, createdAt: ts, updatedAt: ts, updatedBy: 't', _etag: 'e0' });
+      (stores.tenants as unknown as MemoryCollection<TenantDoc>).docs.set(SLUG, { id: SLUG, displayName: 'Acme', stampId: STAMP, status: 'creating', quotas: { maxRequestsPerMinute: 10, maxStorageGiB: 100 }, createdAt: ts, updatedAt: ts, updatedBy: 't', _etag: 'e0' });
+      return compose({
+        stores,
+        auth: { authorityHost: AUTHORITY, entraTenantId: TENANT, audiences: [AUDIENCE], allowedCallerAppIds: [ADMIN_APP], keyResolver: testKeyResolver },
+        sloAvailabilityTarget: 0.999,
+        log: () => {},
+        tenantArm: new FakeArm(),
+        fhirEngine,
+      });
+    }
+    // The engine host is a stub: fhir-tenant.create itself is covered in fhir-tenant.test.ts; here only the WIRING is measured.
+    const stubHost = () => ({ removeEngine: async () => {}, readEngineConfig: async () => undefined, readDatabaseRole: async () => ({ exists: false, connectableDatabases: [] }), removeDatabaseRole: async () => {} }) as unknown as FhirEngineHost;
+
+    it('host + pdpUrl configured: tenant.create leaves a REAL fhir-tenant.create job on the tenant', async () => {
+      const app = build({ host: stubHost(), pdpUrl: 'http://pdp.local' });
+      await app.jobs.submit({ kind: 'tenant.create', subjectType: 'tenant', subjectId: SLUG, idempotencyKey: 'create-1', requestedBy: 't' });
+      await app.jobs.idle();
+      const fhirJobs = (await app.jobs.list()).filter((j) => j.kind === 'fhir-tenant.create');
+      expect(fhirJobs.map((j) => [j.subjectId, j.idempotencyKey])).toEqual([[SLUG, 'engine-create-1']]);
+    });
+
+    it('pdpUrl blank: the engine kinds are not registered, tenant.create still succeeds and says not chained', async () => {
+      const app = build({ host: stubHost(), pdpUrl: '  ' });
+      const { job } = await app.jobs.submit({ kind: 'tenant.create', subjectType: 'tenant', subjectId: SLUG, idempotencyKey: 'create-1', requestedBy: 't' });
+      await app.jobs.idle();
+      const done = await app.jobs.get(job.id);
+      expect(done.state, JSON.stringify(done.error)).toBe('succeeded');
+      expect(done.receipts.some((r) => r.step === 'engine.not_chained')).toBe(true);
+      expect(app.jobs.kinds().filter((k) => k.startsWith('fhir-tenant.'))).toEqual([]);
+    });
+  });
+});
+
+describe('tenant.destroy allowMissingEngine (#5442 review)', () => {
+  const failing = (code: string): FhirChain => ({
+    submitCreate: async () => ({ jobId: 'j', created: true }),
+    teardown: async () => { throw new JobFailure(code, `host said ${code}`); },
+  });
+  async function destroyWith(code: string, input: Record<string, unknown>) {
+    const s = setup('healthy', 'creating', failing(code));
+    await s.run('tenant.create', 'k1');
+    const job = await s.run('tenant.destroy', `d-${JSON.stringify(input).length}`, { confirmTenantId: SLUG, ...input });
+    return { s, job };
+  }
+
+  it('default: an unreachable engine host fails closed, deletes and shreds nothing, and names allowMissingEngine as the escape hatch', async () => {
+    const { s, job } = await destroyWith('stamp_manifest_missing', {});
+    expect(job.state).toBe('failed');
+    expect(job.error?.code).toBe('stamp_manifest_missing');
+    expect(job.error?.message).toContain('allowMissingEngine=true');
+    expect(s.arm.deleteCalls).toEqual([]); // 8 would mean the flag-less path proceeded
+    expect(s.arm.keyOps).toEqual([]);
+  });
+
+  it('allowMissingEngine=true + an unreachable host: destroy proceeds, the receipt names the cause and that the engine may be left in place', async () => {
+    const { s, job } = await destroyWith('arm_error', { allowMissingEngine: true });
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    const r = job.receipts.find((x) => x.step === 'engine.teardown_skipped');
+    expect(r?.detail).toContain('arm_error');
+    expect(r?.detail).toContain('may be left in place');
+    expect(s.arm.deleteCalls).toHaveLength(8); // the tenant really was torn down
+    expect(s.arm.keyOps.filter((o) => o.startsWith('delete:'))).toHaveLength(4);
+  });
+
+  it('allowMissingEngine=true does NOT skip a REAL teardown error on a reachable host (engine_remove_failed / teardown_incomplete / permission)', async () => {
+    for (const code of ['engine_remove_failed', 'teardown_incomplete', 'permission']) {
+      const { s, job } = await destroyWith(code, { allowMissingEngine: true });
+      expect(job.state, code).toBe('failed');
+      expect(job.error?.code, code).toBe(code);
+      expect(job.error?.message, code).not.toContain('allowMissingEngine'); // no misleading escape hatch
+      expect(s.arm.deleteCalls, code).toEqual([]);
+    }
+  });
+
+  it('the flag is a typed boolean: a string "true" is refused at submit', async () => {
+    const s = setup('healthy', 'creating', failing('arm_error'));
+    await s.run('tenant.create', 'k1');
+    await expect(s.run('tenant.destroy', 'd-str', { confirmTenantId: SLUG, allowMissingEngine: 'true' })).rejects.toThrow(/input/);
   });
 });
