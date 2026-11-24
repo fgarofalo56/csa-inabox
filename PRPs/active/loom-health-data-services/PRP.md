@@ -13,7 +13,14 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-24): ACTIVE.** **Update 2026-11-24: three non-bicep lanes are DEPLOYED and VERIFIED on Commercial dev01.**
+**Status (2026-11-24): ACTIVE.** **Update 2026-11-24 evening: W1b-3a (#5454), the SMART AS features Inferno needs, is built as 4 PRs, all merged.**
+- PR1-3 (#5461, #5462, #5464) are DEPLOYED and VERIFIED on Commercial dev01. Receipt: admin-contract probe 45484434459, 23/23.
+- PR4 (#5469, the console Apps tab) is merged and its CP part is rolled. Its console roll and G1 walk are pending.
+- The gap map against the Inferno kit (W01b, W1b-3a spec) found 9 gaps, not 4.
+- W1b-3 (the Inferno run) is still BLOCKED, on three things: the FHIR edge (behind apim-WA), the RS256 key (on hold by the operator), and an interactive sign-in receipt.
+- Inferno will run on Proxmox and/or as a CI headless lane (operator).
+
+**Earlier 2026-11-24: three non-bicep lanes are DEPLOYED and VERIFIED on Commercial dev01.**
 - #5453 + #5457 (#5442): a new health tenant now auto-binds its FHIR engine (tenant.create chains fhir-tenant.create), and destroy tears the engine down. Engine-affecting jobs are serialized per tenant.
 - #5452 (#5441): a NetworkPolicy beside each engine.
 - #5451 (#5396): the whole CP vitest suite runs in CI.
