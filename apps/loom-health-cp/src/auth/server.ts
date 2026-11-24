@@ -9,6 +9,8 @@
 //   GET  {issuerPath}/{tenant}/.well-known/openid-configuration  (per-tenant OIDC issuer for id_tokens, #5454)
 //   GET  /{tenant}/fhir/.well-known/smart-configuration  (the FHIR base path the edge forwards unchanged, #5454)
 //   GET  {issuerPath}/{tenant}/authorize
+//   GET  {issuerPath}/{tenant}/pick                      (standalone patient picker page, #5454 A5)
+//   POST {issuerPath}/{tenant}/pick                      (the picker's choice or cancel)
 //   POST {issuerPath}/{tenant}/token
 //   OPTIONS on the discovery, jwks and token paths answers the CORS preflight.
 //   admin (control-plane bearer auth): /api/health/auth/{clients,clients/{id},tenants/{t}/bindings,
@@ -24,12 +26,14 @@ import { SLUG, type TenantDoc } from '../registry/types.js';
 import { authoredMessage, classifyError } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backend-auth.js';
-import { FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
+import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
-import { ROLE_IDS, SCOPE_MAP_VERSION } from './role-map.js';
-import { parseDataScope, parseRequest, intersectWithCeilings, type DataScope } from './scopes.js';
+import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
+import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
+import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
+import { parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
 import type { Signer } from './signer.js';
 import { ACCESS_TOKEN_TTL_S, mintAccessToken, mintIdToken } from './tokens.js';
 import {
@@ -65,6 +69,12 @@ export interface AuthServerDeps {
   resolveFhirUser?: (oid: string, tenant: string) => Promise<string | undefined>;
   /** Admin-consent URL for the Graph permission gate. */
   graphConsentUrl?: string;
+  /**
+   * Patient search for the standalone picker (#5454 A5). Absent => FHIR REST at fhirBaseFor(tenant) with a 60 s
+   * token the AS mints for the signed-in user, over `fetchFhir` (default: the global fetch).
+   */
+  patientSearch?: PatientSearch;
+  fetchFhir?: typeof fetch;
   log: (event: string, fields: Record<string, string | number>) => void;
   now?: () => Date;
 }
@@ -76,11 +86,17 @@ const AUTHREQ_TTL_S = 600;
 const CODE_TTL_S = 60;
 const REFRESH_TTL_S = 30 * 24 * 3600;
 const LAUNCH_TTL_S = 300;
+/** A pending patient pick: the user has signed in and must choose a patient before any code exists (#5454 A5). */
+const PICK_TTL_S = 600;
+/** The picker's search token: bound to the user, short-lived, never handed to the app. */
+const PICKER_TOKEN_TTL_S = 60;
+/** `client_id` of the picker's search token: the AS acting for the user, not the app being authorized. */
+export const PICKER_CLIENT_ID = 'lhds-patient-picker';
+const PICKER_SCOPE = parseDataScope('user/Patient.rs', { v1: false }) as DataScope;
 const MAX_BODY = 64 * 1024;
 
 const rand = (n = 32): string => randomBytes(n).toString('base64url');
 const PKCE_CHALLENGE = /^[A-Za-z0-9_-]{43,128}$/;
-const FHIR_ID = /^[A-Za-z0-9.-]{1,64}$/;
 
 function s256(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url');
@@ -109,6 +125,12 @@ function redirect(res: ServerResponse, location: string, extra: Record<string, s
 }
 /** The browser-binding cookie is named per authorization request so concurrent sign-ins do not clobber each other. */
 const bindCookieName = (reqId: string): string => `lhds_ar_${reqId}`;
+/** The patient picker's own browser-binding cookie, one per pick, scoped to the pick path (#5454 A5). */
+const pickCookieName = (pickId: string): string => `lhds_pk_${pickId}`;
+function sendHtml(res: ServerResponse, status: number, html: string, extra: Record<string, string> = {}): void {
+  res.writeHead(status, { ...PICKER_HEADERS, 'content-length': String(Buffer.byteLength(html)), ...extra });
+  res.end(html);
+}
 function readCookie(req: string | undefined, name: string): string {
   for (const part of (req ?? '').split(';')) {
     const i = part.indexOf('=');
@@ -471,9 +493,6 @@ export function createAuthServer(deps: AuthServerDeps) {
       encounter = h.encounter;
       fhirContext = normalizeFhirContext(h.fhirContext);
     }
-    // Standalone `launch/patient` needs the patient picker; it is not built in W1, so no patient
-    // context exists here and every patient/ scope is dropped by computeGrant.
-
     // fhirUser is resolved only when the app asked for it (#5454 A4). A store failure fails the sign-in CLOSED with
     // server_error: silently dropping the scope would hand the app a session that lost fhirUser without saying so.
     let fhirUser: string | undefined;
@@ -487,24 +506,53 @@ export function createAuthServer(deps: AuthServerDeps) {
     }
     const client = await getClient(ar.clientId);
     if (!client || client.status !== 'active') return back({ error: 'access_denied', error_description: 'client is not available' });
-    const g = computeGrant({
+    const grantFor = (p: string | undefined) => computeGrant({
       grant: 'authorization_code',
       request: parsed,
       roleIds,
       clientAllowed: client.allowedScopes,
-      ...(patient ? { patient } : {}),
+      ...(p ? { patient: p } : {}),
       fhirUserResolved: !!fhirUser,
     });
-    if (g.scope.length === 0) return back({ error: 'invalid_scope', error_description: 'no requested scope could be granted' });
-
-    const codeValue = rand(32);
     const echo: Record<string, string> = {};
     for (const [k, v] of parsed.echo) echo[k] = v;
-    const doc: GrantDoc = {
-      id: sha256hex(codeValue),
-      kind: 'code',
-      ttl: CODE_TTL_S,
-      expiresAt: expiry(CODE_TTL_S),
+
+    // Standalone `launch/patient` (#5454 A5): when a patient context would actually carry a patient/ data scope
+    // for this user and client, no code is issued yet. The user picks a patient on the AS first. The probe id
+    // only answers "would a patient keep any patient/ scope"; it never reaches a token.
+    if (!ar.launchHandle && parsed.context.includes('launch/patient') && grantFor('picker-probe').data.some((s) => s.compartment === 'patient')) {
+      const pickId = rand(24);
+      const secret = rand(24);
+      await stores.grants.create({
+        id: pickId,
+        kind: 'pick',
+        browserBinding: sha256hex(secret),
+        ttl: PICK_TTL_S,
+        expiresAt: expiry(PICK_TTL_S),
+        tenant: ar.tenant,
+        clientId: ar.clientId,
+        redirectUri: ar.redirectUri as string,
+        codeChallenge: ar.codeChallenge as string,
+        ...(ar.clientState ? { clientState: ar.clientState } : {}),
+        ...(ar.clientNonce ? { clientNonce: ar.clientNonce } : {}),
+        requestedScope: ar.requestedScope ?? '',
+        v1Scopes: b?.v1Scopes ?? false,
+        aud: ar.aud as string,
+        oid: identity.oid,
+        idpTid: identity.tid,
+        echo,
+        ...(fhirUser ? { fhirUser } : {}),
+      });
+      const secure = issuer.startsWith('https:') ? '; Secure' : '';
+      const pickPath = `${base}/${ar.tenant}/pick`;
+      return redirect(res, `${issuer}/${ar.tenant}/pick?req=${pickId}`, {
+        'set-cookie': `${pickCookieName(pickId)}=${secret}; HttpOnly; SameSite=Lax; Path=${pickPath}; Max-Age=${PICK_TTL_S}${secure}`,
+      });
+    }
+
+    const g = grantFor(patient);
+    if (g.scope.length === 0) return back({ error: 'invalid_scope', error_description: 'no requested scope could be granted' });
+    const codeValue = await createCode({
       tenant: ar.tenant,
       clientId: ar.clientId,
       redirectUri: ar.redirectUri as string,
@@ -514,15 +562,256 @@ export function createAuthServer(deps: AuthServerDeps) {
       grantedScope: g.scope,
       echo,
       aud: ar.aud as string,
-    };
-    if (ar.clientNonce) doc.clientNonce = ar.clientNonce;
-    if (ar.launchHandle) doc.launchHandle = ar.launchHandle;
-    if (patient) doc.patient = patient;
-    if (encounter) doc.encounter = encounter;
-    if (fhirContext) doc.fhirContext = fhirContext;
-    if (fhirUser) doc.fhirUser = fhirUser;
-    await stores.grants.create(doc);
+      ...(ar.clientNonce ? { clientNonce: ar.clientNonce } : {}),
+      ...(ar.launchHandle ? { launchHandle: ar.launchHandle } : {}),
+      ...(patient ? { patient } : {}),
+      ...(encounter ? { encounter } : {}),
+      ...(fhirContext ? { fhirContext } : {}),
+      ...(fhirUser ? { fhirUser } : {}),
+    });
     back({ code: codeValue });
+  }
+
+  /** Stores an authorization code (only its hash) and returns the value for the redirect. */
+  async function createCode(c: Omit<GrantDoc, 'id' | 'kind' | 'ttl' | 'expiresAt'>): Promise<string> {
+    const codeValue = rand(32);
+    await stores.grants.create({ ...c, id: sha256hex(codeValue), kind: 'code', ttl: CODE_TTL_S, expiresAt: expiry(CODE_TTL_S) });
+    return codeValue;
+  }
+
+  // ---- standalone patient picker (#5454 A5) ----
+  /** A refusal rendered as a dead-end page: the pick itself cannot be trusted, so nothing is redirected anywhere. */
+  class PickRefused extends Error {
+    constructor(readonly status: number, readonly heading: string, readonly detail: string) {
+      super(heading);
+    }
+  }
+  const pickInvalid = (): PickRefused =>
+    new PickRefused(400, 'This patient selection is no longer valid', 'It expired, was already used, or was started in another browser. Return to the app and sign in again.');
+  const PICK_ID = /^[A-Za-z0-9_-]{32}$/;
+
+  /** The search for ONE pick: the default mints its token with that user's own Entra tid, as user tokens carry. */
+  const searchFor = (doc: GrantDoc): PatientSearch => deps.patientSearch ?? createFhirPatientSearch({
+    fhirBaseFor: deps.fhirBaseFor,
+    ...(deps.fetchFhir ? { fetch: deps.fetchFhir } : {}),
+    token: async (tenant, oid, roles) => {
+      const scope = pickerScope(roles);
+      // Callers check pickerScope first; this keeps a token from ever being minted with an empty scope.
+      if (scope.length === 0) throw new Error('picker token requested without user/Patient.rs');
+      return mintAccessToken(deps.signer, {
+        issuer,
+        audience: deps.fhirBaseFor(tenant),
+        tenant,
+        subType: 'user',
+        sub: oid,
+        idpTid: doc.idpTid as string,
+        clientId: PICKER_CLIENT_ID,
+        scope: scope.map(serializeScope),
+        roles: [...roles],
+        pou: ['TREAT'],
+        now: now(),
+        ttlS: PICKER_TOKEN_TTL_S,
+      });
+    },
+  });
+
+  /** user/Patient.rs INTERSECT the user's role ceilings: the authority the picker searches with. Empty = may not search. */
+  function pickerScope(roles: readonly string[]): DataScope[] {
+    return intersectWithCeilings([PICKER_SCOPE], ceilingsFor(roles, 'authorization_code'));
+  }
+
+  /** A pending pick that is live, in this tenant, and bound to THIS browser. Every failure reads the same. */
+  async function loadPick(tenant: string, pickId: string, cookieHeader: string | undefined): Promise<GrantDoc> {
+    const doc = PICK_ID.test(pickId) ? await stores.grants.get(pickId) : undefined;
+    if (!doc || doc.kind !== 'pick' || doc.used || expired(doc) || doc.tenant !== tenant) throw pickInvalid();
+    if (!doc.browserBinding || !safeEq(sha256hex(readCookie(cookieHeader, pickCookieName(pickId))), doc.browserBinding)) {
+      deps.log('auth.pick_binding_mismatch', {});
+      throw pickInvalid();
+    }
+    const t = await deps.tenants.get(tenant);
+    if (!t || t.status !== 'active') throw pickInvalid();
+    return doc;
+  }
+
+  /** Renders the picker with a FRESH CSRF value; only its hash is stored. The latest render's form is the valid one. */
+  async function showPicker(res: ServerResponse, doc: GrantDoc, status: number, state: PickerState, query = { name: '', birthdate: '' }): Promise<number> {
+    const csrf = rand(24);
+    try {
+      await stores.grants.replace({ ...doc, csrf: sha256hex(csrf) });
+    } catch (e) {
+      if (e instanceof StoreConflictError) throw new PickRefused(409, 'This page changed in another window', 'Use the most recent patient picker window, or return to the app and sign in again.');
+      throw e;
+    }
+    const client = await getClient(doc.clientId);
+    sendHtml(res, status, renderPicker({
+      action: `${base}/${doc.tenant}/pick`,
+      req: doc.id,
+      csrf,
+      appName: client?.displayName ?? doc.clientId,
+      tenant: doc.tenant,
+      query,
+      state,
+    }));
+    return status;
+  }
+
+  /** Fresh group membership, as the refresh path does: a membership removed since sign-in counts. */
+  async function pickRoles(doc: GrantDoc): Promise<string[] | undefined> {
+    try {
+      return await rolesForUser(doc.tenant, doc.oid as string);
+    } catch (e) {
+      deps.log('auth.membership_error', { error: e instanceof Error ? e.name : 'unknown', consent: e instanceof GraphConsentRequiredError ? 1 : 0 });
+      return undefined;
+    }
+  }
+  const ROLES_UNAVAILABLE: PickerState = { kind: 'error', heading: 'Your roles could not be checked', message: 'Role membership in this tenant could not be established. Try again, or cancel to return to the app.' };
+
+  /**
+   * GET renders the empty search form only. Search terms are patient identifiers (PHI): they travel in a POST body,
+   * never a query string, which Front Door / App Gateway access logs would record. Any `q`/`birthdate` here is ignored.
+   */
+  async function pickGet(res: ServerResponse, tenant: string, q: URLSearchParams, cookieHeader: string | undefined): Promise<number> {
+    const doc = await loadPick(tenant, q.get('req') ?? '', cookieHeader);
+    const roles = await pickRoles(doc);
+    if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE);
+    if (pickerScope(roles).length === 0) return showPicker(res, doc, 403, { kind: 'not-permitted' });
+    return showPicker(res, doc, 200, { kind: 'start' });
+  }
+
+  /** `action=search` POST, after the pick, cookie and CSRF checks in pickPost. Re-renders with a fresh CSRF. */
+  async function pickSearch(res: ServerResponse, doc: GrantDoc, form: URLSearchParams): Promise<number> {
+    const tenant = doc.tenant;
+    const query = { name: (form.get('q') ?? '').trim(), birthdate: (form.get('birthdate') ?? '').trim() };
+    const roles = await pickRoles(doc);
+    if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE, query);
+    if (pickerScope(roles).length === 0) return showPicker(res, doc, 403, { kind: 'not-permitted' }, query);
+    if (!query.name || query.name.length > 100) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Enter a patient name of 1 to 100 characters.' }, query);
+    if (query.birthdate && !FHIR_DATE.test(query.birthdate)) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Enter the birth date as YYYY-MM-DD.' }, query);
+    try {
+      const patients = await searchFor(doc).search(tenant, doc.oid as string, roles, { name: query.name, ...(query.birthdate ? { birthdate: query.birthdate } : {}) });
+      return showPicker(res, doc, 200, patients.length ? { kind: 'results', patients } : { kind: 'empty' }, query);
+    } catch (e) {
+      if (!(e instanceof PatientSearchUnavailableError)) throw e;
+      deps.log('auth.pick_search_unavailable', { reason: e.reason });
+      return showPicker(res, doc, 503, { kind: 'unavailable' }, query);
+    }
+  }
+
+  async function pickPost(res: ServerResponse, tenant: string, form: URLSearchParams, cookieHeader: string | undefined): Promise<number> {
+    const doc = await loadPick(tenant, form.get('req') ?? '', cookieHeader);
+    // The form must come from the LATEST page this AS rendered for this pick (timing-safe; only the hash is stored).
+    if (!doc.csrf || !safeEq(sha256hex(form.get('csrf') ?? ''), doc.csrf)) {
+      deps.log('auth.pick_csrf_mismatch', {});
+      throw pickInvalid();
+    }
+    const clearCookie = `${pickCookieName(doc.id)}=; HttpOnly; SameSite=Lax; Path=${base}/${doc.tenant}/pick; Max-Age=0`;
+    const back = (params: Record<string, string>): number => {
+      const u = new URL(doc.redirectUri as string);
+      for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+      if (doc.clientState) u.searchParams.set('state', doc.clientState);
+      redirect(res, u.toString(), { 'set-cookie': clearCookie });
+      return 302;
+    };
+    const consume = async (): Promise<void> => {
+      try {
+        await stores.grants.replace({ ...doc, used: true }); // single use; a concurrent second POST loses the etag race
+      } catch (e) {
+        if (e instanceof StoreConflictError) throw pickInvalid();
+        throw e;
+      }
+    };
+    if (form.get('action') === 'search') return pickSearch(res, doc, form);
+    if (form.get('action') === 'cancel') {
+      await consume();
+      return back({ error: 'access_denied', error_description: 'no patient was selected' });
+    }
+    if (form.get('action') === 'continue') {
+      const roles = await pickRoles(doc);
+      if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE);
+      // Offered ONLY on the not-permitted state. A user who may search must choose a patient; a forged continue
+      // from them issues nothing and returns them to the picker.
+      if (pickerScope(roles).length > 0) {
+        deps.log('auth.pick_continue_refused', {});
+        return showPicker(res, doc, 400, { kind: 'error', heading: 'Choose a patient', message: 'You are permitted to search patients in this tenant, so a patient must be chosen. Search, or cancel to return to the app.' });
+      }
+      await consume();
+      return issueFromPick(doc, roles, undefined, back);
+    }
+    const patient = form.get('patient') ?? '';
+    if (!FHIR_ID.test(patient)) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Choose a patient from the list.' });
+    const roles = await pickRoles(doc);
+    if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE);
+    if (pickerScope(roles).length === 0) return showPicker(res, doc, 403, { kind: 'not-permitted' });
+    // The posted id is only a claim: the user must be able to READ that patient, as themselves, right now.
+    let seen;
+    try {
+      seen = await searchFor(doc).read(tenant, doc.oid as string, roles, patient);
+    } catch (e) {
+      if (!(e instanceof PatientSearchUnavailableError)) throw e;
+      deps.log('auth.pick_search_unavailable', { reason: e.reason });
+      return showPicker(res, doc, 503, { kind: 'unavailable' });
+    }
+    if (!seen) {
+      deps.log('auth.pick_patient_refused', {});
+      return showPicker(res, doc, 403, { kind: 'error', heading: 'That patient is not available', message: 'The patient was not found, or you are not permitted to see it. Search again, or cancel to return to the app.' });
+    }
+    await consume();
+    return issueFromPick(doc, roles, seen.id, back);
+  }
+
+  /**
+   * Consumed pick -> code. With a patient the grant is recomputed WITH it, so patient/ scopes survive. Without one
+   * (`action=continue`) it is exactly the pre-picker grant: every patient/ scope dropped, the rest kept. Roles are the
+   * fresh ones the caller checked.
+   */
+  async function issueFromPick(doc: GrantDoc, roles: string[], patient: string | undefined, back: (p: Record<string, string>) => number): Promise<number> {
+    const client = await getClient(doc.clientId);
+    if (!client || client.status !== 'active') return back({ error: 'access_denied', error_description: 'client is not available' });
+    const g = computeGrant({
+      grant: 'authorization_code',
+      request: parseRequest(doc.requestedScope ?? '', { v1: doc.v1Scopes ?? false }),
+      roleIds: roles,
+      clientAllowed: client.allowedScopes,
+      ...(patient ? { patient } : {}),
+      fhirUserResolved: !!doc.fhirUser,
+    });
+    if (g.scope.length === 0) return back({ error: 'invalid_scope', error_description: 'no requested scope could be granted' });
+    const codeValue = await createCode({
+      tenant: doc.tenant,
+      clientId: doc.clientId,
+      redirectUri: doc.redirectUri as string,
+      codeChallenge: doc.codeChallenge as string,
+      oid: doc.oid as string,
+      idpTid: doc.idpTid as string,
+      grantedScope: g.scope,
+      echo: doc.echo ?? {},
+      aud: doc.aud as string,
+      ...(patient ? { patient } : {}),
+      ...(doc.clientNonce ? { clientNonce: doc.clientNonce } : {}),
+      ...(doc.fhirUser ? { fhirUser: doc.fhirUser } : {}),
+    });
+    deps.log(patient ? 'auth.pick_issued' : 'auth.pick_continued_without_patient', { tenant: doc.tenant });
+    return back({ code: codeValue });
+  }
+
+  /** The picker speaks HTML, success or failure; a JSON error body would be a blank page to the user. */
+  async function pickRoute(req: IncomingMessage, res: ServerResponse, method: string, tenant: string, q: URLSearchParams): Promise<number> {
+    try {
+      if (method === 'GET') return await pickGet(res, tenant, q, req.headers.cookie);
+      return await pickPost(res, tenant, await readForm(req), req.headers.cookie);
+    } catch (e) {
+      if (e instanceof PickRefused) {
+        sendHtml(res, e.status, renderPickerError(e.heading, e.detail));
+        return e.status;
+      }
+      if (e instanceof OAuthError || e instanceof HttpError) {
+        sendHtml(res, 400, renderPickerError('This request could not be read', 'Return to the app and sign in again.'));
+        return 400;
+      }
+      deps.log('auth.internal_error', { error: e instanceof Error ? e.name : 'unknown', step: 'pick', ...classifyError(e) });
+      sendHtml(res, 500, renderPickerError('Something went wrong', 'The patient picker hit an internal error. Return to the app and try again.'));
+      return 500;
+    }
   }
 
   // ---- token ----
@@ -1023,7 +1312,7 @@ export function createAuthServer(deps: AuthServerDeps) {
   });
 
   // Tenant-scoped routes under the issuer path, and the FHIR-base discovery path the edge forwards unchanged.
-  const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|token)$/;
+  const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|pick|token)$/;
   const FHIR_DISCOVERY = /^\/([a-z0-9-]{2,40})\/fhir\/\.well-known\/smart-configuration$/;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -1098,6 +1387,10 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (leaf === 'authorize' && method === 'GET') {
         status = 302;
         await authorize(res, tenant, url.searchParams);
+        return true;
+      }
+      if (leaf === 'pick' && (method === 'GET' || method === 'POST')) {
+        status = await pickRoute(req, res, method, tenant, url.searchParams);
         return true;
       }
       if (leaf === 'token' && method === 'POST') {

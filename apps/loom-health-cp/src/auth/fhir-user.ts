@@ -7,8 +7,14 @@
 
 import type { FhirUserDoc, FhirUserStore } from './types.js';
 
-/** The four resource types SMART App Launch allows as `fhirUser`, followed by an id under the FHIR id rule. */
-export const FHIR_USER_RESOURCE = /^(Practitioner|Patient|RelatedPerson|Person)\/[A-Za-z0-9.-]{1,64}$/;
+/**
+ * A FHIR logical id (`[A-Za-z0-9\-\.]{1,64}`), minus ids made only of dots: `.` and `..` are path segments, so a
+ * URL built from one escapes the resource type (`Patient/..` resolves to the FHIR base). #5454 PR2 review.
+ */
+export const FHIR_ID = /^(?!\.+$)[A-Za-z0-9.-]{1,64}$/;
+
+/** The four resource types SMART App Launch allows as `fhirUser`, followed by an id under FHIR_ID. */
+export const FHIR_USER_RESOURCE = /^(Practitioner|Patient|RelatedPerson|Person)\/(?!\.+$)[A-Za-z0-9.-]{1,64}$/;
 
 /** Deterministic id, keyed on BOTH tenant and oid: one user can be a different resource in each tenant. */
 export const fhirUserDocId = (tenant: string, oid: string): string => `fhiruser-${tenant}-${oid.toLowerCase()}`;

@@ -15,6 +15,7 @@ import { GraphConsentRequiredError, type Federation, type GraphMembership } from
 import { LocalSigner } from '../src/auth/signer.js';
 import { createFhirUserResolver } from '../src/auth/fhir-user.js';
 import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.js';
+import { PatientSearchUnavailableError, type PatientQuery, type PatientSearch, type PatientSummary } from '../src/auth/patient-search.js';
 import type { TenantDoc } from '../src/registry/types.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
 
@@ -76,6 +77,8 @@ interface Ctx {
   jwksByUrl: Map<string, JWK[]>;
   signer: LocalSigner;
   call(method: string, path: string, o?: { token?: string; json?: unknown; form?: Record<string, string>; cookie?: string }): Promise<{ status: number; json: any; headers: Headers }>;
+  /** Like call, for HTML responses (the patient picker): the body as text. */
+  page(method: string, path: string, o?: { form?: Record<string, string>; cookie?: string }): Promise<{ status: number; text: string; headers: Headers }>;
   admin(method: string, path: string, json?: unknown): Promise<{ status: number; json: any }>;
   registerApp(id: string, o?: { scopes?: string[]; tenant?: string }): Promise<void>;
   bind(groups: Record<string, string>, v1?: boolean, tenant?: string): Promise<void>;
@@ -89,7 +92,12 @@ afterEach(async () => {
   while (open.length) await open.pop()!.close();
 });
 
-async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Record<string, string | number>) => void } = {}): Promise<Ctx> {
+async function boot(over: {
+  signer?: LocalSigner;
+  log?: (event: string, f: Record<string, string | number>) => void;
+  patientSearch?: PatientSearch;
+  fetchFhir?: typeof fetch;
+} = {}): Promise<Ctx> {
   const tenants = new MemoryCollection<TenantDoc>();
   const base = { stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' };
   await tenants.create({ id: 'visn-01', displayName: 'V1', status: 'active', ...base });
@@ -127,6 +135,8 @@ async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Recor
     },
     graphConsentUrl: 'https://login.microsoftonline.us/consent',
     log: over.log ?? (() => undefined),
+    ...(over.patientSearch ? { patientSearch: over.patientSearch } : {}),
+    ...(over.fetchFhir ? { fetchFhir: over.fetchFhir } : {}),
   });
   const server: Server = createServer((req, res) => void authSrv.handle(req, res).then((h) => { if (!h) { res.writeHead(404); res.end(); } }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -148,10 +158,21 @@ async function boot(over: { signer?: LocalSigner; log?: (event: string, f: Recor
     const text = await res.text();
     return { status: res.status, json: text ? JSON.parse(text) : undefined, headers: res.headers };
   };
+  const page: Ctx['page'] = async (method, path, o = {}) => {
+    const headers: Record<string, string> = {};
+    if (o.cookie) headers.cookie = o.cookie;
+    let body: string | undefined;
+    if (o.form) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      body = new URLSearchParams(o.form).toString();
+    }
+    const res = await fetch(url + path, { method, headers, body, redirect: 'manual' });
+    return { status: res.status, text: await res.text(), headers: res.headers };
+  };
   const admin: Ctx['admin'] = async (method, path, json) => call(method, path, { token: await adminToken(), ...(json !== undefined ? { json } : {}) });
 
   const ctx: Ctx = {
-    url, fed, graph, stores, tenants, jwksFetched, jwksByUrl, signer, call, admin,
+    url, fed, graph, stores, tenants, jwksFetched, jwksByUrl, signer, call, page, admin,
     async registerApp(id, o = {}) {
       const r = await admin('POST', '/api/health/auth/clients', {
         clientId: id, tenant: o.tenant ?? 'visn-01', clientType: 'app', displayName: id,
@@ -1176,5 +1197,393 @@ describe('token CORS before the client is resolved (#5454 review)', () => {
     });
     expect([withAssertion.status, withAssertion.json.error]).toEqual([401, 'invalid_client']);
     expect(withAssertion.headers.get('access-control-allow-origin')).toBeNull(); // breaks ('*') if CORS is applied to every request
+  });
+});
+
+describe('standalone patient picker (#5454 A5)', () => {
+  /** The PatientSearch seam: `visible` is what this user may read; search matches names case-insensitively. */
+  class FakeSearch implements PatientSearch {
+    visible = new Map<string, PatientSummary>();
+    calls: string[] = [];
+    fail = false;
+    async search(tenant: string, oid: string, _roles: readonly string[], q: PatientQuery): Promise<PatientSummary[]> {
+      this.calls.push(`search ${tenant} ${oid} ${q.name}`);
+      if (this.fail) throw new PatientSearchUnavailableError('no response');
+      return [...this.visible.values()].filter((p) => p.name.toLowerCase().includes(q.name.toLowerCase()));
+    }
+    async read(tenant: string, oid: string, _roles: readonly string[], id: string): Promise<PatientSummary | undefined> {
+      this.calls.push(`read ${tenant} ${oid} ${id}`);
+      if (this.fail) throw new PatientSearchUnavailableError('no response');
+      return this.visible.get(id);
+    }
+  }
+  const PICK_SCOPE = 'openid launch/patient patient/*.rs user/*.rs offline_access';
+  const XSS_NAME = `<script>alert("x")</script> & O'Brien`;
+
+  async function setup(o: { search?: FakeSearch; fetchFhir?: typeof fetch } = {}) {
+    const search = o.search ?? new FakeSearch();
+    search.visible.set('pat-1', { id: 'pat-1', name: 'Ada Smith', birthDate: '1970-01-02', gender: 'female' });
+    search.visible.set('pat-x', { id: 'pat-x', name: XSS_NAME });
+    const c = await boot(o.fetchFhir ? { fetchFhir: o.fetchFhir } : { patientSearch: search });
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return { c, search };
+  }
+
+  /** authorize + Entra callback, stopping at the callback's redirect (the picker, or the app). */
+  async function signIn(c: Ctx, scope = PICK_SCOPE, extra: Record<string, string> = {}) {
+    const { verifier, challenge } = pkce();
+    const q = new URLSearchParams({
+      response_type: 'code', client_id: 'app-1', redirect_uri: 'https://app.test/cb', scope, state: 'client-state',
+      aud: fhir('visn-01'), code_challenge: challenge, code_challenge_method: 'S256', ...extra,
+    });
+    const a = await c.call('GET', `/auth/visn-01/authorize?${q}`);
+    const arCookie = (a.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+    const cb = await c.page('GET', `/auth/callback?code=entra-code&state=${new URL(a.headers.get('location')!).searchParams.get('state')}`, { cookie: arCookie });
+    expect(cb.status).toBe(302);
+    const location = new URL(cb.headers.get('location')!);
+    const setCookie = cb.headers.get('set-cookie') ?? '';
+    return { verifier, location, setCookie, cookie: setCookie.split(';')[0] ?? '', req: location.searchParams.get('req') ?? '' };
+  }
+  const pickPath = (req: string, query = '') => `/auth/visn-01/pick?req=${req}${query}`;
+  const csrfOf = (html: string): string => /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '';
+  const codes = (c: Ctx) => [...c.stores.grants.docs.values()].filter((d: any) => d.kind === 'code').length;
+  /** Render the empty form (GET), then search as the form does: POST action=search with the page's CSRF. */
+  async function searchVia(c: Ctx, s: { req: string; cookie: string }, q: string) {
+    const csrf = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    return c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, action: 'search', q } });
+  }
+  const LOCKDOWN_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+
+  it('a standalone launch/patient sign-in goes to the picker with no code, and sets a path-scoped HttpOnly cookie', async () => {
+    const { c } = await setup();
+    const s = await signIn(c);
+    // Breaks if the callback issues the code directly (pre-A5 behaviour): the location would be the app with ?code=.
+    expect(`${s.location.origin}${s.location.pathname}`).toBe(`${ISSUER}/visn-01/pick`);
+    expect(s.location.searchParams.get('code')).toBeNull();
+    expect(s.req).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(codes(c)).toBe(0); // breaks if a code is stored before the pick
+    expect(s.setCookie).toMatch(new RegExp(`^lhds_pk_${s.req}=[A-Za-z0-9_-]+;`));
+    for (const attr of ['HttpOnly', 'SameSite=Lax', 'Path=/auth/visn-01/pick', 'Max-Age=600', 'Secure']) expect(s.setCookie).toContain(attr);
+  });
+
+  it('the page escapes every patient value, sends the lock-down headers, carries no script, and searched as the user', async () => {
+    const { c, search } = await setup();
+    const s = await signIn(c);
+    const start = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+    expect(start.status).toBe(200);
+    expect(start.text).toContain('<label for="q">Patient name</label>');
+    expect(search.calls).toEqual([]); // no query yet: nothing searched
+    const r = await searchVia(c, s, 'a');
+    expect(r.status).toBe(200);
+    expect(search.calls).toEqual([`search visn-01 ${USER} a`]); // breaks if the search is not bound to the signed-in oid
+    expect(r.text).toContain('<form method="post" action="/auth/visn-01/pick" class="search"'); // the form never GETs terms
+    // Breaks if the name is interpolated raw: the literal <script> would appear.
+    expect(r.text).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; O&#39;Brien');
+    expect(r.text).not.toContain('<script');
+    expect(r.text).toContain('value="pat-1"'); // positive: the visible patient is offered
+    expect(r.text).toContain('type="radio"');
+    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP);
+    expect(r.headers.get('x-frame-options')).toBe('DENY');
+    expect(r.headers.get('cache-control')).toBe('no-store');
+    expect(r.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(r.headers.get('content-type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('search terms never travel in a URL: a GET with ?q= does not search or echo; search POST needs the cookie and CSRF', async () => {
+    const { c, search } = await setup();
+    const s = await signIn(c);
+    const leak = 'Zebedee-1970';
+    const g = await c.page('GET', pickPath(s.req, `&q=${leak}&birthdate=1970-01-02`), { cookie: s.cookie });
+    expect(g.status).toBe(200);
+    expect(search.calls).toEqual([]); // breaks if GET still searches: PHI in the query string reaches edge access logs
+    expect(g.text).not.toContain(leak); // breaks if the query value is echoed back into the form
+    expect(g.text).not.toContain('1970-01-02');
+    expect(g.text).toContain('name="q" type="search" value=""'); // positive: the empty search form IS rendered
+    const csrf = csrfOf(g.text);
+    const form = { req: s.req, csrf, action: 'search', q: 'ada' };
+    const noCookie = await c.page('POST', '/auth/visn-01/pick', { form });
+    expect([noCookie.status, noCookie.text.includes('Ada Smith')]).toEqual([400, false]);
+    const badCsrf = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { ...form, csrf: 'A'.repeat(32) } });
+    expect([badCsrf.status, badCsrf.text.includes('Ada Smith')]).toEqual([400, false]);
+    expect(search.calls).toEqual([]); // neither refused POST reached the search
+    const ok = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form });
+    expect(ok.status).toBe(200);
+    expect(ok.text).toContain('Ada Smith'); // paired permit: same form with cookie + CSRF searches
+    expect(search.calls).toEqual([`search visn-01 ${USER} ada`]);
+    expect(csrfOf(ok.text)).not.toBe(csrf); // re-rendered with a fresh CSRF
+  });
+
+  it('a valid pick issues a code whose token carries the patient and KEEPS patient/ scopes; without launch/patient they are dropped', async () => {
+    const { c, search } = await setup();
+    const s = await signIn(c);
+    const csrf = csrfOf((await searchVia(c, s, 'ada')).text);
+    const post = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1', action: 'select' } });
+    expect(post.status).toBe(302);
+    const back = new URL(post.headers.get('location')!);
+    expect(`${back.origin}${back.pathname}`).toBe('https://app.test/cb');
+    expect(back.searchParams.get('state')).toBe('client-state');
+    expect(search.calls).toContain(`read visn-01 ${USER} pat-1`); // the visibility re-check ran as the user
+    const t = await c.exchange({ redirect: back, verifier: s.verifier });
+    expect(t.status).toBe(200);
+    expect(t.json.patient).toBe('pat-1');
+    expect(t.json.need_patient_banner).toBe(true); // standalone: the app must show the banner
+    expect(t.json.scope.split(' ')).toContain('patient/*.rs'); // breaks if the grant is not recomputed WITH the patient
+    expect((await claims(c, t.json.access_token)).patient).toBe('pat-1');
+    // The refresh grant keeps the patient and its scopes.
+    const rt = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: t.json.refresh_token } });
+    expect([rt.status, rt.json.patient]).toEqual([200, 'pat-1']);
+    expect(rt.json.scope.split(' ')).toContain('patient/*.rs');
+
+    // Paired control, the pre-A5 shape: patient/ without launch/patient never reaches the picker and loses patient/.
+    const plain = await signIn(c, 'patient/*.rs user/*.rs');
+    expect(plain.location.searchParams.get('code')).toBeTruthy();
+    const pt = await c.exchange({ redirect: plain.location, verifier: plain.verifier });
+    expect(pt.json.scope).toBe('user/*.rs');
+    expect(pt.json.patient).toBeUndefined();
+  });
+
+  it('refuses a missing or foreign cookie, a wrong CSRF, another tenant, an invisible patient and a dot-only id; none issues a code or burns the pick', async () => {
+    const { c, search } = await setup();
+    await c.tenants.create({ id: 'visn-03', displayName: 'V3', status: 'active', stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' });
+    const s = await signIn(c);
+    const other = await signIn(c); // a second pending pick in the same browser: its cookie is valid, but for ITS pick
+    const csrf = csrfOf((await searchVia(c, s, 'ada')).text);
+    expect(csrf).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const form = { req: s.req, csrf, patient: 'pat-1', action: 'select' };
+    const post = (o: { cookie?: string; form?: Record<string, string>; path?: string }) =>
+      c.page('POST', o.path ?? '/auth/visn-01/pick', { ...(o.cookie !== undefined ? { cookie: o.cookie } : {}), form: o.form ?? form });
+
+    const noCookie = await post({});
+    expect([noCookie.status, noCookie.headers.get('location')]).toEqual([400, null]); // breaks if the cookie binding is not checked
+    expect(noCookie.text).toContain('This patient selection is no longer valid');
+    expect(noCookie.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the refusal page is locked down too
+    expect(noCookie.headers.get('x-frame-options')).toBe('DENY');
+    expect((await post({ cookie: `lhds_pk_${s.req}=${other.cookie.split('=')[1]}` })).status).toBe(400); // another pick's secret under this name
+    const badCsrf = await post({ cookie: s.cookie, form: { ...form, csrf: 'A'.repeat(32) } });
+    expect([badCsrf.status, badCsrf.headers.get('location')]).toEqual([400, null]); // breaks if the CSRF value is not compared
+    expect((await post({ cookie: s.cookie, form: { ...form, csrf: '' } })).status).toBe(400);
+    expect((await post({ cookie: s.cookie, path: '/auth/visn-03/pick' })).status).toBe(400); // pick belongs to visn-01
+
+    const hidden = await post({ cookie: s.cookie, form: { ...form, patient: 'pat-hidden' } });
+    // Breaks (302 with a code) if the posted id is trusted without PatientSearch.read confirming this user can see it.
+    expect([hidden.status, hidden.headers.get('location')]).toEqual([403, null]);
+    expect(hidden.text).toContain('That patient is not available');
+    const readsBefore = search.calls.filter((x) => x.startsWith('read')).length;
+    for (const bad of ['..', '.', 'a b']) {
+      // Dot-only ids would build Patient/.. (the FHIR base): refused before any FHIR call. Fresh CSRF per render.
+      const fresh = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+      const r = await post({ cookie: s.cookie, form: { ...form, csrf: fresh, patient: bad } });
+      expect([bad, r.status]).toEqual([bad, 400]);
+    }
+    expect(search.calls.filter((x) => x.startsWith('read')).length).toBe(readsBefore); // breaks if a dot-only id reaches read
+    expect(codes(c)).toBe(0);
+
+    // Paired permit: the same pick, right cookie + the latest CSRF + a visible patient, still succeeds (nothing above burned it).
+    const latest = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    const ok = await post({ cookie: s.cookie, form: { ...form, csrf: latest } });
+    expect(ok.status).toBe(302);
+    expect(new URL(ok.headers.get('location')!).searchParams.get('code')).toBeTruthy();
+    expect(codes(c)).toBe(1);
+    // Replay of the used pick, with every other input valid: refused, no second code.
+    const replay = await post({ cookie: s.cookie, form: { ...form, csrf: latest } });
+    expect([replay.status, replay.headers.get('location')]).toEqual([400, null]);
+    expect(codes(c)).toBe(1);
+  });
+
+  it('an earlier page\'s CSRF value stops working once the page is rendered again', async () => {
+    const { c } = await setup();
+    const s = await signIn(c);
+    const first = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    const second = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    expect(first).not.toBe(second);
+    const stale = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: first, patient: 'pat-1' } });
+    expect(stale.status).toBe(400); // breaks if the CSRF is not rotated (or not checked)
+    const fresh = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: second, patient: 'pat-1' } });
+    expect(fresh.status).toBe(302);
+  });
+
+  it('an expired pick is refused; the same pick before expiry renders', async () => {
+    const { c } = await setup();
+    const s = await signIn(c);
+    expect((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).status).toBe(200); // paired: live
+    const doc = c.stores.grants.docs.get(s.req) as any;
+    c.stores.grants.docs.set(s.req, { ...doc, expiresAt: new Date(Date.now() - 1000).toISOString() } as never);
+    const r = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+    expect(r.status).toBe(400); // breaks if expiresAt is not enforced in code
+    expect(r.text).not.toContain('name="csrf"'); // a dead end: nothing to submit
+  });
+
+  it('Cancel returns access_denied with the state, and consumes the pick', async () => {
+    const { c } = await setup();
+    const s = await signIn(c);
+    const csrf = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    const r = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, action: 'cancel' } });
+    expect(r.status).toBe(302);
+    const back = new URL(r.headers.get('location')!);
+    expect([back.searchParams.get('error'), back.searchParams.get('state'), back.searchParams.get('code')]).toEqual(['access_denied', 'client-state', null]);
+    expect(r.headers.get('set-cookie')).toContain('Max-Age=0'); // the binding cookie is cleared
+    const after = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1' } });
+    expect(after.status).toBe(400); // breaks if cancel leaves the pick usable
+  });
+
+  it('FHIR unreachable: an honest unavailable page and no patients; the search used a 60 s user token for user/Patient.rs', async () => {
+    const seen: Array<{ url: string; auth: string }> = [];
+    const fetchFhir = (async (u: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(u), auth: String((init?.headers as Record<string, string>)?.authorization ?? '') });
+      throw new TypeError('fetch failed'); // what undici throws for ECONNREFUSED / DNS failure
+    }) as typeof fetch;
+    const { c } = await setup({ fetchFhir });
+    const s = await signIn(c);
+    // The callback only admits identity.tid === entraTenantId, so in the flow the two are equal and a test could not
+    // tell which one the token used. Give the stored pick a DISTINCT tid: breaks if the token takes deps.entraTenantId.
+    const PICK_TID = 'cccccccc-0000-0000-0000-00000000000c';
+    c.stores.grants.docs.set(s.req, { ...(c.stores.grants.docs.get(s.req) as any), idpTid: PICK_TID } as never);
+    const r = await searchVia(c, s, 'smith');
+    expect(r.status).toBe(503);
+    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the 503 state goes through sendHtml too
+    expect(r.headers.get('x-frame-options')).toBe('DENY');
+    expect(r.text).toContain('Patient search is unavailable');
+    expect(r.text).toContain('The tenant FHIR endpoint did not respond');
+    expect(r.text).not.toContain('type="radio"'); // breaks if any patient is rendered without a FHIR answer
+    expect(r.text).toContain('value="cancel"'); // Cancel stays available
+    expect(seen.map((x) => x.url)).toEqual([`${fhir('visn-01')}/Patient?name=smith&_count=20`]);
+    const tok = await claims(c, seen[0]!.auth.replace(/^Bearer /, ''));
+    expect([tok.sub, tok.sub_type, tok.scope, tok.client_id, tok.aud, tok.exp - tok.iat]).toEqual([USER, 'user', 'user/Patient.rs', 'lhds-patient-picker', fhir('visn-01'), 60]);
+    expect(tok.idp_tid).toBe(PICK_TID); // the user's own tid from sign-in
+    // A POST while FHIR is down issues nothing either.
+    const csrf = csrfOf(r.text);
+    const post = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1' } });
+    expect([post.status, post.headers.get('location')]).toEqual([503, null]);
+    expect(codes(c)).toBe(0);
+  });
+
+  it('a user who lost the patient-read role since sign-in sees the not-permitted state, nothing is searched, Cancel works', async () => {
+    const { c, search } = await setup();
+    const s = await signIn(c);
+    c.graph.members.set(USER, new Set()); // membership removed between sign-in and the pick
+    const r = await searchVia(c, s, 'ada');
+    expect(r.status).toBe(403);
+    expect(r.text).toContain('You are not permitted to search patients in this tenant');
+    expect(r.text).not.toContain('name="q"'); // no search box in this state
+    expect(search.calls).toEqual([]); // breaks if the role check runs after (or instead of) the search
+    const post = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: csrfOf(r.text), patient: 'pat-1' } });
+    expect([post.status, codes(c)]).toEqual([403, 0]);
+    const cancel = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: csrfOf(post.text), action: 'cancel' } });
+    expect(new URL(cancel.headers.get('location')!).searchParams.get('error')).toBe('access_denied');
+  });
+
+  describe('Continue without a patient (not-permitted state only)', () => {
+    const G_SP = 'bbbbbbbb-0000-0000-0000-000000000005';
+    // user/SearchParameter.rs survives without user/Patient.rs: the search-parameter-manager role grants it, and
+    // no other role of this user remains after the reader group is removed.
+    const SCOPE = 'openid launch/patient patient/*.rs user/SearchParameter.rs offline_access';
+    async function notPermitted() {
+      const { c, search } = await setup();
+      await c.bind({ [G_READER]: 'fhir-data-reader', [G_SP]: 'fhir-search-parameter-manager' });
+      c.graph.members.set(USER, new Set([G_READER, G_SP]));
+      const s = await signIn(c, SCOPE);
+      expect(s.location.pathname).toBe('/auth/visn-01/pick'); // the reader role made patient/ grantable at sign-in
+      return { c, search, s };
+    }
+    const cont = (c: Ctx, s: { req: string }, o: { cookie?: string; csrf: string }) =>
+      c.page('POST', '/auth/visn-01/pick', { ...(o.cookie !== undefined ? { cookie: o.cookie } : {}), form: { req: s.req, csrf: o.csrf, action: 'continue' } });
+
+    it('issues a code with no patient and no patient/ scope, keeping the non-patient ones; select keeps patient/', async () => {
+      const { c, s } = await notPermitted();
+      c.graph.members.set(USER, new Set([G_SP])); // the reader group is removed: not permitted to search
+      const page = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(page.status).toBe(403);
+      expect(page.text).toContain('value="continue"'); // offered here
+      const r = await cont(c, s, { cookie: s.cookie, csrf: csrfOf(page.text) });
+      expect(r.status).toBe(302);
+      const back = new URL(r.headers.get('location')!);
+      expect(back.searchParams.get('state')).toBe('client-state');
+      const t = await c.exchange({ redirect: back, verifier: s.verifier });
+      expect(t.status).toBe(200);
+      expect(t.json.patient).toBeUndefined();
+      expect(t.json.need_patient_banner).toBeUndefined();
+      // Breaks if continue grants patient/ (no patient context) or drops the non-patient scopes.
+      expect(t.json.scope.split(' ').sort()).toEqual(['offline_access', 'openid', 'user/SearchParameter.rs']);
+      expect((await claims(c, t.json.access_token)).patient).toBeUndefined();
+      // Pair: the SAME request by a user who keeps the reader role, through select, keeps patient/ and the patient.
+      c.graph.members.set(USER, new Set([G_READER, G_SP]));
+      const s2 = await signIn(c, SCOPE);
+      const csrf = csrfOf((await searchVia(c, s2, 'ada')).text);
+      const sel = await c.page('POST', '/auth/visn-01/pick', { cookie: s2.cookie, form: { req: s2.req, csrf, patient: 'pat-1', action: 'select' } });
+      const t2 = await c.exchange({ redirect: new URL(sel.headers.get('location')!), verifier: s2.verifier });
+      expect(t2.json.patient).toBe('pat-1');
+      expect(t2.json.scope.split(' ')).toContain('patient/*.rs');
+    });
+
+    it('a continue without the cookie or with a bad CSRF is refused; the pick survives for the genuine one', async () => {
+      const { c, s } = await notPermitted();
+      c.graph.members.set(USER, new Set([G_SP]));
+      const csrf = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+      const noCookie = await cont(c, s, { csrf });
+      expect([noCookie.status, noCookie.headers.get('location')]).toEqual([400, null]);
+      const badCsrf = await cont(c, s, { cookie: s.cookie, csrf: 'A'.repeat(32) });
+      expect([badCsrf.status, badCsrf.headers.get('location')]).toEqual([400, null]);
+      expect(codes(c)).toBe(0);
+      expect((await cont(c, s, { cookie: s.cookie, csrf })).status).toBe(302); // paired permit
+      expect(codes(c)).toBe(1);
+      expect((await cont(c, s, { cookie: s.cookie, csrf })).status).toBe(400); // single use
+    });
+
+    it('a forged continue from a user who MAY search is refused and issues nothing; the button is not offered there', async () => {
+      const { c, s } = await notPermitted(); // still holds the reader role
+      const page = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(page.status).toBe(200);
+      expect(page.text).not.toContain('value="continue"'); // not on the search page
+      const r = await cont(c, s, { cookie: s.cookie, csrf: csrfOf(page.text) });
+      // Breaks (302 with a code) if continue works without the not-permitted guard: a patient/ app would be
+      // handed a session the user skipped choosing a patient for.
+      expect([r.status, r.headers.get('location'), codes(c)]).toEqual([400, null, 0]);
+      expect(r.text).toContain('Choose a patient');
+      const sel = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: csrfOf(r.text), patient: 'pat-1' } });
+      expect(sel.status).toBe(302); // the refused continue did not burn the pick
+    });
+
+    it('the 503 unavailable page does not offer continue', async () => {
+      const fetchFhir = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
+      const { c } = await setup({ fetchFhir });
+      const s = await signIn(c);
+      const r = await searchVia(c, s, 'smith');
+      expect(r.status).toBe(503);
+      expect(r.text).toContain('value="cancel"'); // positive: the actions row rendered
+      expect(r.text).not.toContain('value="continue"');
+    });
+  });
+
+  it('no picker when nothing patient-level would be granted, or on an EHR launch', async () => {
+    const { c } = await setup();
+    // launch/patient but only user/ scopes: issued directly (breaks if every launch/patient goes to the picker).
+    const noPatientScope = await signIn(c, 'launch/patient user/*.rs');
+    expect(noPatientScope.location.searchParams.get('code')).toBeTruthy();
+    // A client that may not receive patient/ scopes: also direct.
+    await c.registerApp('app-u', { scopes: ['user/*.rs'] });
+    const { challenge } = pkce();
+    const q = new URLSearchParams({ response_type: 'code', client_id: 'app-u', redirect_uri: 'https://app.test/cb', scope: PICK_SCOPE, state: 's', aud: fhir('visn-01'), code_challenge: challenge, code_challenge_method: 'S256' });
+    const a = await c.call('GET', `/auth/visn-01/authorize?${q}`);
+    const cb = await c.page('GET', `/auth/callback?code=e&state=${new URL(a.headers.get('location')!).searchParams.get('state')}`, { cookie: (a.headers.get('set-cookie') ?? '').split(';')[0] ?? '' });
+    expect(new URL(cb.headers.get('location')!).searchParams.get('code')).toBeTruthy();
+    // EHR launch carrying launch/patient: the handle supplies the patient, no picker.
+    const h = (await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'pat-1' })).json.data.launch as string;
+    const ehr = await signIn(c, `launch ${PICK_SCOPE}`, { launch: h });
+    expect(ehr.location.pathname).toBe('/cb');
+    const t = await c.exchange({ redirect: ehr.location, verifier: ehr.verifier });
+    expect([t.json.patient, t.json.need_patient_banner]).toEqual(['pat-1', false]);
+  });
+
+  it('dot-only ids are refused in the fhirUser mapping and the launch patient; a dotted id is accepted (PR2 review)', async () => {
+    const { c } = await setup();
+    const put = async (resource: string) => (await c.admin('PUT', FU('visn-01', USER), { resource })).status;
+    expect(await put('Patient/..')).toBe(400); // breaks on the PR2 regex, which accepted it
+    expect(await put('Practitioner/.')).toBe(400);
+    expect(await put('Patient/a.b')).toBe(200); // paired: dots inside an id stay legal
+    const launch = async (patient: string) => (await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient })).status;
+    expect(await launch('..')).toBe(400);
+    expect(await launch('pat.1')).toBe(201);
   });
 });

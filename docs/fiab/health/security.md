@@ -3,9 +3,16 @@
 > **Status: A1-A11 are the design; A12 records the W1-4 server code. Merged
 > is not deployed.** This page currently holds only the **authorization
 > section** (PRP item W1-4). The Authorization Server code lives in
-> `apps/loom-health-cp/src/auth/` and is **not wired into `compose.ts` /
-> `main.ts`, not deployed, and not run against Entra, Key Vault or Graph**
-> (A12 lists what was and was not measured). The rest of this page (network,
+> `apps/loom-health-cp/src/auth/`. It is **wired** (`main.ts` builds it from
+> `wire.ts`; `compose.ts` mounts it in front of the control-plane app) and
+> **deployed on Commercial dev01**:
+> - The issuer has been served through Front Door on `/auth/*` since #5413.
+> - Key Vault token minting was verified live (deploy-health 44947837477).
+> - The W1b-3a discovery and CORS changes were verified live on 2026-11-24 (#5461).
+>
+> Not exercised live: an interactive Entra authorization-code sign-in, the
+> Graph membership check, and anything in GCC-High (#5123). A12 lists what
+> was and was not measured. The rest of this page (network,
 > keys, audit, evidence pack) belongs to W1-9 and later waves. Mapping only, no ATO, FedRAMP or HIPAA-compliance claim
 > (`PRPs/active/loom-health-data-services/SECURITY-AND-COMPLIANCE.md:3-10`).
 
@@ -108,6 +115,63 @@ carries it. Since #5461, a public client that sends `client_id` together with a
 `client_assertion` that is not a JWT receives `invalid_client`, because the
 assertion `iss` cannot match the `client_id`.
 
+**Standalone patient picker (W1b-3a A5, #5454; merged, not deployed).** When
+an app asks for `launch/patient` without an EHR launch handle, and a patient
+context would leave the user at least one `patient/` scope (their role
+ceilings and the client's allowed scopes both include one), the Entra callback
+issues **no code**. It stores a single-use `pick` document in
+`health-auth-grants` (600 s TTL) holding everything needed to issue the code
+later. It then sets a new `lhds_pk_{pick}` cookie (HttpOnly, SameSite=Lax,
+Secure on an https issuer, `Path={issuer path}/{tenant}/pick`; only its
+SHA-256 is stored) and redirects to `{issuer}/{tenant}/pick?req={pick}`. The
+page is server-rendered HTML with no JavaScript and no external assets. Every
+value in it is HTML-escaped, and it is sent with
+`content-security-policy: default-src 'none'; style-src 'unsafe-inline';
+form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
+`x-frame-options: DENY`, `cache-control: no-store` and
+`referrer-policy: no-referrer`. `GET` on the picker renders only the empty
+search form and ignores any `q` or `birthdate` in the URL. The search itself is
+a form `POST` (`action=search`, with `q` and an optional `birthdate`).
+A patient name and birth date are PHI, and a query string lands in the
+Front Door and App Gateway access logs; a POST body does not. A search POST
+passes the same pick, cookie and CSRF checks as a selection and re-renders
+with a fresh CSRF value. The search runs server-side as the user. Group
+membership is re-read through Graph on every request, as the refresh grant
+does. The AS calls `{tenant FHIR base}/Patient?name=…&_count=20` (server to
+FHIR, not through the browser) with a token it mints for that user:
+`sub_type` `user`, 60 s, `client_id` `lhds-patient-picker`, `idp_tid` = the
+user's own Entra tenant from sign-in, scope `user/Patient.rs` intersected with
+the user's role ceilings. A user whose roles
+no longer allow that scope sees a "not permitted" state with no search box and
+two buttons: Cancel, and **Continue without a patient** (operator decision on
+#5464). Continue is a `POST` with `action=continue` and passes the same pick,
+cookie and CSRF checks. It consumes the pick and issues the code exactly as the
+pre-picker flow did: the grant is recomputed with fresh roles and no patient.
+Every `patient/` scope is dropped, the other scopes (`openid`, `fhirUser`,
+`user/`, `offline_access`) are kept, and an empty result redirects
+`invalid_scope`. Continue is offered only in that state. A forged continue
+from a user who may search issues nothing and returns them to the picker. The
+choice is a form `POST` carrying a CSRF value that is rotated on every render,
+with only its hash stored. The AS checks that the pick exists, is unused, is
+unexpired and belongs to this tenant. It also checks the cookie, compares the
+CSRF value timing-safely, and confirms with `GET Patient/{id}` that this user
+can read the chosen patient. Only then does it consume the pick
+(etag-guarded) and issue a code. The grant is recomputed with the patient, so
+`patient/` scopes survive, and the token response carries `patient` and
+`need_patient_banner: true`. Cancel returns `error=access_denied` with the
+app's `state`. When `launch/patient` would grant no `patient/` scope, the
+picker is skipped and the code is issued as before. An EHR launch never shows
+it. Patient ids made only of dots (`.`, `..`) are refused wherever an id builds
+a URL: the fhirUser mapping, the launch `patient` and the picked patient.
+
+**Honest limit: the live search needs the FHIR edge.** The picker calls the
+tenant FHIR base the token audience names, and that edge does not exist yet
+(W1b-3a spec, G1). Until it does, every search ends in the
+"Patient search is unavailable: the tenant FHIR endpoint did not respond"
+state (HTTP 503, Cancel only). The AS never fabricates a patient. The flow is
+tested only against a fake `PatientSearch` and a fake `fetch`; no live receipt
+exists for any boundary.
+
 Two limits apply. First, deleting a mapping does not reach sessions already
 issued. A refresh carries the `fhirUser` stored at sign-in and does not re-read
 the mapping, so an existing refresh token keeps the old value until it expires
@@ -143,7 +207,7 @@ the spec requires S256 to be listed and `plain` never to be.
 
 | Flow | Request | AS behaviour | Token response / claims |
 |---|---|---|---|
-| Standalone, patient picked | `launch/patient` + `patient/...` scopes | After Entra sign-in, the AS shows a patient picker for the tenant. The picker searches with the **user's own** `user/Patient.rs` ceiling. A user without that ceiling cannot pick, so every `patient/` scope is dropped | `patient` = chosen id; `need_patient_banner: true`; `tenant` = tenant slug |
+| Standalone, patient picked | `launch/patient` + `patient/...` scopes | After Entra sign-in, the AS shows a patient picker for the tenant. The picker searches with the **user's own** `user/Patient.rs` ceiling. A user without that ceiling cannot pick; the picker says so and offers only Cancel (`access_denied`). When no `patient/` scope would be granted at all, there is no picker and the code is issued without a patient | `patient` = chosen id; `need_patient_banner: true`; `tenant` = tenant slug |
 | EHR launch | `launch` scope + `launch=<handle>` | The handle is minted by the Loom item editor (ADR-010:20). It is **single-use**, valid for 5 minutes or less, and bound to (tenant, Entra `oid`, `client_id`, patient, optional encounter / `fhirContext`). A different user, a different client, a second use or expiry is refused | `patient`, `encounter` when bound, `fhirContext` when bound, `need_patient_banner: false`, `tenant` |
 | Identity | `openid fhirUser` | `id_token` signed by the AS. `fhirUser` is the absolute URL of the Practitioner, Patient, RelatedPerson or Person the operator mapped to the Entra user in that tenant (Q5; the fhir-users admin routes, A12). **If no match exists, `fhirUser` is not granted.** Inventing a URL is forbidden | `id_token` |
 | Refresh | `offline_access` | A refresh token is issued only when at least one data scope is granted. **Every refresh re-runs the full mapping (A4)**, so a removed group membership shrinks the scopes at the next refresh. A refresh never adds scopes beyond the original grant | new `access_token`, `scope` |
@@ -484,11 +548,11 @@ leaves A7 unchanged (ADR-010:39-41).
 
 ### A12. Implementation record (W1-4 server half)
 
-Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `role-map.ts` loader over the JSON, `grant.ts`, `signer.ts`, `tokens.ts`, `backend-auth.ts`, `federation.ts`, `server.ts`, `cosmos.ts`). Tests: `test/auth-core.test.ts`, `test/auth-server.test.ts`.
+Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `role-map.ts` loader over the JSON, `grant.ts`, `signer.ts`, `tokens.ts`, `backend-auth.ts`, `federation.ts`, `server.ts`, `cosmos.ts`; the patient picker in `patient-search.ts` and `picker-page.ts`). Tests: `test/auth-core.test.ts`, `test/auth-server.test.ts`, `test/patient-picker.test.ts`, `test/cosmos-fhir-users.test.ts`.
 
 **Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
 
-**Not built, by design or dependency.** The standalone patient picker (needs a FHIR engine, W2, and a UI): `launch/patient` without an EHR launch handle grants no patient context, so every `patient/` scope is dropped. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). Not wired into `compose.ts` / `main.ts`, so no route is live. Gate-registry registration of the consent gate is a console change.
+**Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which does not exist yet, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). The AS routes, the picker included, are live on Commercial dev01 behind the Front Door `/auth/*` route (see the status note at the top). Gate-registry registration of the consent gate is a console change.
 
 **UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
 
