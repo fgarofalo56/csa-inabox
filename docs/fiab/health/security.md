@@ -62,6 +62,24 @@ document. No introspection, revocation, management or dynamic-registration
 endpoint is designed or advertised. Client registration has no surface in the
 PRP yet; see open question Q4.
 
+**Implemented discovery and protocol details (W1b-3a A1/A2, #5454; merged, not
+deployed).** The control plane serves `smart-configuration` both under the
+issuer path and at `/{tenant}/fhir/.well-known/smart-configuration`, the path a
+future FHIR edge forwards unchanged (the edge itself does not exist yet).
+id_tokens use a per-tenant OpenID issuer, `{issuer}/{tenant}`, whose document
+is `{issuer}/{tenant}/.well-known/openid-configuration`; `smart-configuration`
+names the same issuer. Access tokens keep the tenant-independent issuer that
+the PDP and the APIM `validate-jwt` pin, and the tenant-independent
+`{issuer}/.well-known/openid-configuration` is unchanged. `none` is advertised
+beside `private_key_jwt`. On the code and refresh grants a confidential client
+may omit `client_id` and is identified by its verified assertion `iss`
+(RFC 7523 section 3). A public client must send `client_id`, and a `client_id`
+that differs from the assertion `iss` is `invalid_client`. Discovery and JWKS
+responses carry `Access-Control-Allow-Origin: *`. The token endpoint sends it
+only to public clients. No response allows credentials. A launch
+`fhirContext` takes STU2.2 objects (a bare string becomes `{reference}`), and
+the token response carries it.
+
 ### A2. Scope grammar LHDS accepts
 
 `<compartment>/<type>.<perms>[?<constraint>]`

@@ -6,7 +6,7 @@
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
+import { SignJWT, createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAuthenticator } from '../src/middleware/auth.js';
 import { createAuthServer } from '../src/auth/server.js';
@@ -698,5 +698,257 @@ describe('token endpoint 500 is diagnosable from the log (#5410)', () => {
     // absence: the message is not in the response, and the assertion is never logged
     expect(JSON.stringify(res.json)).not.toContain('Forbidden');
     expect(JSON.stringify(logs)).not.toContain(assertion);
+  });
+});
+
+// ---- W1b-3a A1 + A2 (#5454): Inferno SMART STU2.2 protocol gaps ----
+
+/** A confidential app client (asymmetric, jwksUrl) and a signer for its RFC 7523 assertions. */
+async function confidentialApp(c: Ctx, id: string) {
+  const { publicKey, privateKey } = await generateKeyPair('ES384');
+  const jwksUrl = `https://${id}.client.test/jwks.json`;
+  c.jwksByUrl.set(jwksUrl, [{ ...(await exportJWK(publicKey)), kid: 'k1', alg: 'ES384' } as JWK]);
+  const r = await c.admin('POST', '/api/health/auth/clients', {
+    clientId: id, tenant: 'visn-01', clientType: 'app', displayName: id,
+    allowedScopes: ['user/*.cruds', 'patient/*.cruds'], redirectUris: ['https://app.test/cb'], jwksUrl,
+  });
+  expect(r.status).toBe(201);
+  const assertion = (o: { iss?: string; signWith?: CryptoKey } = {}) =>
+    new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' })
+      .setIssuer(o.iss ?? id).setSubject(o.iss ?? id).setAudience(`${ISSUER}/visn-01/token`)
+      .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120)
+      .sign(o.signWith ?? privateKey);
+  return { assertion };
+}
+
+/** Authorize + sign in as `client`; returns the code and the PKCE verifier. */
+async function codeFor(c: Ctx, client: string, scope = 'user/*.rs') {
+  const { verifier, challenge } = pkce();
+  const { redirect } = await c.authorizeAndLogin({ client, scope, challenge });
+  expect(redirect.searchParams.get('code'), `no code for ${client}: ${redirect}`).toBeTruthy();
+  return { code: redirect.searchParams.get('code')!, verifier };
+}
+
+describe('client identified by its assertion iss when client_id is absent (RFC 7523 s3, #5454 A1)', () => {
+  async function setup() {
+    const c = await boot();
+    await c.registerApp('app-1'); // public: no jwks
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return c;
+  }
+  const codeForm = (code: string, verifier: string, extra: Record<string, string>) => ({
+    grant_type: 'authorization_code', code, redirect_uri: 'https://app.test/cb', code_verifier: verifier, ...extra,
+  });
+
+  it('a confidential client with a valid assertion and NO client_id is issued a token (code and refresh grants)', async () => {
+    const c = await setup();
+    const conf = await confidentialApp(c, 'conf-1');
+    const { code, verifier } = await codeFor(c, 'conf-1', 'user/*.rs offline_access');
+    const r = await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion() }) });
+    // Breaks (401 invalid_client) on the pre-#5454 lookup by client_id alone: the input is a form with no client_id.
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect((await claims(c, r.json.access_token)).client_id).toBe('conf-1');
+    const rr = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', refresh_token: r.json.refresh_token, client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion() } });
+    expect(rr.status, JSON.stringify(rr.json)).toBe(200); // same fallback on the refresh grant
+  });
+
+  it('the assertion is still VERIFIED: a confidential client identified by iss but signed by a stranger key is refused', async () => {
+    const c = await setup();
+    const conf = await confidentialApp(c, 'conf-1');
+    const { code, verifier } = await codeFor(c, 'conf-1');
+    const stranger = await generateKeyPair('ES384');
+    const bad = await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion({ signWith: stranger.privateKey }) }) });
+    expect([bad.status, bad.json.error]).toEqual([401, 'invalid_client']); // breaks (200) if an iss-identified client skips verification
+    // Paired permit: the genuine key redeems the same (unconsumed) code.
+    expect((await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion() }) })).status).toBe(200);
+  });
+
+  it('SECURITY: a PUBLIC client named only by an unverified assertion iss is invalid_client; the same client with client_id succeeds', async () => {
+    const c = await setup();
+    const { code, verifier } = await codeFor(c, 'app-1');
+    const forger = await generateKeyPair('ES384');
+    const forged = await new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' })
+      .setIssuer('app-1').setSubject('app-1').setAudience(`${ISSUER}/visn-01/token`).setJti('j-forged')
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(forger.privateKey);
+    const r = await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_assertion_type: ASSERTION_TYPE, client_assertion: forged }) });
+    // Breaks (200) if the `!formId && !confidential` guard is removed: authenticateClient never checks a public
+    // client's assertion, so the forged iss alone would redeem the code. Mutation-proven RED in the W1b-3a PR.
+    expect([r.status, r.json.error]).toEqual([401, 'invalid_client']);
+    expect(r.json.access_token).toBeUndefined();
+    // Paired permit: the code was not consumed by the refusal, and the public client with client_id redeems it.
+    const ok = await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_id: 'app-1' }) });
+    expect(ok.status).toBe(200);
+  });
+
+  it('SECURITY: client_id different from the assertion iss is invalid_client, even when the assertion is valid', async () => {
+    const c = await setup();
+    const conf = await confidentialApp(c, 'conf-1');
+    const { code, verifier } = await codeFor(c, 'app-1');
+    // A genuine conf-1 assertion stapled to a public app-1 code: the two identities disagree.
+    const r = await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_id: 'app-1', client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion() }) });
+    // Breaks (200) if the client_id/iss mismatch check is removed: app-1 is public, so its client_id alone would
+    // pass and the conf-1 assertion would be silently ignored. Mutation-proven RED in the W1b-3a PR.
+    expect([r.status, r.json.error]).toEqual([401, 'invalid_client']);
+    // Paired permit: without the disagreeing assertion, the same code redeems.
+    expect((await c.call('POST', '/auth/visn-01/token', { form: codeForm(code, verifier, { client_id: 'app-1' }) })).status).toBe(200);
+  });
+});
+
+describe('CORS (#5454 A1)', () => {
+  it('token: ACAO * for a public client on success AND on an OAuth error; absent for a confidential client', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const pub = await flow(c, 'user/*.rs');
+    expect(pub.token!.status).toBe(200);
+    // Breaks (null) if the token endpoint never sets the header: Inferno cors_token_exchange fails on exactly that.
+    expect(pub.token!.headers.get('access-control-allow-origin')).toBe('*');
+    expect(pub.token!.headers.get('access-control-allow-credentials')).toBeNull(); // breaks if credentials are ever allowed
+    const replay = await c.exchange({ redirect: pub.redirect, verifier: pub.verifier! }); // used code => invalid_grant
+    expect(replay.json.error).toBe('invalid_grant');
+    expect(replay.headers.get('access-control-allow-origin')).toBe('*'); // breaks if the error path drops the header
+    const conf = await confidentialApp(c, 'conf-1');
+    const { code, verifier } = await codeFor(c, 'conf-1');
+    const r = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'authorization_code', code, redirect_uri: 'https://app.test/cb', code_verifier: verifier, client_assertion_type: ASSERTION_TYPE, client_assertion: await conf.assertion() } });
+    expect(r.status).toBe(200); // positive: the confidential exchange works ...
+    expect(r.headers.get('access-control-allow-origin')).toBeNull(); // ... and breaks ('*') if CORS is applied to every client
+  });
+
+  it('discovery, jwks and both openid-configuration documents carry ACAO *, never Allow-Credentials', async () => {
+    const c = await boot();
+    for (const p of ['/auth/jwks.json', '/auth/.well-known/openid-configuration', '/auth/visn-01/.well-known/smart-configuration',
+      '/auth/visn-01/.well-known/openid-configuration', '/visn-01/fhir/.well-known/smart-configuration']) {
+      const r = await c.call('GET', p);
+      expect(r.status, p).toBe(200);
+      expect(r.headers.get('access-control-allow-origin'), p).toBe('*'); // breaks (null) if this route is not CORS-enabled
+      expect(r.headers.get('access-control-allow-credentials'), p).toBeNull();
+    }
+  });
+
+  it('OPTIONS preflight: 204 with GET on discovery and POST on token; a non-CORS AS path is not answered', async () => {
+    const c = await boot();
+    const d = await fetch(`${c.url}/visn-01/fhir/.well-known/smart-configuration`, { method: 'OPTIONS' });
+    expect(d.status).toBe(204); // breaks (405) without the preflight branch
+    expect(d.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
+    expect(d.headers.get('access-control-allow-origin')).toBe('*');
+    const t = await fetch(`${c.url}/auth/visn-01/token`, { method: 'OPTIONS' });
+    expect(t.status).toBe(204);
+    expect(t.headers.get('access-control-allow-methods')).toBe('POST, OPTIONS'); // breaks if token advertises GET
+    expect(t.headers.get('access-control-allow-credentials')).toBeNull();
+    expect((await fetch(`${c.url}/auth/callback`, { method: 'OPTIONS' })).status).toBe(404); // not a CORS route: falls through
+  });
+});
+
+describe('discovery documents (#5454 A1 + A2)', () => {
+  it('the tenant-independent openid-configuration body is byte-identical to the #5160 contract', async () => {
+    const c = await boot();
+    const text = await (await fetch(`${c.url}/auth/.well-known/openid-configuration`)).text();
+    // Breaks if any field is added, removed, reordered or retargeted: APIM validate-jwt reads this document.
+    expect(text).toBe('{"issuer":"https://cp.test/auth","jwks_uri":"https://cp.test/auth/jwks.json"}');
+  });
+
+  it('the per-tenant openid-configuration carries the OIDC required fields with the per-tenant issuer', async () => {
+    const c = await boot();
+    const r = await c.call('GET', '/auth/visn-01/.well-known/openid-configuration');
+    expect(r.status).toBe(200);
+    // Breaks on any missing/extra field, on issuer = the tenant-independent one, or on an alg other than the signer's.
+    expect(r.json).toEqual({
+      issuer: `${ISSUER}/visn-01`,
+      authorization_endpoint: `${ISSUER}/visn-01/authorize`,
+      token_endpoint: `${ISSUER}/visn-01/token`,
+      jwks_uri: `${ISSUER}/jwks.json`,
+      response_types_supported: ['code'],
+      subject_types_supported: ['public'],
+      id_token_signing_alg_values_supported: ['ES384'],
+      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'],
+      token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'],
+      code_challenge_methods_supported: ['S256'],
+    });
+    expect((await c.call('GET', '/auth/visn-02/.well-known/openid-configuration')).status).toBe(400); // suspended tenant: no issuer document (T4)
+  });
+
+  it('smart-configuration advertises `none` and the per-tenant issuer', async () => {
+    const c = await boot();
+    const j = (await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).json;
+    expect(j.token_endpoint_auth_methods_supported).toEqual(['private_key_jwt', 'none']); // breaks if `none` is dropped
+    expect(j.issuer).toBe(`${ISSUER}/visn-01`); // breaks if it stays the tenant-independent issuer
+  });
+
+  it('the FHIR-base path serves the same smart-configuration; an unknown tenant there reads like the issuer path', async () => {
+    const c = await boot();
+    const viaFhir = await c.call('GET', '/visn-01/fhir/.well-known/smart-configuration');
+    const viaIssuer = await c.call('GET', '/auth/visn-01/.well-known/smart-configuration');
+    expect(viaFhir.status).toBe(200); // breaks (404 from the test host) if the AS does not claim the FHIR-base path
+    expect(viaFhir.json).toEqual(viaIssuer.json);
+    expect(viaFhir.json.token_endpoint).toBe(`${ISSUER}/visn-01/token`);
+    const unknownFhir = await c.call('GET', '/no-such/fhir/.well-known/smart-configuration');
+    const unknownIssuer = await c.call('GET', '/auth/no-such/.well-known/smart-configuration');
+    expect(unknownFhir.status).toBe(400); // breaks (200) if the FHIR-base route skips the active-tenant check
+    expect([unknownFhir.status, unknownFhir.json]).toEqual([unknownIssuer.status, unknownIssuer.json]);
+    // The AS owns only the discovery leaf under /{tenant}/fhir: everything else falls through to the host.
+    expect((await c.call('GET', '/visn-01/fhir/metadata')).status).toBe(404);
+  });
+
+  it('id_token iss equals the per-tenant openid-configuration issuer; the access token keeps the tenant-independent iss', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const t = (await flow(c, 'openid user/*.rs')).token!;
+    const oidc = (await c.call('GET', '/auth/visn-01/.well-known/openid-configuration')).json;
+    const jwks = createLocalJWKSet((await c.call('GET', '/auth/jwks.json')).json);
+    // Breaks (JWTClaimValidationFailed) if the id_token keeps iss = ISSUER.
+    const id = (await jwtVerify(t.json.id_token, jwks, { issuer: oidc.issuer, audience: 'app-1' })).payload;
+    expect(id.iss).toBe(`${ISSUER}/visn-01`);
+    expect(decodeJwt(t.json.access_token).iss).toBe(ISSUER); // breaks if the access-token iss moves too (the PDP pins it)
+  });
+});
+
+describe('fhirContext objects (SMART STU2.2, #5454 A1)', () => {
+  async function setup() {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return c;
+  }
+  const launch = (c: Ctx, fhirContext: unknown) =>
+    c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'pat-1', ...(fhirContext === undefined ? {} : { fhirContext }) });
+
+  it('a bare string becomes {reference}; objects pass through; both are EMITTED in the token and refresh responses', async () => {
+    const c = await setup();
+    const obj = { canonical: 'http://example.org/Questionnaire/q1|1.0', type: 'Questionnaire', role: 'http://example.org/role/x' };
+    const l = await launch(c, ['Observation/obs-1', obj]);
+    expect(l.status).toBe(201);
+    const t = (await flow(c, 'launch patient/*.rs offline_access', { launch: l.json.data.launch })).token!;
+    expect(t.status).toBe(200);
+    // Breaks if the field is not emitted (undefined: the pre-#5454 behaviour), or if the string is emitted unconverted.
+    expect(t.json.fhirContext).toEqual([{ reference: 'Observation/obs-1' }, obj]);
+    const rr = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: t.json.refresh_token } });
+    expect(rr.status).toBe(200);
+    expect(rr.json.fhirContext).toEqual(t.json.fhirContext); // breaks if the refresh grant drops the context
+  });
+
+  it('a launch without fhirContext emits none; an object with none of reference/canonical/identifier is refused', async () => {
+    const c = await setup();
+    const l = await launch(c, undefined);
+    const t = (await flow(c, 'launch patient/*.rs', { launch: l.json.data.launch })).token!;
+    expect(t.status).toBe(200); // positive control for the absence below
+    expect(t.json.fhirContext).toBeUndefined();
+    expect((await launch(c, [{ type: 'Observation' }])).status).toBe(400); // breaks (201) without the at-least-one refine
+    expect((await launch(c, [{ reference: 'x'.repeat(201) }])).status).toBe(400); // breaks if the 200-char bound is lost
+    expect((await launch(c, [{ identifier: { system: 'urn:x', value: 'v1' } }])).status).toBe(201); // paired permit
+  });
+
+  it('a stored pre-STU2.2 string fhirContext is normalised to {reference} on read', async () => {
+    const c = await setup();
+    const l = await launch(c, ['Observation/obs-1']);
+    // Rewrite the stored launch doc to the legacy string shape a pre-#5454 CP wrote.
+    const doc = [...c.stores.grants.docs.values()].find((d: any) => d.kind === 'launch') as any;
+    c.stores.grants.docs.set(doc.id, { ...doc, fhirContext: ['Encounter/enc-9'] } as never);
+    const t = (await flow(c, 'launch patient/*.rs', { launch: l.json.data.launch })).token!;
+    expect(t.json.fhirContext).toEqual([{ reference: 'Encounter/enc-9' }]); // breaks (['Encounter/enc-9']) without normalizeFhirContext
   });
 });
