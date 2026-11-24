@@ -14,6 +14,8 @@ on:
       - 'apps/loom-health-pdp/**'
       - 'apps/loom-health-fhir/**'
       - 'platform/fiab/bicep/modules/health/**'
+      - 'platform/fiab/bicep/health.bicep'
+      - '.github/workflows/deploy-health.yml'
       - '.github/workflows/health-cp-test.yml'
   push:
     branches: [main]
@@ -22,6 +24,8 @@ on:
       - 'apps/loom-health-pdp/**'
       - 'apps/loom-health-fhir/**'
       - 'platform/fiab/bicep/modules/health/**'
+      - 'platform/fiab/bicep/health.bicep'
+      - '.github/workflows/deploy-health.yml'
       - '.github/workflows/health-cp-test.yml'
   workflow_dispatch: {}
 
