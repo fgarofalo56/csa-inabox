@@ -19,7 +19,7 @@ name: lhds fhir crud probe
 #   3. probe    mint a WRITER token (system/*.cruds, role fhir-data-writer) for tenant A and a READER token (system/*.rs) for tenant B,
 #               write a probe script and the two token files (0600, header-file form) to a private temp dir, and run ONE
 #               `az aks command invoke` with `--file` so no token is ever on a command line. The aks-command pod curls each engine's
-#               ClusterIP Service (http://fhir-<slug>.loom-health.svc.cluster.local:80/fhir; engines have no NetworkPolicy). Only
+#               ClusterIP Service (http://fhir-<slug>.loom-health.svc.cluster.local:80/fhir; each engine's NetworkPolicy admits the aks-command namespace, #5441). Only
 #               `PROBE step=<n> status=<code>` lines are read back; the temp dir is deleted in a finally.
 #   4. cleanup  (always) disable the minted clients, then destroy ONLY the tenants create recorded as owned.
 #

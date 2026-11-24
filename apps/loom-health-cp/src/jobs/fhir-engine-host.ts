@@ -90,8 +90,54 @@ function envList(env: Record<string, string>): Array<{ name: string; value: stri
     .map((name) => ({ name, value: env[name] as string }));
 }
 
-/** ServiceAccount + Deployment + Service of one tenant engine, as a kubectl `List` (JSON is valid YAML). */
-export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: string; namespace: string }): string {
+/** One admitted ingress peer: a `from` entry of the engine NetworkPolicy. Selectors are required so no peer can widen to "every pod". */
+export interface IngressPeer {
+  namespaceSelector: { matchLabels: Record<string, string> };
+  podSelector?: { matchLabels: Record<string, string> };
+}
+
+/**
+ * Peers admitted to an engine today (#5441). Measured 2026-11-23:
+ *  - `aks-command`: the pod `az aks command invoke` / ARM runCommand starts, where the B3 CRUD probe curls the engine Service
+ *    (.github/workflows/lhds-fhir-crud-probe.yml:21,268).
+ *  - `kube-system` konnectivity-agent: the CP's probeEngine reads /metadata through the API server service proxy, and AKS tunnels
+ *    API-server-to-pod traffic through konnectivity-agent. NOT verified live against a policy yet: the live-verify plan is the probe
+ *    (engine_probe ready=true) after the CP roll; a wrong label shows up as ready=false, never as an opened door.
+ * No in-cluster ingress controller exists in the stamp bicep (only an ILB address is reserved, network.bicep:67; nothing deploys a
+ * controller or an Ingress), so no edge peer is admitted today. The edge (#5410) is added through `edgePeers`, never by widening these.
+ */
+export const COMMAND_NAMESPACE = 'aks-command';
+export const ENGINE_INGRESS_PEERS: readonly IngressPeer[] = [
+  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': COMMAND_NAMESPACE } } },
+  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
+];
+
+/**
+ * The NetworkPolicy of one engine: ingress only, from the peers above, to the engine container port only, selecting only THIS tenant's pods.
+ * Egress is deliberately NOT restricted: PostgreSQL is reached by FQDN into a delegated subnet whose CIDR the control plane is not given,
+ * and workload identity needs login.microsoftonline.com, an FQDN a k8s NetworkPolicy cannot express (it needs Cilium FQDN policy, ACNS, paid).
+ * A guessed CIDR would break the live CRUD path, so egress stays open and that is disclosed in docs/fiab/health/security.md.
+ */
+export function renderEngineNetworkPolicy(o: { name: string; tenantId: string; namespace: string; labels: Record<string, string>; edgePeers?: readonly IngressPeer[] }): Record<string, unknown> {
+  const peers = [...ENGINE_INGRESS_PEERS, ...(o.edgePeers ?? [])];
+  for (const p of peers) {
+    if (Object.keys(p.namespaceSelector?.matchLabels ?? {}).length === 0) throw new JobFailure('network_policy_peer_unscoped', 'refusing an ingress peer with an empty namespace selector: it would admit every namespace');
+    if (p.podSelector && Object.keys(p.podSelector.matchLabels ?? {}).length === 0) throw new JobFailure('network_policy_peer_unscoped', 'refusing an ingress peer with an empty pod selector: it would admit every pod in the namespace');
+  }
+  return {
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: { name: o.name, namespace: o.namespace, labels: o.labels },
+    spec: {
+      podSelector: { matchLabels: { app: o.name, 'loom.health/tenant': o.tenantId } },
+      policyTypes: ['Ingress'],
+      ingress: [{ from: peers, ports: [{ protocol: 'TCP', port: ENGINE_PORT }] }],
+    },
+  };
+}
+
+/** ServiceAccount + Deployment + Service + NetworkPolicy of one tenant engine, as a kubectl `List` (JSON is valid YAML). */
+export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: string; namespace: string; edgePeers?: readonly IngressPeer[] }): string {
   const { workloadName: name } = fhirNames(cfg.tenantId);
   const labels = { app: name, 'app.kubernetes.io/managed-by': 'loom-health-cp', 'loom.health/tenant': cfg.tenantId };
   const list = {
@@ -145,6 +191,7 @@ export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: stri
         metadata: { name, namespace: o.namespace, labels },
         spec: { type: 'ClusterIP', selector: { app: name }, ports: [{ name: 'http', port: SERVICE_PORT, targetPort: 'http' }] },
       },
+      renderEngineNetworkPolicy({ name, tenantId: cfg.tenantId, namespace: o.namespace, labels, edgePeers: o.edgePeers }),
     ],
   };
   return JSON.stringify(list);
@@ -583,9 +630,9 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async removeEngine(tenantId: string): Promise<void> {
     const t = await this.resolve(tenantId);
     const name = fhirNames(tenantId).workloadName;
-    const del = await this.o.run.run(t, `kubectl delete deployment/${name} service/${name} serviceaccount/${name} -n ${this.ns} --ignore-not-found --wait=true --timeout=120s`);
+    const del = await this.o.run.run(t, `kubectl delete deployment/${name} service/${name} serviceaccount/${name} networkpolicy/${name} -n ${this.ns} --ignore-not-found --wait=true --timeout=120s`);
     if (del.exitCode !== 0) throw this.failure('engine_remove_failed', `removing the engine workload ${name} failed`, del);
-    const left = await this.o.run.run(t, `kubectl get deployment/${name} service/${name} serviceaccount/${name} -n ${this.ns} --ignore-not-found -o name`);
+    const left = await this.o.run.run(t, `kubectl get deployment/${name} service/${name} serviceaccount/${name} networkpolicy/${name} -n ${this.ns} --ignore-not-found -o name`);
     if (left.exitCode !== 0) throw this.failure('engine_remove_failed', `reading back the removal of ${name} failed`, left);
     if (left.logs.trim() !== '') {
       throw new JobFailure('teardown_incomplete', `after removal ${excerpt(left.logs, 200)} is still present in ${this.ns}; the tenant database was NOT touched. Retry the job.`);

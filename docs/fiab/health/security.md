@@ -441,3 +441,13 @@ Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `ro
 **UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
 
 **Consequence of the intersection rule worth knowing.** A wildcard request (`user/*.cruds`) against a client allow-list naming specific types (`user/Patient.rs`) grants nothing, because rule 2 matches a `*` request only to a `*` ceiling. Register `*` allow-lists, or have apps request typed scopes.
+
+## Per-tenant FHIR engine NetworkPolicy (#5441)
+
+Each engine gets a `networking.k8s.io/v1` NetworkPolicy named like the engine (`fhir-<slug>`), applied in the same `kubectl apply` and deleted in the same teardown (`removeEngine`). The stamp AKS runs Cilium (`aks.bicep:217-219`), which enforces it.
+
+- **Selects** only that tenant's pods (`app` and `loom.health/tenant`), so no other engine in `loom-health` is reachable through it.
+- **Ingress**, TCP 8080 only (the container port, not Service port 80), from: the `aks-command` namespace (runCommand pods, including the B3 CRUD probe) and `kube-system` pods labelled `app=konnectivity-agent` (the API server service proxy that `probeEngine` uses for `/metadata`). Every peer carries a non-empty selector; an unscoped peer is refused at render time.
+- **Edge**: no in-cluster ingress controller exists in the stamp bicep today (only an ILB address is reserved), so none is admitted. The APIM edge (#5410) is added through the `edgePeers` option of `renderEngineManifest`, not by widening the base peers.
+- **Egress is NOT restricted.** PostgreSQL is reached by FQDN in a delegated subnet whose CIDR the control plane is not given, and workload identity needs `login.microsoftonline.com`; a Kubernetes NetworkPolicy cannot express an FQDN (Cilium FQDN policy needs paid ACNS). A guessed CIDR would break the live CRUD path. Requests remain gated by the PDP interceptor.
+- **Not verified live yet**: the konnectivity-agent label. After the CP roll, `probeEngine` must still report `ready=true` and `lhds-fhir-crud-probe.yml` must pass 7/7.
