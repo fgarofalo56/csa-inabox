@@ -140,6 +140,19 @@ The loom-health-cp vitest suite is green locally (579). It runs in no CI (#5396)
 - The reactor-netty watch item (#5439) is answered live: the engine served the full CRUD path.
 - GCC-High is NOT exercised (#5123). IL5 and DoD are supported-in-code only.
 
-Follow-ups: a reserved partition-name deny list; an ensureRole interruption test. | 2026-11-23 |
+**2026-11-24: auto-bind and the engine NetworkPolicy are DEPLOYED and VERIFIED on Commercial dev01.**
+- #5453 `1fca52d49` + #5457 `48ca82d65` (#5442): a new health tenant chains `fhir-tenant.create`, the console ensure self-heals a missing engine, and `tenant.destroy` tears the engine down first, with an `allowMissingEngine` escape hatch. Engine-affecting jobs are serialized per tenant.
+- #5452 `5581e3348` (#5441): a NetworkPolicy beside each engine admits ingress on 8080 only from `aks-command` and kube-system `konnectivity-agent`. Egress is open (disclosed).
+- The first live run found two lane-contract defects, both fixed by #5457:
+  - the probe's own create raced the chained job, giving `readback_mismatch`;
+  - an unpolled G1 destroy during an engine create leaked `g1-202611240229` (cleaned by run 45314307119; root cause unproven).
+- Receipts:
+  - CRUD probe 45319268679 7/7;
+  - G1 45319272128 6/6;
+  - `engine.probe ready=true` through the API-server proxy under the policy;
+  - ARM read-back: 0 leftover tenant resources.
+- NOT done: the negative cross-namespace NetworkPolicy check. #5458: the exclusion is in-process only and maxReplicas is 2.
+
+Follow-ups: a reserved partition-name deny list; an ensureRole interruption test. | 2026-11-24 |
 | W2-3 PDP + audit interceptors | merged | feat/lhds-w2-3-interceptors | sonnet | #5310 = `da67b2691`, merged, not deployed (wired into an engine only by W2-2). Two review rounds: an update-over-existing bypass was found and fixed, and the plugin CI lane `health-fhir-plugin-test.yml` was added (125 mvn tests). Built against the frozen contract ahead of W2-2; the assumptions are in the PR body. Follow-ups #5316, including the real-JPA hook receipt. 2026-11-16: #5337 = `ecc04ce52` merged, not deployed. Bundle.total is kept only for unconstrained wildcard read scopes. Audit gets a sink-failure counter + an alert, DSYNC, returned/hidden patient ids, and an XFF trusted only from `LOOM_HEALTH_TRUSTED_PROXIES`. The image-contract test is fixed. 138 mvn tests; 8 mutations RED. Remainders: typed `_getpages` is still denied; no real-OPA test yet (#5340). **Operator decision 2026-11-16: audit FAILS CLOSED before real PHI** (#5339); today it is fail-open + alerted, shipped in #5310. | 2026-11-17 |
 | W2-5 log scrubber + sentinel | merged | feat/lhds-w2-5-scrubber | sonnet | #5312 = `ea0098278`, merged, not deployed. Real-HAPI capture fixture; the sentinel is visible unscrubbed in 4 channels and absent after scrubbing (22 tests). Image producer row added. The sidecar wiring beside the engine is NOT built (README). | 2026-11-15 |
