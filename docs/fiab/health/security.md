@@ -129,12 +129,19 @@ value in it is HTML-escaped, and it is sent with
 `content-security-policy: default-src 'none'; style-src 'unsafe-inline';
 form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
 `x-frame-options: DENY`, `cache-control: no-store` and
-`referrer-policy: no-referrer`. The search (`GET` with `q` and an optional
-`birthdate`) runs server-side as the user. Group membership is re-read through
-Graph on every request, as the refresh grant does. The AS calls
-`{tenant FHIR base}/Patient?name=…&_count=20` with a token it mints for that
-user: `sub_type` `user`, 60 s, `client_id` `lhds-patient-picker`, scope
-`user/Patient.rs` intersected with the user's role ceilings. A user whose roles
+`referrer-policy: no-referrer`. `GET` on the picker renders only the empty
+search form and ignores any `q` or `birthdate` in the URL. The search itself is
+a form `POST` (`action=search`, with `q` and an optional `birthdate`).
+A patient name and birth date are PHI, and a query string lands in the
+Front Door and App Gateway access logs; a POST body does not. A search POST
+passes the same pick, cookie and CSRF checks as a selection and re-renders
+with a fresh CSRF value. The search runs server-side as the user. Group
+membership is re-read through Graph on every request, as the refresh grant
+does. The AS calls `{tenant FHIR base}/Patient?name=…&_count=20` (server to
+FHIR, not through the browser) with a token it mints for that user:
+`sub_type` `user`, 60 s, `client_id` `lhds-patient-picker`, `idp_tid` = the
+user's own Entra tenant from sign-in, scope `user/Patient.rs` intersected with
+the user's role ceilings. A user whose roles
 no longer allow that scope sees a "not permitted" state with only Cancel. The
 choice is a form `POST` carrying a CSRF value that is rotated on every render,
 with only its hash stored. The AS checks that the pick exists, is unused, is

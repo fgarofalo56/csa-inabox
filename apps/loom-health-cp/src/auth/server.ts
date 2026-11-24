@@ -590,7 +590,8 @@ export function createAuthServer(deps: AuthServerDeps) {
     new PickRefused(400, 'This patient selection is no longer valid', 'It expired, was already used, or was started in another browser. Return to the app and sign in again.');
   const PICK_ID = /^[A-Za-z0-9_-]{32}$/;
 
-  const patientSearch: PatientSearch = deps.patientSearch ?? createFhirPatientSearch({
+  /** The search for ONE pick: the default mints its token with that user's own Entra tid, as user tokens carry. */
+  const searchFor = (doc: GrantDoc): PatientSearch => deps.patientSearch ?? createFhirPatientSearch({
     fhirBaseFor: deps.fhirBaseFor,
     ...(deps.fetchFhir ? { fetch: deps.fetchFhir } : {}),
     token: async (tenant, oid, roles) => {
@@ -603,7 +604,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         tenant,
         subType: 'user',
         sub: oid,
-        idpTid: deps.entraTenantId,
+        idpTid: doc.idpTid as string,
         clientId: PICKER_CLIENT_ID,
         scope: scope.map(serializeScope),
         roles: [...roles],
@@ -665,17 +666,29 @@ export function createAuthServer(deps: AuthServerDeps) {
   }
   const ROLES_UNAVAILABLE: PickerState = { kind: 'error', heading: 'Your roles could not be checked', message: 'Role membership in this tenant could not be established. Try again, or cancel to return to the app.' };
 
+  /**
+   * GET renders the empty search form only. Search terms are patient identifiers (PHI): they travel in a POST body,
+   * never a query string, which Front Door / App Gateway access logs would record. Any `q`/`birthdate` here is ignored.
+   */
   async function pickGet(res: ServerResponse, tenant: string, q: URLSearchParams, cookieHeader: string | undefined): Promise<number> {
     const doc = await loadPick(tenant, q.get('req') ?? '', cookieHeader);
-    const query = { name: (q.get('q') ?? '').trim(), birthdate: (q.get('birthdate') ?? '').trim() };
+    const roles = await pickRoles(doc);
+    if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE);
+    if (pickerScope(roles).length === 0) return showPicker(res, doc, 403, { kind: 'not-permitted' });
+    return showPicker(res, doc, 200, { kind: 'start' });
+  }
+
+  /** `action=search` POST, after the pick, cookie and CSRF checks in pickPost. Re-renders with a fresh CSRF. */
+  async function pickSearch(res: ServerResponse, doc: GrantDoc, form: URLSearchParams): Promise<number> {
+    const tenant = doc.tenant;
+    const query = { name: (form.get('q') ?? '').trim(), birthdate: (form.get('birthdate') ?? '').trim() };
     const roles = await pickRoles(doc);
     if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE, query);
     if (pickerScope(roles).length === 0) return showPicker(res, doc, 403, { kind: 'not-permitted' }, query);
-    if (!q.has('q')) return showPicker(res, doc, 200, { kind: 'start' });
     if (!query.name || query.name.length > 100) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Enter a patient name of 1 to 100 characters.' }, query);
     if (query.birthdate && !FHIR_DATE.test(query.birthdate)) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Enter the birth date as YYYY-MM-DD.' }, query);
     try {
-      const patients = await patientSearch.search(tenant, doc.oid as string, roles, { name: query.name, ...(query.birthdate ? { birthdate: query.birthdate } : {}) });
+      const patients = await searchFor(doc).search(tenant, doc.oid as string, roles, { name: query.name, ...(query.birthdate ? { birthdate: query.birthdate } : {}) });
       return showPicker(res, doc, 200, patients.length ? { kind: 'results', patients } : { kind: 'empty' }, query);
     } catch (e) {
       if (!(e instanceof PatientSearchUnavailableError)) throw e;
@@ -707,6 +720,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         throw e;
       }
     };
+    if (form.get('action') === 'search') return pickSearch(res, doc, form);
     if (form.get('action') === 'cancel') {
       await consume();
       return back({ error: 'access_denied', error_description: 'no patient was selected' });
@@ -719,7 +733,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     // The posted id is only a claim: the user must be able to READ that patient, as themselves, right now.
     let seen;
     try {
-      seen = await patientSearch.read(tenant, doc.oid as string, roles, patient);
+      seen = await searchFor(doc).read(tenant, doc.oid as string, roles, patient);
     } catch (e) {
       if (!(e instanceof PatientSearchUnavailableError)) throw e;
       deps.log('auth.pick_search_unavailable', { reason: e.reason });

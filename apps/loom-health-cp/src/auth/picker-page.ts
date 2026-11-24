@@ -109,16 +109,16 @@ function patientRow(p: PatientSummary, i: number): string {
 <span class="who"><span class="name">${escapeHtml(p.name || '(no name recorded)')}</span><span class="meta">${escapeHtml(meta)}</span></span></label></li>`;
 }
 
-/** The picker: search form (GET) and, in a separate POST form, the results or the state message plus Continue/Cancel. */
+/** The picker: search form (POST action=search: search terms are PHI and stay out of URLs) and, in a second POST form, the results or the state message plus Continue/Cancel. */
 export function renderPicker(v: PickerView): string {
   const s = v.state;
   const canSearch = s.kind !== 'not-permitted';
   const search = canSearch
-    ? `<form method="get" action="${escapeHtml(v.action)}" class="search" role="search" aria-label="Search patients">
-<input type="hidden" name="req" value="${escapeHtml(v.req)}">
+    ? `<form method="post" action="${escapeHtml(v.action)}" class="search" role="search" aria-label="Search patients">
+<input type="hidden" name="req" value="${escapeHtml(v.req)}"><input type="hidden" name="csrf" value="${escapeHtml(v.csrf)}">
 <div><label for="q">Patient name</label><input id="q" name="q" type="search" value="${escapeHtml(v.query.name)}" maxlength="100" required autocomplete="off"></div>
 <div><label for="birthdate">Birth date <span class="opt">(optional)</span></label><input id="birthdate" name="birthdate" type="date" value="${escapeHtml(v.query.birthdate)}"></div>
-<button type="submit">Search</button></form>`
+<button type="submit" name="action" value="search">Search</button></form>`
     : '';
   let middle = '';
   let canContinue = false;

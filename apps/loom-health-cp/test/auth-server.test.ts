@@ -1249,6 +1249,12 @@ describe('standalone patient picker (#5454 A5)', () => {
   const pickPath = (req: string, query = '') => `/auth/visn-01/pick?req=${req}${query}`;
   const csrfOf = (html: string): string => /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '';
   const codes = (c: Ctx) => [...c.stores.grants.docs.values()].filter((d: any) => d.kind === 'code').length;
+  /** Render the empty form (GET), then search as the form does: POST action=search with the page's CSRF. */
+  async function searchVia(c: Ctx, s: { req: string; cookie: string }, q: string) {
+    const csrf = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+    return c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, action: 'search', q } });
+  }
+  const LOCKDOWN_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
   it('a standalone launch/patient sign-in goes to the picker with no code, and sets a path-scoped HttpOnly cookie', async () => {
     const { c } = await setup();
@@ -1269,25 +1275,50 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(start.status).toBe(200);
     expect(start.text).toContain('<label for="q">Patient name</label>');
     expect(search.calls).toEqual([]); // no query yet: nothing searched
-    const r = await c.page('GET', pickPath(s.req, '&q=a'), { cookie: s.cookie });
+    const r = await searchVia(c, s, 'a');
     expect(r.status).toBe(200);
     expect(search.calls).toEqual([`search visn-01 ${USER} a`]); // breaks if the search is not bound to the signed-in oid
+    expect(r.text).toContain('<form method="post" action="/auth/visn-01/pick" class="search"'); // the form never GETs terms
     // Breaks if the name is interpolated raw: the literal <script> would appear.
     expect(r.text).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; O&#39;Brien');
     expect(r.text).not.toContain('<script');
     expect(r.text).toContain('value="pat-1"'); // positive: the visible patient is offered
     expect(r.text).toContain('type="radio"');
-    expect(r.headers.get('content-security-policy')).toBe("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP);
     expect(r.headers.get('x-frame-options')).toBe('DENY');
     expect(r.headers.get('cache-control')).toBe('no-store');
     expect(r.headers.get('referrer-policy')).toBe('no-referrer');
     expect(r.headers.get('content-type')).toBe('text/html; charset=utf-8');
   });
 
+  it('search terms never travel in a URL: a GET with ?q= does not search or echo; search POST needs the cookie and CSRF', async () => {
+    const { c, search } = await setup();
+    const s = await signIn(c);
+    const leak = 'Zebedee-1970';
+    const g = await c.page('GET', pickPath(s.req, `&q=${leak}&birthdate=1970-01-02`), { cookie: s.cookie });
+    expect(g.status).toBe(200);
+    expect(search.calls).toEqual([]); // breaks if GET still searches: PHI in the query string reaches edge access logs
+    expect(g.text).not.toContain(leak); // breaks if the query value is echoed back into the form
+    expect(g.text).not.toContain('1970-01-02');
+    expect(g.text).toContain('name="q" type="search" value=""'); // positive: the empty search form IS rendered
+    const csrf = csrfOf(g.text);
+    const form = { req: s.req, csrf, action: 'search', q: 'ada' };
+    const noCookie = await c.page('POST', '/auth/visn-01/pick', { form });
+    expect([noCookie.status, noCookie.text.includes('Ada Smith')]).toEqual([400, false]);
+    const badCsrf = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { ...form, csrf: 'A'.repeat(32) } });
+    expect([badCsrf.status, badCsrf.text.includes('Ada Smith')]).toEqual([400, false]);
+    expect(search.calls).toEqual([]); // neither refused POST reached the search
+    const ok = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form });
+    expect(ok.status).toBe(200);
+    expect(ok.text).toContain('Ada Smith'); // paired permit: same form with cookie + CSRF searches
+    expect(search.calls).toEqual([`search visn-01 ${USER} ada`]);
+    expect(csrfOf(ok.text)).not.toBe(csrf); // re-rendered with a fresh CSRF
+  });
+
   it('a valid pick issues a code whose token carries the patient and KEEPS patient/ scopes; without launch/patient they are dropped', async () => {
     const { c, search } = await setup();
     const s = await signIn(c);
-    const csrf = csrfOf((await c.page('GET', pickPath(s.req, '&q=ada'), { cookie: s.cookie })).text);
+    const csrf = csrfOf((await searchVia(c, s, 'ada')).text);
     const post = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1', action: 'select' } });
     expect(post.status).toBe(302);
     const back = new URL(post.headers.get('location')!);
@@ -1318,7 +1349,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     await c.tenants.create({ id: 'visn-03', displayName: 'V3', status: 'active', stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' });
     const s = await signIn(c);
     const other = await signIn(c); // a second pending pick in the same browser: its cookie is valid, but for ITS pick
-    const csrf = csrfOf((await c.page('GET', pickPath(s.req, '&q=ada'), { cookie: s.cookie })).text);
+    const csrf = csrfOf((await searchVia(c, s, 'ada')).text);
     expect(csrf).toMatch(/^[A-Za-z0-9_-]{32}$/);
     const form = { req: s.req, csrf, patient: 'pat-1', action: 'select' };
     const post = (o: { cookie?: string; form?: Record<string, string>; path?: string }) =>
@@ -1327,6 +1358,8 @@ describe('standalone patient picker (#5454 A5)', () => {
     const noCookie = await post({});
     expect([noCookie.status, noCookie.headers.get('location')]).toEqual([400, null]); // breaks if the cookie binding is not checked
     expect(noCookie.text).toContain('This patient selection is no longer valid');
+    expect(noCookie.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the refusal page is locked down too
+    expect(noCookie.headers.get('x-frame-options')).toBe('DENY');
     expect((await post({ cookie: `lhds_pk_${s.req}=${other.cookie.split('=')[1]}` })).status).toBe(400); // another pick's secret under this name
     const badCsrf = await post({ cookie: s.cookie, form: { ...form, csrf: 'A'.repeat(32) } });
     expect([badCsrf.status, badCsrf.headers.get('location')]).toEqual([400, null]); // breaks if the CSRF value is not compared
@@ -1403,8 +1436,14 @@ describe('standalone patient picker (#5454 A5)', () => {
     }) as typeof fetch;
     const { c } = await setup({ fetchFhir });
     const s = await signIn(c);
-    const r = await c.page('GET', pickPath(s.req, '&q=smith'), { cookie: s.cookie });
+    // The callback only admits identity.tid === entraTenantId, so in the flow the two are equal and a test could not
+    // tell which one the token used. Give the stored pick a DISTINCT tid: breaks if the token takes deps.entraTenantId.
+    const PICK_TID = 'cccccccc-0000-0000-0000-00000000000c';
+    c.stores.grants.docs.set(s.req, { ...(c.stores.grants.docs.get(s.req) as any), idpTid: PICK_TID } as never);
+    const r = await searchVia(c, s, 'smith');
     expect(r.status).toBe(503);
+    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the 503 state goes through sendHtml too
+    expect(r.headers.get('x-frame-options')).toBe('DENY');
     expect(r.text).toContain('Patient search is unavailable');
     expect(r.text).toContain('The tenant FHIR endpoint did not respond');
     expect(r.text).not.toContain('type="radio"'); // breaks if any patient is rendered without a FHIR answer
@@ -1412,6 +1451,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(seen.map((x) => x.url)).toEqual([`${fhir('visn-01')}/Patient?name=smith&_count=20`]);
     const tok = await claims(c, seen[0]!.auth.replace(/^Bearer /, ''));
     expect([tok.sub, tok.sub_type, tok.scope, tok.client_id, tok.aud, tok.exp - tok.iat]).toEqual([USER, 'user', 'user/Patient.rs', 'lhds-patient-picker', fhir('visn-01'), 60]);
+    expect(tok.idp_tid).toBe(PICK_TID); // the user's own tid from sign-in
     // A POST while FHIR is down issues nothing either.
     const csrf = csrfOf(r.text);
     const post = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1' } });
@@ -1423,7 +1463,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     const { c, search } = await setup();
     const s = await signIn(c);
     c.graph.members.set(USER, new Set()); // membership removed between sign-in and the pick
-    const r = await c.page('GET', pickPath(s.req, '&q=ada'), { cookie: s.cookie });
+    const r = await searchVia(c, s, 'ada');
     expect(r.status).toBe(403);
     expect(r.text).toContain('You are not permitted to search patients in this tenant');
     expect(r.text).not.toContain('name="q"'); // no search box in this state
