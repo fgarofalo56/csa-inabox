@@ -53,5 +53,13 @@ export interface JobHandler {
   kind: string;
   subjectType: SubjectType;
   inputSchema?: ZodType<Record<string, unknown>>;
+  /**
+   * Jobs of handlers sharing this group name never run at the same time for the SAME subject (#5442): a queued job waits for the
+   * running one to finish (or its lease to expire). Used for everything that changes a tenant's stamp resources or its FHIR engine.
+   */
+  exclusiveGroup?: string;
   run(ctx: JobContext): Promise<void>;
 }
+
+/** The exclusive group of every job that changes a tenant's stamp resources or its FHIR engine (see JobHandler.exclusiveGroup). */
+export const TENANT_ENGINE_GROUP = 'tenant-engine';

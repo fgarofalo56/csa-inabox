@@ -161,3 +161,86 @@ describe('JobRunner', () => {
     expect(ran).toBe(true);
   });
 });
+
+describe('JobRunner exclusive groups (#5442)', () => {
+  /** A handler that records how many jobs of its kind are inside run() at once, and waits for `release`. */
+  function gated(kind: string, group: string | undefined, log: { inside: number; max: number; started: string[] }, gate: { open: () => void; wait: Promise<void> }) {
+    return {
+      kind, subjectType: 'tenant' as const, ...(group ? { exclusiveGroup: group } : {}),
+      async run(ctx: { job: { id: string } }) {
+        log.inside++; log.max = Math.max(log.max, log.inside); log.started.push(kind);
+        await gate.wait;
+        log.inside--;
+      },
+    };
+  }
+  const gate = () => { let open!: () => void; const wait = new Promise<void>((r) => { open = r; }); return { open, wait }; };
+  const tenantReq = (kind: string, key: string, subjectId = 't1') => ({ kind, subjectType: 'tenant' as const, subjectId, idempotencyKey: key, requestedBy: 'c' });
+  const tick = () => new Promise((r) => setTimeout(r, 15));
+
+  it('two jobs of one group on ONE subject never overlap: the second waits queued, then runs after the first ends', async () => {
+    const { runner, store } = setup();
+    const log = { inside: 0, max: 0, started: [] as string[] };
+    const g = gate();
+    runner.register(gated('a.create', 'grp', log, g));
+    runner.register(gated('b.destroy', 'grp', log, g));
+    const a = await runner.submit(tenantReq('a.create', 'k1'));
+    const b = await runner.submit(tenantReq('b.destroy', 'k2'));
+    await tick();
+    // Breaks if serialisation is removed: both are inside run() (max 2) and b is running, not queued.
+    expect(log.max).toBe(1);
+    expect((await store.get(b.job.id))?.state).toBe('queued');
+    expect((await store.get(a.job.id))?.state).toBe('running');
+    g.open();
+    await runner.idle();
+    expect((await runner.get(a.job.id)).state).toBe('succeeded');
+    expect((await runner.get(b.job.id)).state).toBe('succeeded');
+    expect(log.started).toEqual(['a.create', 'b.destroy']);
+    expect(log.max).toBe(1);
+  });
+
+  it('control: a different subject, and a handler with no group, run at the same time', async () => {
+    const { runner } = setup();
+    const log = { inside: 0, max: 0, started: [] as string[] };
+    const g = gate();
+    runner.register(gated('a.create', 'grp', log, g));
+    runner.register(gated('free.job', undefined, log, g));
+    await runner.submit(tenantReq('a.create', 'k1', 't1'));
+    await runner.submit(tenantReq('a.create', 'k2', 't2'));
+    await runner.submit(tenantReq('free.job', 'k3', 't1'));
+    await tick();
+    expect(log.max).toBe(3); // 2 or fewer means the lock is wider than one (group, subject)
+    g.open();
+    await runner.idle();
+  });
+
+  it('a running job whose lease expired does NOT block: crash recovery must not wedge the tenant', async () => {
+    let t = new Date('2026-10-24T00:00:00Z');
+    const { runner, store } = setup(() => t);
+    const log = { inside: 0, max: 0, started: [] as string[] };
+    const g = gate();
+    runner.register(gated('a.create', 'grp', log, g));
+    const stale = await store.create({ id: 'job-stale', kind: 'a.create', subjectType: 'tenant', subjectId: 't1', idempotencyKey: 'old', state: 'running', attempts: 1, input: {}, receipts: [], requestedBy: 'c', createdAt: t.toISOString(), updatedAt: t.toISOString() });
+    expect(stale.state).toBe('running');
+    t = new Date(t.getTime() + LEASE_MS + 1000);
+    const b = await runner.submit(tenantReq('a.create', 'k9'));
+    await tick();
+    expect((await store.get(b.job.id))?.state).toBe('running'); // 'queued' would mean a dead lease blocks forever
+    g.open();
+    await runner.idle();
+  });
+});
+
+describe('JobRunner exclusive groups: simultaneous submits (#5442)', () => {
+  it('five jobs of one group submitted AT ONCE for one subject still run strictly one at a time (breaks if check and claim are not one step per subject)', async () => {
+    const { runner } = setup();
+    let inside = 0;
+    let max = 0;
+    let ran = 0;
+    runner.register({ kind: 'g.job', subjectType: 'tenant', exclusiveGroup: 'grp', async run() { inside++; max = Math.max(max, inside); await new Promise((r) => setTimeout(r, 10)); inside--; ran++; } });
+    await Promise.all([1, 2, 3, 4, 5].map((n) => runner.submit({ kind: 'g.job', subjectType: 'tenant', subjectId: 't1', idempotencyKey: `k${n}`, requestedBy: 'c' })));
+    await runner.idle();
+    expect(ran).toBe(5); // fewer means a job was left queued forever (wake lost)
+    expect(max).toBe(1); // 2+ means two jobs claimed in the same window
+  });
+});

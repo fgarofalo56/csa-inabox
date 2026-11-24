@@ -30,7 +30,7 @@ import {
   type RenderedEngineConfig,
 } from './fhir-tenant-config.js';
 import { classifyArm, stampResourceGroup, tenantNames, type TenantArm } from './tenant-arm.js';
-import { JobFailure, type JobContext, type JobHandler } from './types.js';
+import { JobFailure, TENANT_ENGINE_GROUP, type JobContext, type JobHandler } from './types.js';
 
 /** What the engine host reports as running for a tenant. */
 export interface AppliedEngineConfig {
@@ -271,6 +271,7 @@ function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides
 export function fhirTenantCreateHandler(deps: FhirTenantJobDeps): JobHandler {
   return {
     kind: 'fhir-tenant.create',
+    exclusiveGroup: TENANT_ENGINE_GROUP,
     subjectType: 'tenant',
     inputSchema: z.strictObject({ partitions: PartitionsSchema.optional() }),
     async run(ctx) {
@@ -289,6 +290,7 @@ export function fhirTenantCreateHandler(deps: FhirTenantJobDeps): JobHandler {
 export function fhirTenantConfigureHandler(deps: FhirTenantJobDeps): JobHandler {
   return {
     kind: 'fhir-tenant.configure',
+    exclusiveGroup: TENANT_ENGINE_GROUP,
     subjectType: 'tenant',
     // Only the knobs that may change on a running engine. Partition mode, referential integrity and
     // validation are NOT here: strictObject rejects them by name instead of ignoring them.
@@ -314,6 +316,7 @@ export function fhirTenantConfigureHandler(deps: FhirTenantJobDeps): JobHandler 
 export function fhirTenantTeardownHandler(deps: FhirTenantJobDeps): JobHandler {
   return {
     kind: 'fhir-tenant.teardown',
+    exclusiveGroup: TENANT_ENGINE_GROUP,
     subjectType: 'tenant',
     inputSchema: z.strictObject({ confirmTenantId: z.string().min(1).max(60) }),
     async run(ctx) {
