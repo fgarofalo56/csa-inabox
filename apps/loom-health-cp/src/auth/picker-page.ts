@@ -139,7 +139,7 @@ export function renderPicker(v: PickerView): string {
       middle = note('error', 'Patient search is unavailable', 'The tenant FHIR endpoint did not respond, so no patient can be selected right now. Cancel to return to the app, or try again later.');
       break;
     case 'not-permitted':
-      middle = note('error', 'You are not permitted to search patients in this tenant', 'Your roles in this tenant do not include reading Patient records. Ask a tenant administrator for a FHIR reader role, or cancel to return to the app.');
+      middle = note('error', 'You are not permitted to search patients in this tenant', 'Your roles in this tenant do not include reading Patient records. Ask a tenant administrator for a FHIR reader role. You can continue without a patient (the app gets no patient-level access) or cancel to return to the app.');
       break;
     case 'error':
       middle = note('error', s.heading, s.message);
@@ -148,7 +148,7 @@ export function renderPicker(v: PickerView): string {
   const actions = `<form method="post" action="${escapeHtml(v.action)}">
 <input type="hidden" name="req" value="${escapeHtml(v.req)}"><input type="hidden" name="csrf" value="${escapeHtml(v.csrf)}">
 ${middle}<div class="actions">${canContinue ? '<button type="submit" name="action" value="select" class="primary">Continue with this patient</button>' : ''}
-<button type="submit" name="action" value="cancel" formnovalidate>Cancel</button></div></form>`;
+<button type="submit" name="action" value="cancel" formnovalidate>Cancel</button>${s.kind === 'not-permitted' ? ' <button type="submit" name="action" value="continue" formnovalidate>Continue without a patient</button>' : ''}</div></form>`;
   const intro = `<h1 id="title">Select a patient</h1><p class="hint">${escapeHtml(v.appName)} is asking for one patient's record in ${escapeHtml(v.tenant)}. Search by name, then choose the patient.</p>`;
   return page('Select a patient - CSA Loom Health', intro + search + actions);
 }

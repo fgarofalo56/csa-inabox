@@ -142,7 +142,15 @@ FHIR, not through the browser) with a token it mints for that user:
 `sub_type` `user`, 60 s, `client_id` `lhds-patient-picker`, `idp_tid` = the
 user's own Entra tenant from sign-in, scope `user/Patient.rs` intersected with
 the user's role ceilings. A user whose roles
-no longer allow that scope sees a "not permitted" state with only Cancel. The
+no longer allow that scope sees a "not permitted" state with no search box and
+two buttons: Cancel, and **Continue without a patient** (operator decision on
+#5464). Continue is a `POST` with `action=continue` and passes the same pick,
+cookie and CSRF checks. It consumes the pick and issues the code exactly as the
+pre-picker flow did: the grant is recomputed with fresh roles and no patient.
+Every `patient/` scope is dropped, the other scopes (`openid`, `fhirUser`,
+`user/`, `offline_access`) are kept, and an empty result redirects
+`invalid_scope`. Continue is offered only in that state. A forged continue
+from a user who may search issues nothing and returns them to the picker. The
 choice is a form `POST` carrying a CSRF value that is rotated on every render,
 with only its hash stored. The AS checks that the pick exists, is unused, is
 unexpired and belongs to this tenant. It also checks the cookie, compares the

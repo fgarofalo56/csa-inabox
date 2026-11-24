@@ -1474,6 +1474,88 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(new URL(cancel.headers.get('location')!).searchParams.get('error')).toBe('access_denied');
   });
 
+  describe('Continue without a patient (not-permitted state only)', () => {
+    const G_SP = 'bbbbbbbb-0000-0000-0000-000000000005';
+    // user/SearchParameter.rs survives without user/Patient.rs: the search-parameter-manager role grants it, and
+    // no other role of this user remains after the reader group is removed.
+    const SCOPE = 'openid launch/patient patient/*.rs user/SearchParameter.rs offline_access';
+    async function notPermitted() {
+      const { c, search } = await setup();
+      await c.bind({ [G_READER]: 'fhir-data-reader', [G_SP]: 'fhir-search-parameter-manager' });
+      c.graph.members.set(USER, new Set([G_READER, G_SP]));
+      const s = await signIn(c, SCOPE);
+      expect(s.location.pathname).toBe('/auth/visn-01/pick'); // the reader role made patient/ grantable at sign-in
+      return { c, search, s };
+    }
+    const cont = (c: Ctx, s: { req: string }, o: { cookie?: string; csrf: string }) =>
+      c.page('POST', '/auth/visn-01/pick', { ...(o.cookie !== undefined ? { cookie: o.cookie } : {}), form: { req: s.req, csrf: o.csrf, action: 'continue' } });
+
+    it('issues a code with no patient and no patient/ scope, keeping the non-patient ones; select keeps patient/', async () => {
+      const { c, s } = await notPermitted();
+      c.graph.members.set(USER, new Set([G_SP])); // the reader group is removed: not permitted to search
+      const page = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(page.status).toBe(403);
+      expect(page.text).toContain('value="continue"'); // offered here
+      const r = await cont(c, s, { cookie: s.cookie, csrf: csrfOf(page.text) });
+      expect(r.status).toBe(302);
+      const back = new URL(r.headers.get('location')!);
+      expect(back.searchParams.get('state')).toBe('client-state');
+      const t = await c.exchange({ redirect: back, verifier: s.verifier });
+      expect(t.status).toBe(200);
+      expect(t.json.patient).toBeUndefined();
+      expect(t.json.need_patient_banner).toBeUndefined();
+      // Breaks if continue grants patient/ (no patient context) or drops the non-patient scopes.
+      expect(t.json.scope.split(' ').sort()).toEqual(['offline_access', 'openid', 'user/SearchParameter.rs']);
+      expect((await claims(c, t.json.access_token)).patient).toBeUndefined();
+      // Pair: the SAME request by a user who keeps the reader role, through select, keeps patient/ and the patient.
+      c.graph.members.set(USER, new Set([G_READER, G_SP]));
+      const s2 = await signIn(c, SCOPE);
+      const csrf = csrfOf((await searchVia(c, s2, 'ada')).text);
+      const sel = await c.page('POST', '/auth/visn-01/pick', { cookie: s2.cookie, form: { req: s2.req, csrf, patient: 'pat-1', action: 'select' } });
+      const t2 = await c.exchange({ redirect: new URL(sel.headers.get('location')!), verifier: s2.verifier });
+      expect(t2.json.patient).toBe('pat-1');
+      expect(t2.json.scope.split(' ')).toContain('patient/*.rs');
+    });
+
+    it('a continue without the cookie or with a bad CSRF is refused; the pick survives for the genuine one', async () => {
+      const { c, s } = await notPermitted();
+      c.graph.members.set(USER, new Set([G_SP]));
+      const csrf = csrfOf((await c.page('GET', pickPath(s.req), { cookie: s.cookie })).text);
+      const noCookie = await cont(c, s, { csrf });
+      expect([noCookie.status, noCookie.headers.get('location')]).toEqual([400, null]);
+      const badCsrf = await cont(c, s, { cookie: s.cookie, csrf: 'A'.repeat(32) });
+      expect([badCsrf.status, badCsrf.headers.get('location')]).toEqual([400, null]);
+      expect(codes(c)).toBe(0);
+      expect((await cont(c, s, { cookie: s.cookie, csrf })).status).toBe(302); // paired permit
+      expect(codes(c)).toBe(1);
+      expect((await cont(c, s, { cookie: s.cookie, csrf })).status).toBe(400); // single use
+    });
+
+    it('a forged continue from a user who MAY search is refused and issues nothing; the button is not offered there', async () => {
+      const { c, s } = await notPermitted(); // still holds the reader role
+      const page = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(page.status).toBe(200);
+      expect(page.text).not.toContain('value="continue"'); // not on the search page
+      const r = await cont(c, s, { cookie: s.cookie, csrf: csrfOf(page.text) });
+      // Breaks (302 with a code) if continue works without the not-permitted guard: a patient/ app would be
+      // handed a session the user skipped choosing a patient for.
+      expect([r.status, r.headers.get('location'), codes(c)]).toEqual([400, null, 0]);
+      expect(r.text).toContain('Choose a patient');
+      const sel = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: csrfOf(r.text), patient: 'pat-1' } });
+      expect(sel.status).toBe(302); // the refused continue did not burn the pick
+    });
+
+    it('the 503 unavailable page does not offer continue', async () => {
+      const fetchFhir = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
+      const { c } = await setup({ fetchFhir });
+      const s = await signIn(c);
+      const r = await searchVia(c, s, 'smith');
+      expect(r.status).toBe(503);
+      expect(r.text).toContain('value="cancel"'); // positive: the actions row rendered
+      expect(r.text).not.toContain('value="continue"');
+    });
+  });
+
   it('no picker when nothing patient-level would be granted, or on an EHR launch', async () => {
     const { c } = await setup();
     // launch/patient but only user/ scopes: issued directly (breaks if every launch/patient goes to the picker).

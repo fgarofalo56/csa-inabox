@@ -57,6 +57,9 @@ describe('renderPicker', () => {
     const denied = renderPicker({ ...view, state: { kind: 'not-permitted' } });
     expect(denied).not.toContain('name="q"');
     expect(denied).toContain('value="cancel"');
+    expect(denied).toContain('value="continue"'); // Continue without a patient: offered only here
+    expect(unavailable).not.toContain('value="continue"');
+    expect(results).not.toContain('value="continue"');
   });
   it('the error page escapes and offers no form', () => {
     const html = renderPickerError('<h>', 'a & b');

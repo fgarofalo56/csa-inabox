@@ -725,6 +725,18 @@ export function createAuthServer(deps: AuthServerDeps) {
       await consume();
       return back({ error: 'access_denied', error_description: 'no patient was selected' });
     }
+    if (form.get('action') === 'continue') {
+      const roles = await pickRoles(doc);
+      if (!roles) return showPicker(res, doc, 503, ROLES_UNAVAILABLE);
+      // Offered ONLY on the not-permitted state. A user who may search must choose a patient; a forged continue
+      // from them issues nothing and returns them to the picker.
+      if (pickerScope(roles).length > 0) {
+        deps.log('auth.pick_continue_refused', {});
+        return showPicker(res, doc, 400, { kind: 'error', heading: 'Choose a patient', message: 'You are permitted to search patients in this tenant, so a patient must be chosen. Search, or cancel to return to the app.' });
+      }
+      await consume();
+      return issueFromPick(doc, roles, undefined, back);
+    }
     const patient = form.get('patient') ?? '';
     if (!FHIR_ID.test(patient)) return showPicker(res, doc, 400, { kind: 'invalid-input', message: 'Choose a patient from the list.' });
     const roles = await pickRoles(doc);
@@ -744,15 +756,23 @@ export function createAuthServer(deps: AuthServerDeps) {
       return showPicker(res, doc, 403, { kind: 'error', heading: 'That patient is not available', message: 'The patient was not found, or you are not permitted to see it. Search again, or cancel to return to the app.' });
     }
     await consume();
+    return issueFromPick(doc, roles, seen.id, back);
+  }
+
+  /**
+   * Consumed pick -> code. With a patient the grant is recomputed WITH it, so patient/ scopes survive. Without one
+   * (`action=continue`) it is exactly the pre-picker grant: every patient/ scope dropped, the rest kept. Roles are the
+   * fresh ones the caller checked.
+   */
+  async function issueFromPick(doc: GrantDoc, roles: string[], patient: string | undefined, back: (p: Record<string, string>) => number): Promise<number> {
     const client = await getClient(doc.clientId);
     if (!client || client.status !== 'active') return back({ error: 'access_denied', error_description: 'client is not available' });
-    // Recomputed WITH the patient, so patient/ scopes survive; the roles are the fresh ones checked above.
     const g = computeGrant({
       grant: 'authorization_code',
       request: parseRequest(doc.requestedScope ?? '', { v1: doc.v1Scopes ?? false }),
       roleIds: roles,
       clientAllowed: client.allowedScopes,
-      patient: seen.id,
+      ...(patient ? { patient } : {}),
       fhirUserResolved: !!doc.fhirUser,
     });
     if (g.scope.length === 0) return back({ error: 'invalid_scope', error_description: 'no requested scope could be granted' });
@@ -766,11 +786,11 @@ export function createAuthServer(deps: AuthServerDeps) {
       grantedScope: g.scope,
       echo: doc.echo ?? {},
       aud: doc.aud as string,
-      patient: seen.id,
+      ...(patient ? { patient } : {}),
       ...(doc.clientNonce ? { clientNonce: doc.clientNonce } : {}),
       ...(doc.fhirUser ? { fhirUser: doc.fhirUser } : {}),
     });
-    deps.log('auth.pick_issued', { tenant: doc.tenant });
+    deps.log(patient ? 'auth.pick_issued' : 'auth.pick_continued_without_patient', { tenant: doc.tenant });
     return back({ code: codeValue });
   }
 
