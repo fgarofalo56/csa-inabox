@@ -29,7 +29,7 @@ const src = (p) => readFileSync(new URL(p, ROOT), 'utf8');
 
 /** In-memory control plane: discovery, client registry, token endpoint, tenants and jobs. No network. */
 function cpFake(opts = {}) {
-  const st = { regs: [], forms: [], patches: [], jobs: [], tenantPosts: [], clients: new Map(), gets: [] };
+  const st = { regs: [], forms: [], patches: [], jobs: [], tenantPosts: [], clients: new Map(), gets: [], byId: new Map() };
   const res = (code, body) => ({ status: code, text: async () => JSON.stringify(body) });
   const fetchImpl = async (u, init = {}) => {
     const url = new URL(u);
@@ -67,7 +67,17 @@ function cpFake(opts = {}) {
       const b = JSON.parse(init.body);
       st.jobs.push(b);
       const state = opts.jobState?.(b) ?? 'succeeded';
-      return res(202, { ok: true, data: { id: `job-${'a'.repeat(32)}`, state, receipts: [] } });
+      const id = `job-${String(st.jobs.length).padStart(32, '0')}`;
+      // tenant.create carries the receipt the probe reads to find the CHAINED engine job (default: chained to job-<'e'*32>); opts.createReceipts overrides.
+      const receipts = b.kind === 'tenant.create' ? (opts.createReceipts ?? [{ step: 'engine.chained', detail: `fhir-tenant.create job=job-${'e'.repeat(32)} created=true` }]) : [];
+      st.byId.set(id, { id, state, receipts });
+      return res(202, { ok: true, data: { id, state, receipts } });
+    }
+    const jm = /^\/api\/health\/jobs\/([^/]+)$/.exec(url.pathname);
+    if (method === 'GET' && jm) {
+      if (jm[1] === `job-${'e'.repeat(32)}`) return res(200, { ok: true, data: { id: jm[1], state: opts.engineState ?? 'succeeded', receipts: [], ...(opts.engineState === 'failed' ? { error: { code: 'readback_mismatch', message: 'x' } } : {}) } });
+      const j = st.byId.get(jm[1]);
+      return j ? res(200, { ok: true, data: j }) : res(404, { ok: false });
     }
     if (method === 'GET' && url.pathname.startsWith('/api/health/tenants/')) { st.gets.push(url.pathname); return res(200, { ok: true, data: { stampId: 'dev01', status: 'active' } }); }
     return res(404, { ok: false });
@@ -428,26 +438,39 @@ const ownFile = () => join(mkdtempSync(join(tmpdir(), 'fcp-own-')), 'owned.txt')
 const crudCfg = (file, over = {}) => ({ cpUrl: 'https://cp.example.test', cpToken: CP_TOKEN, stamp: 'dev01', a: 'fc-a-1', b: 'fc-b-1', partition: 'probe-site',
   issuerPath: '/auth', timeoutS: 5, ownedFile: file, outputsFile: `${file}.out`, ...over });
 
-test('phaseCreate: both tenant.create jobs are submitted before any fhir-tenant.create, each fhir-tenant.create carries the partition, and the outputs are the non-secret owned slugs + issuer', async () => {
+test('phaseCreate: both tenant.create jobs are submitted first; the probe submits NO fhir-tenant.create of its own, waits on the chained engine job, then adds the partition with configure; outputs are the non-secret owned slugs + issuer', async () => {
   const cp = cpFake();
   const file = ownFile();
   const r = await capture((out) => phaseCreate(crudCfg(file), { ...cp.deps, out }));
   assert.equal(r.code, 0, r.text);
-  assert.deepEqual(cp.st.jobs.map((j) => `${j.kind}:${j.subjectId}`), ['tenant.create:fc-a-1', 'tenant.create:fc-b-1', 'fhir-tenant.create:fc-a-1', 'fhir-tenant.create:fc-b-1']);
+  // Breaks if the probe submits its own fhir-tenant.create again (the live race, run 45312157616): that kind would appear here.
+  assert.deepEqual(cp.st.jobs.map((j) => `${j.kind}:${j.subjectId}`), ['tenant.create:fc-a-1', 'tenant.create:fc-b-1', 'fhir-tenant.configure:fc-a-1', 'fhir-tenant.configure:fc-b-1']);
   assert.deepEqual(cp.st.jobs[2].input, { partitions: ['probe-site'] });
   const outs = readFileSync(`${file}.out`, 'utf8');
   assert.match(outs, /^issuer_url=https:\/\/issuer-front-door\.example\.test\/auth$/m);
   assert.match(outs, /^owned=fc-a-1,fc-b-1$/m);
   assert.equal(outs.includes(CP_TOKEN), false);
-  assert.match(r.text, /both fhir-tenant\.create jobs succeeded/);
+  assert.match(r.text, /chained engine job=job-e{32}/);
+  assert.match(r.text, /partition configure jobs succeeded/);
 });
 
-test('phaseCreate: a failed fhir-tenant.create is exit 1, prints the job state, and STILL publishes the owned slugs so cleanup can destroy them (breaks if the owned output is only written on success)', async () => {
-  const cp = cpFake({ jobState: (b) => (b.kind === 'fhir-tenant.create' ? 'failed' : 'succeeded') });
+test('phaseCreate: a failed CHAINED engine job is exit 1, prints the job state, and STILL publishes the owned slugs so cleanup can destroy them (breaks if the owned output is only written on success)', async () => {
+  const cp = cpFake({ engineState: 'failed' });
   const file = ownFile();
   const r = await capture((out) => phaseCreate(crudCfg(file), { ...cp.deps, out }));
   assert.equal(r.code, 1, r.text);
-  assert.match(r.text, /fhir-tenant\.create for fc-a-1 is failed/);
+  assert.match(r.text, /fhir-tenant\.create for fc-a-1 failed: readback_mismatch/);
+  assert.match(readFileSync(`${file}.out`, 'utf8'), /^owned=fc-a-1,fc-b-1$/m);
+  assert.equal(cp.st.jobs.some((j) => j.kind === 'fhir-tenant.configure'), false, 'no partition job after a failed engine job');
+});
+
+test('phaseCreate: engine.not_chained fails the run with the receipt reason and submits nothing further (breaks if the probe falls back to its own fhir-tenant.create)', async () => {
+  const cp = cpFake({ createReceipts: [{ step: 'engine.not_chained', detail: 'fhir-tenant.create was NOT submitted: no host and PDP url' }] });
+  const file = ownFile();
+  const r = await capture((out) => phaseCreate(crudCfg(file), { ...cp.deps, out }));
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /did NOT chain an engine: engine\.not_chained: fhir-tenant\.create was NOT submitted: no host and PDP url/);
+  assert.deepEqual(cp.st.jobs.map((j) => j.kind), ['tenant.create', 'tenant.create']);
   assert.match(readFileSync(`${file}.out`, 'utf8'), /^owned=fc-a-1,fc-b-1$/m);
 });
 

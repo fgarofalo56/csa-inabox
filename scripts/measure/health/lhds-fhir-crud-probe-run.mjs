@@ -4,7 +4,7 @@
  * receipt that a PDP-allowed FHIR create/read works against a synthetic tenant's per-tenant HAPI engine.
  * Runs in-VNet on the `loom-aca` fleet as the deploy SP. Three phases:
  *
- *   create   POST two synthetic tenants, submit tenant.create then fhir-tenant.create (one facility partition) for
+ *   create   POST two synthetic tenants, submit tenant.create (which chains fhir-tenant.create, #5442), wait on that chained job, add one facility partition with fhir-tenant.configure for
  *            each, wait (bounded), print each job's state + control-plane-authored receipts (redacted, capped),
  *            discover the issuer, and publish the NON-SECRET results (owned slugs, issuer) to --outputs-file.
  *   probe    mint a WRITER token for tenant A and a READER token for tenant B (mint-tenant-token.mjs), write a probe
@@ -162,6 +162,22 @@ async function waitJobs(c, deps, say, jobs) {
   return jobs.every((j) => j.state === 'succeeded') ? 0 : 1;
 }
 
+/**
+ * The engine job tenant.create CHAINED (#5442): its id is in the `engine.chained` receipt. The probe waits on it instead of submitting its own
+ * fhir-tenant.create: two engine jobs on one tenant raced live (run 45312157616). Any other outcome is a failure naming the receipt's reason.
+ */
+async function chainedEngineJob(c, deps, say, tj) {
+  const g = await api(c, deps, 'GET', `/api/health/jobs/${encodeURIComponent(tj.id)}`);
+  const rs = g.status === 200 && Array.isArray(g.json?.data?.receipts) ? g.json.data.receipts : undefined;
+  if (!rs) { say(`COULD NOT READ the tenant.create job ${tj.id} for ${tj.t} to find its chained engine job: ${errText(g)}`); return undefined; }
+  const chained = rs.find((r) => r?.step === 'engine.chained');
+  const id = /\bjob=(job-[0-9a-f]{32})\b/.exec(String(chained?.detail ?? ''))?.[1];
+  if (id) { say(`tenant=${tj.t} chained engine job=${id}`); return id; }
+  const why = rs.find((r) => r?.step === 'engine.not_chained' || r?.step === 'engine.chain_failed');
+  say(`tenant.create for ${tj.t} did NOT chain an engine: ${why ? `${why.step}: ${redact(why.detail, 300)}` : 'no engine.chained / engine.not_chained receipt on the job'}`);
+  return undefined;
+}
+
 export async function phaseCreate(c, deps = {}) {
   const say = mkSay(deps);
   try {
@@ -180,14 +196,23 @@ export async function phaseCreate(c, deps = {}) {
     }
     if (await waitJobs(c, deps, say, tenantJobs) !== 0) return 1;
     say('both tenant.create jobs succeeded');
-    const fhirJobs = [];
-    for (const t of [c.a, c.b]) {
-      const j = await submit(c, deps, say, 'fhir-tenant.create', t, `fc-fhir-create-${t}`, { partitions: [c.partition] });
-      if (!j) return 1;
-      fhirJobs.push(j);
+    const engineJobs = [];
+    for (const tj of tenantJobs) {
+      const id = await chainedEngineJob(c, deps, say, tj);
+      if (!id) return 1;
+      engineJobs.push({ t: tj.t, kind: 'fhir-tenant.create', id, state: 'queued', printed: 0 });
     }
-    if (await waitJobs(c, deps, say, fhirJobs) !== 0) return 1;
-    say(`both fhir-tenant.create jobs succeeded (each read back the rollout, /fhir/metadata through the API-server proxy, partition "${c.partition}" through the PG job, and the isolation readback)`);
+    if (await waitJobs(c, deps, say, engineJobs) !== 0) return 1;
+    // The chained job renders no partitions; the probe's facility partition is added with configure, strictly AFTER the chained job ended
+    // (the control plane serialises engine jobs per tenant, so this cannot race it either).
+    const partJobs = [];
+    for (const t of [c.a, c.b]) {
+      const j = await submit(c, deps, say, 'fhir-tenant.configure', t, `fc-fhir-partition-${t}`, { partitions: [c.partition] });
+      if (!j) return 1;
+      partJobs.push(j);
+    }
+    if (await waitJobs(c, deps, say, partJobs) !== 0) return 1;
+    say(`both chained fhir-tenant.create jobs and the partition configure jobs succeeded (each read back the rollout, /fhir/metadata through the API-server proxy, partition "${c.partition}" through the PG job, and the isolation readback)`);
     let disc;
     try { disc = await discoverIssuer({ ...deps, cpUrl: c.cpUrl, issuerPath: c.issuerPath }); } catch (e) {
       say(`COULD NOT DISCOVER the issuer: ${redact(e?.message ?? '', 300)}. The publish step needs it; nothing was published.`);

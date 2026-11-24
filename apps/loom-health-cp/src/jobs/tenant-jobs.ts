@@ -28,7 +28,7 @@ import {
   type TenantManifest,
 } from './tenant-arm.js';
 import { publicErrorMessage } from '../safe-error.js';
-import { JobFailure, type JobContext, type JobHandler } from './types.js';
+import { JobFailure, TENANT_ENGINE_GROUP, type JobContext, type JobHandler } from './types.js';
 
 /**
  * The FHIR engine half of a tenant (#5442, auto-bind-by-default). Supplied by compose.ts ONLY when the fhir-tenant.*
@@ -194,6 +194,7 @@ function lastSegment(id: string): string {
 export function tenantCreateHandler(deps: TenantJobDeps): JobHandler {
   return {
     kind: 'tenant.create',
+    exclusiveGroup: TENANT_ENGINE_GROUP,
     subjectType: 'tenant',
     inputSchema: z.strictObject({}),
     async run(ctx) {
@@ -273,6 +274,7 @@ async function chainEngine(ctx: JobContext, deps: TenantJobDeps, tenantId: strin
 export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
   return {
     kind: 'tenant.destroy',
+    exclusiveGroup: TENANT_ENGINE_GROUP,
     subjectType: 'tenant',
     // The caller must restate the tenant id: a destroy is not something a stray retry or a
     // wrong-subject submit may trigger.

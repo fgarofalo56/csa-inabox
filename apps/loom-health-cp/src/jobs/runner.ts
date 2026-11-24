@@ -175,24 +175,75 @@ export class JobRunner {
     }
   }
 
+  /**
+   * Serialises claims per subject. Within this process the check and the claim of one subject run one at a time, so two jobs of the
+   * same exclusive group cannot both pass the check. ACROSS replicas the check-then-claim is not atomic (the store has no per-subject
+   * claim), so a second replica could still start a job in the same window; that residual race is disclosed, not closed.
+   */
+  private readonly claimLocks = new Map<string, Promise<unknown>>();
+
+  private async withClaimLock<T>(subject: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.claimLocks.get(subject) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => undefined);
+    this.claimLocks.set(subject, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.claimLocks.get(subject) === tail) this.claimLocks.delete(subject);
+    }
+  }
+
+  /** True when another job of the same exclusive group is running for the subject with a live lease. */
+  private async blockedByRunning(job: JobDoc, group: string): Promise<boolean> {
+    const nowMs = this.now().getTime();
+    for (const j of await this.jobs.list(500)) {
+      if (j.id === job.id || j.state !== 'running' || j.subjectId !== job.subjectId) continue;
+      if (this.handlers.get(j.kind)?.exclusiveGroup !== group) continue;
+      if (nowMs - Date.parse(j.updatedAt) > LEASE_MS) continue; // a dead lease does not block (tick() fails it)
+      return true;
+    }
+    return false;
+  }
+
+  /** After a job ends, give the same subject's waiting jobs their turn without waiting for the next sweep. */
+  private async wake(subjectId: string, group: string): Promise<void> {
+    for (const j of await this.jobs.list(500)) {
+      if (j.state === 'queued' && j.subjectId === subjectId && this.handlers.get(j.kind)?.exclusiveGroup === group) this.schedule(j.id);
+    }
+  }
+
+  private async claim(queued: JobDoc, handler: JobHandler | undefined): Promise<JobDoc | undefined> {
+    const t0 = this.now().toISOString();
+    const group = handler?.exclusiveGroup;
+    const doClaim = async (): Promise<JobDoc | undefined> => {
+      if (group && (await this.blockedByRunning(queued, group))) return undefined; // stays queued; wake() or tick() retries it
+      try {
+        return await this.jobs.replace({ ...queued, state: 'running', attempts: queued.attempts + 1, startedAt: t0, updatedAt: t0 });
+      } catch (e) {
+        if (e instanceof StoreConflictError) return undefined; // another replica claimed it
+        throw e;
+      }
+    };
+    return group ? this.withClaimLock(queued.subjectId, doClaim) : doClaim();
+  }
+
   private async execute(id: string): Promise<void> {
     const queued = await this.jobs.get(id);
     if (!queued || queued.state !== 'queued') return;
     const handler = this.handlers.get(queued.kind);
-    const t0 = this.now().toISOString();
-    let current: JobDoc;
+    const current = await this.claim(queued, handler);
+    if (!current) return;
+    const group = handler?.exclusiveGroup;
     try {
-      current = await this.jobs.replace({
-        ...queued,
-        state: 'running',
-        attempts: queued.attempts + 1,
-        startedAt: t0,
-        updatedAt: t0,
-      });
-    } catch (e) {
-      if (e instanceof StoreConflictError) return; // another replica claimed it
-      throw e;
+      await this.runClaimed(id, current, handler);
+    } finally {
+      if (group) await this.wake(queued.subjectId, group).catch(() => undefined);
     }
+  }
+
+  private async runClaimed(id: string, claimed: JobDoc, handler: JobHandler | undefined): Promise<void> {
+    let current: JobDoc = claimed;
 
     const finish = async (patch: Partial<JobDoc>): Promise<void> => {
       const ts = this.now().toISOString();

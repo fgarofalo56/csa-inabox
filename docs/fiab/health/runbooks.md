@@ -167,3 +167,14 @@ ingress; 0 drops the rule). The default is 6000 on every boundary, so Gov is not
 lesser product by default; the 0 is an escape taken only on a recorded rejection.
 Status: the 429 + `Retry-After` and the Gov WAF rule are compiled and structurally
 tested (`scripts/ci/__tests__/lhds-edge-policy.test.mjs`) but never exercised.
+
+## Engine jobs are serialised per tenant (#5442)
+
+`tenant.create`, `tenant.destroy` and every `fhir-tenant.*` job share the exclusive group `tenant-engine`
+(`JobHandler.exclusiveGroup`). For one tenant at most one of them runs; the others stay `queued` and start when
+the running one ends (or its 10 min lease expires). So a destroy waits for an in-flight engine rollout instead of
+racing it, and a second `fhir-tenant.create` ends `config.unchanged`. The check and the claim are one step per
+subject inside a control-plane process; two replicas could still claim in the same window (the store has no
+per-subject claim), which is a disclosed residual, not a closed gap. The CRUD probe no longer submits its own
+`fhir-tenant.create`: it waits on the job `tenant.create` chained (`engine.chained job=`) and then adds its
+partition with `fhir-tenant.configure`.

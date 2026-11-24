@@ -684,3 +684,33 @@ describe('fhir-tenant.teardown', () => {
     expect(again.state, JSON.stringify(again.error)).toBe('succeeded');
   });
 });
+
+describe('concurrent engine jobs on one tenant (#5442, live run 45312157616)', () => {
+  it('two fhir-tenant.create jobs under DIFFERENT keys never overlap; the second ends config.unchanged, not readback_mismatch', async () => {
+    const { host, runner } = setup();
+    let inside = 0;
+    let maxInside = 0;
+    let bothIn!: () => void;
+    const entered = new Promise<void>((r) => { bothIn = r; });
+    const apply = host.applyEngineConfig.bind(host);
+    host.applyEngineConfig = async (cfg) => {
+      inside++;
+      maxInside = Math.max(maxInside, inside);
+      // Hold the first apply open until a second job enters (or 300 ms): the overlap the live jobs hit, made load-independent.
+      if (inside === 2) bothIn();
+      await Promise.race([entered, new Promise((r) => setTimeout(r, 300))]);
+      await apply(cfg);
+      inside--;
+    };
+    // Reproduces "each readback saw the other's revision": the host reports whichever revision was applied LAST.
+    const a = await runner.submit({ kind: 'fhir-tenant.create', subjectType: 'tenant', subjectId: SLUG, idempotencyKey: 'engine-create-1', requestedBy: 't' });
+    const b = await runner.submit({ kind: 'fhir-tenant.create', subjectType: 'tenant', subjectId: SLUG, idempotencyKey: 'probe-own', requestedBy: 't' });
+    await runner.idle();
+    const [ja, jb] = [await runner.get(a.job.id), await runner.get(b.job.id)];
+    expect([ja.state, jb.state], JSON.stringify([ja.error, jb.error])).toEqual(['succeeded', 'succeeded']);
+    // Breaks if the jobs interleave: maxInside is 2 and applyCalls is 2 (each saw no config before the other applied).
+    expect(maxInside).toBe(1);
+    expect(host.applyCalls).toHaveLength(1);
+    expect(jb.receipts.map((r) => r.step)).toContain('config.unchanged');
+  });
+});

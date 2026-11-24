@@ -13,7 +13,7 @@ import {
   type TenantManifest,
 } from '../src/jobs/tenant-arm.js';
 import { tenantHandlers, type FhirChain } from '../src/jobs/tenant-jobs.js';
-import type { FhirEngineHost } from '../src/jobs/fhir-tenant-jobs.js';
+import { fhirTenantHandlers, type FhirEngineHost } from '../src/jobs/fhir-tenant-jobs.js';
 import { compose } from '../src/compose.js';
 import { JobFailure, type JobDoc } from '../src/jobs/types.js';
 import { Registry } from '../src/registry/registry.js';
@@ -805,5 +805,19 @@ describe('tenant.destroy allowMissingEngine (#5442 review)', () => {
     const s = setup('healthy', 'creating', failing('arm_error'));
     await s.run('tenant.create', 'k1');
     await expect(s.run('tenant.destroy', 'd-str', { confirmTenantId: SLUG, allowMissingEngine: 'true' })).rejects.toThrow(/input/);
+  });
+});
+
+describe('engine-affecting kinds share one exclusive group (#5442)', () => {
+  it('tenant.create, tenant.destroy and all three fhir-tenant kinds are in group tenant-engine (a kind left out can race the others)', () => {
+    const noop = {} as never;
+    const kinds = [
+      ...tenantHandlers({ stamps: noop, tenants: noop, registry: noop, arm: noop }),
+      ...fhirTenantHandlers({ stamps: noop, tenants: noop, arm: noop, engine: noop, pdpUrl: 'http://pdp' }),
+    ];
+    expect(kinds.map((h) => [h.kind, h.exclusiveGroup])).toEqual([
+      ['tenant.create', 'tenant-engine'], ['tenant.destroy', 'tenant-engine'],
+      ['fhir-tenant.create', 'tenant-engine'], ['fhir-tenant.configure', 'tenant-engine'], ['fhir-tenant.teardown', 'tenant-engine'],
+    ]);
   });
 });

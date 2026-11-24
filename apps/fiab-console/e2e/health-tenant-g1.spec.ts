@@ -112,9 +112,25 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
       }
       for (const id of victims) {
         const r = await page.request.delete(`${BASE}/api/workspaces/${wsId}/items/${id}`, { timeout: 60_000 }).catch(() => null);
+        const del = r && r.ok() ? await r.json().catch(() => ({})) : {};
         console.log(`[health-tenant-g1] cleanup DELETE item ${id} -> ${r ? r.status() : 'no response'}` +
-          (r && r.ok() ? ' (tenant.destroy submitted; NOT polled by cleanup)'
+          (r && r.ok() ? ` (tenant.destroy submitted: job=${del?.destroyJobId ?? '(none)'}; polling it to a terminal state)`
             : ` (TENANT MAY STILL BE LIVE: item=${id} tenant=${tenantId || displayName.toLowerCase()})`));
+        // Poll the destroy to a terminal state and LOG the result: an unpolled destroy leaked a tenant live (g1-202611240229).
+        if (r && r.ok() && typeof del?.destroyJobId === 'string' && del.destroyJobId) {
+          const until = Date.now() + DESTROY_TIMEOUT_MS;
+          let last: any = null;
+          while (Date.now() < until) {
+            const j = await getJson(page, `/api/health/jobs/${encodeURIComponent(del.destroyJobId)}`).catch(() => null);
+            last = j && j.status === 200 ? j.body?.job : last;
+            if (last && ['succeeded', 'failed', 'cancelled'].includes(last.state)) break;
+            await page.waitForTimeout(POLL_MS);
+          }
+          const done = !!last && ['succeeded', 'failed', 'cancelled'].includes(last.state);
+          console.log(`[health-tenant-g1] cleanup destroy job ${del.destroyJobId} -> ${done ? last.state : `NOT TERMINAL after ${DESTROY_TIMEOUT_MS / 60_000} min (state=${last?.state ?? 'unread'})`}` +
+            (last?.error ? ` code=${last.error.code} message=${JSON.stringify(String(last.error.message ?? '').slice(0, 300))}` : '') +
+            (last?.state === 'succeeded' ? '' : ` TENANT MAY STILL BE LIVE: tenant=${tenantId || displayName.toLowerCase()}; run lhds-tenant-destroy.yml`));
+        }
       }
     } finally {
       await page.close();
@@ -210,10 +226,16 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
       // 'bound'. The GET is read-only and never finalises, so without this the spec waits 12 min on a tenant
       // that is already active (run 44700233998: tenant.status 'active', binding 'provisioning', resources []).
       // Breaks if the provisioner refuses to bind a succeeded job (e.g. 'readback_missing'): throws its phase.
-      if (r.status === 200 && last?.phase === 'provisioning' && jobState === 'succeeded') {
+      // While the FHIR engine rolls out (#5442) the followed job is the ENGINE job and the binding already reads 'bound';
+      // the tenant is not done until the engine job has succeeded and a finalise records engine=ready.
+      const engineBusy = last?.binding?.engine?.status === 'provisioning';
+      if (r.status === 200 && (last?.phase === 'provisioning' || engineBusy) && jobState === 'succeeded') {
         const f = await page.request.post(`${BASE}/api/health/tenants/${itemId}`, { data: { retry: false }, timeout: 90_000 });
         const fb = await f.json().catch(() => ({}));
         failIfTenantAdminGate(f.status(), fb, `POST /api/health/tenants/${itemId} (finalise)`);
+        // The engine job is still running (ensure answers 202 provisioning with the engine job): keep polling, bounded by the
+        // 12 min deadline (the engine took ~2.5 min live). Breaks only on a phase that will not clear by waiting.
+        if (fb?.phase === 'provisioning') { await page.waitForTimeout(POLL_MS); continue; }
         if (fb?.phase !== 'bound') {
           await attachJson(testInfo, 'finalise-not-bound', { status: f.status(), phase: fb?.phase, error: fb?.error, binding: fb?.binding, steps: fb?.steps });
           throw new Error(
@@ -229,12 +251,15 @@ test.describe.serial('health-tenant lifecycle (LHDS W01b G1)', () => {
           throw new Error(`finalise returned bound but the GET reads HTTP ${r.status} phase=${last?.phase ?? '(none)'}: the binding write did not land`);
         }
       }
-      if (r.status === 200 && last?.phase === 'bound' && last?.tenant?.status === 'active') break;
+      if (r.status === 200 && last?.phase === 'bound' && last?.tenant?.status === 'active' && last?.binding?.engine?.status !== 'provisioning') break;
       await page.waitForTimeout(POLL_MS);
     }
     await attachJson(testInfo, 'tenant-final', { status: lastStatus, phase: last?.phase, tenant: last?.tenant, binding: last?.binding, liveError: last?.liveError });
     // Breaks if the tenant never goes bound+active within 12 min (stuck job, stamp paused, CP down).
-    expect(last?.phase, `phase after ${CREATE_TIMEOUT_MS / 60_000} min (liveError=${JSON.stringify(last?.liveError)})`).toBe('bound');
+    expect(last?.phase, `phase after ${CREATE_TIMEOUT_MS / 60_000} min (liveError=${JSON.stringify(last?.liveError)} engine=${JSON.stringify(last?.binding?.engine)} job=${last?.job?.id}/${last?.job?.state})`).toBe('bound');
+    // Breaks if the FHIR engine is still rolling out or its job failed when the tenant reads bound (#5442): 'ready', or
+    // 'unavailable' on an estate whose control plane has no engine host, are the only honest end states.
+    expect(['ready', 'unavailable'], `binding.engine after ${CREATE_TIMEOUT_MS / 60_000} min: ${JSON.stringify(last?.binding?.engine)}`).toContain(last?.binding?.engine?.status);
     expect(last?.tenant?.status, 'control-plane tenant status').toBe('active');
     // Breaks if the live CP read failed: the binding would then be only a record, not the CP truth.
     expect(last?.liveError, 'liveError must be null').toBeNull();

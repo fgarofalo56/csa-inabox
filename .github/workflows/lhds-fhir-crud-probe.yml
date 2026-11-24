@@ -9,8 +9,8 @@ name: lhds fhir crud probe
 # needs a token the PDP admits, and the PDP denies everything until a bundle that homes the tenant is published.
 #
 # WHAT IT DOES (scripts/measure/health/lhds-fhir-crud-probe-run.mjs):
-#   1. create   two SYNTHETIC tenants fc-a-<yyyymmddhhmm> / fc-b-<...> (<= 20 chars) on stamp dev01: tenant.create, then
-#               fhir-tenant.create (one facility partition) for each. fhir-tenant.create's own readback proves the tokenless half:
+#   1. create   two SYNTHETIC tenants fc-a-<yyyymmddhhmm> / fc-b-<...> (<= 20 chars) on stamp dev01: tenant.create, which CHAINS fhir-tenant.create (#5442); the probe
+#               waits on that chained job (it never submits its own: two engine jobs raced live) and then adds one facility partition with fhir-tenant.configure. The engine job's own readback proves the tokenless half:
 #               rollout, /fhir/metadata through the API-server proxy, partitions through the PG job, and the isolation readback.
 #               Each job's state and control-plane receipts are printed (redacted, capped). Non-secret outputs: owned slugs,
 #               control plane URL and audience, the issuer DISCOVERED from the control plane.
