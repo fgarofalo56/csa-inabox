@@ -58,6 +58,27 @@ describe('unavailableText (deploy-integrity R7: claim only what the CP establish
   });
 });
 
+describe('SmartAppsTab register', () => {
+  it('has NO client id input; after registering, the generated id is shown read-only with Copy', async () => {
+    const GEN = 'growth-chart-k3x9a2bq';
+    const { calls } = installFetchMock({
+      '/apps': (_u, init) => (init?.method === 'POST' ? { ok: true, app: { ...APP, clientId: GEN } } : { ok: true, apps: [] }),
+    });
+    renderWithProviders(<SmartAppsTab id="item-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Register app' }));
+    await screen.findByText('Register a SMART app');
+    expect(screen.queryByRole('textbox', { name: /client id/i })).toBeNull(); // breaks if the free-text input returns
+    fireEvent.change(screen.getByRole('textbox', { name: /Display name/ }), { target: { value: 'Growth Chart' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Redirect URIs/ }), { target: { value: 'https://app.example/cb' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Launch URL/ }), { target: { value: 'https://app.example/launch' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Register' }));
+    expect(await screen.findByText('Registered Growth Chart')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: `Copy client id ${GEN}` }).length).toBeGreaterThan(0);
+    const post = calls.find((c) => c.init?.method === 'POST');
+    expect('clientId' in JSON.parse(String(post?.init?.body))).toBe(false); // breaks if the tab still sends one
+  });
+});
+
 describe('SmartAppsTab', () => {
   it('renders an HTTP 403 unavailable reason without the edge wording', async () => {
     bff({ search: { unavailable: true, reason: 'HTTP 403', patients: [] } });

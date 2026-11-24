@@ -27,7 +27,7 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: (...a: any[]) 
 
 import { getSession } from '@/lib/auth/session';
 import { cp, CpError, type CpSmartClient } from '../_lib/cp-client';
-import { SMART_SCOPE_CHOICES, buildLaunchUrl, parseRegister } from '../_lib/smart-apps';
+import { CLIENT_ID, SMART_SCOPE_CHOICES, buildLaunchUrl, generateClientId, parseRegister } from '../_lib/smart-apps';
 import { GET as listApps, POST as registerApp } from '../[id]/apps/route';
 import { PATCH as patchApp } from '../[id]/apps/[clientId]/route';
 import { POST as launchApp } from '../[id]/apps/[clientId]/launch/route';
@@ -70,14 +70,13 @@ describe('buildLaunchUrl', () => {
 });
 
 describe('parseRegister', () => {
-  const ok = { clientId: 'growth-chart', displayName: 'Growth Chart', redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch', allowedScopes: ['patient/*.rs'], kind: 'public' };
+  const ok = { displayName: 'Growth Chart', redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch', allowedScopes: ['patient/*.rs'], kind: 'public' };
   it('refuses a non-https launch URI, a scope outside the list, and a keyless asymmetric client', () => {
     // Each breaks if that rule is removed (the parse would succeed).
     expect(parseRegister({ ...ok, launchUri: 'http://app.example/launch' })).toEqual({ error: expect.stringMatching(/^launchUri/) });
     expect(parseRegister({ ...ok, launchUri: 'http://localhost:9000/launch' })).toEqual({ error: expect.stringMatching(/^launchUri/) }); // loopback too
     expect(parseRegister({ ...ok, allowedScopes: ['system/*.cruds'] })).toEqual({ error: expect.stringMatching(/^allowedScopes/) });
     expect(parseRegister({ ...ok, kind: 'asymmetric' })).toEqual({ error: expect.stringMatching(/^jwksUrl/) });
-    expect(parseRegister({ ...ok, clientId: 'patient-search' })).toEqual({ error: expect.stringMatching(/reserved/) });
     // Paired permits.
     expect(parseRegister(ok)).toEqual({ app: { ...ok } });
     expect(parseRegister({ ...ok, kind: 'asymmetric', jwksUrl: 'https://app.example/jwks' })).toMatchObject({ app: { kind: 'asymmetric', jwksUrl: 'https://app.example/jwks' } });
@@ -162,24 +161,54 @@ describe('POST /apps (register)', () => {
     expect(res.status).toBe(400); // breaks if the https rule is dropped (201)
     expect(create).not.toHaveBeenCalled();
   });
-  it('registers on the BOUND tenant, not a tenant named in the body', async () => {
-    const create = vi.spyOn(cp, 'createClient').mockResolvedValue(client());
-    const res = await registerApp(req(body), ctx());
+  const GENERATED = /^growth-chart-[a-z2-7]{8}$/;
+  it('registers on the BOUND tenant with a GENERATED client id; body tenant and body clientId are ignored', async () => {
+    const create = vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+    const res = await registerApp(req({ ...body, clientId: 'patient-search' }), ctx());
     expect(res.status).toBe(201);
-    // Breaks if body.tenant reaches the CP ('someone-else').
-    expect(create.mock.calls[0]?.[0]).toEqual({
-      clientId: 'growth-chart', tenant: 'mercy-general', clientType: 'app', displayName: 'Growth Chart',
+    const sent = create.mock.calls[0]?.[0];
+    // Breaks if body.clientId ('patient-search') or body.tenant ('someone-else') reaches the CP.
+    expect(sent?.clientId).toMatch(GENERATED);
+    expect(sent).toEqual({
+      clientId: sent?.clientId, tenant: 'mercy-general', clientType: 'app', displayName: 'Growth Chart',
       allowedScopes: ['patient/*.rs'], redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch',
     });
-    expect((await res.json()).app).toMatchObject({ clientId: 'growth-chart', kind: 'public', status: 'active' });
+    // The generated id is returned so the tab can show it (read-only, with Copy).
+    expect((await res.json()).app).toMatchObject({ clientId: sent?.clientId, kind: 'public', status: 'active' });
+  });
+  it('registers without any client id in the body', async () => {
+    const { clientId: _drop, ...noId } = body;
+    vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+    const res = await registerApp(req(noId), ctx());
+    expect(res.status).toBe(201); // breaks if a client id is still required from the user
+    expect((await res.json()).app.clientId).toMatch(GENERATED);
   });
   it('needs Contributor: a Reader grant is refused', async () => {
     grants.rows = grant('Reader');
     expect((await registerApp(req(body), ctx())).status).toBe(403);
   });
-  it('a CP 409 (client exists) is passed through as 409', async () => {
-    vi.spyOn(cp, 'createClient').mockRejectedValue(new CpError(409, 'conflict', 'client already exists'));
+  it('a CP 409 is retried ONCE with a fresh id; a second 409 is passed through as 409', async () => {
+    const create = vi.spyOn(cp, 'createClient')
+      .mockRejectedValueOnce(new CpError(409, 'conflict', 'client already exists'))
+      .mockImplementationOnce(async (b) => client({ clientId: b.clientId }));
+    expect((await registerApp(req(body), ctx())).status).toBe(201); // breaks without the retry (409)
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0].clientId).not.toBe(create.mock.calls[1]?.[0].clientId); // a fresh id, not the same one
+    create.mockReset();
+    create.mockRejectedValue(new CpError(409, 'conflict', 'client already exists'));
     expect((await registerApp(req(body), ctx())).status).toBe(409);
+    expect(create).toHaveBeenCalledTimes(2); // breaks if it loops
+  });
+});
+
+describe('generateClientId', () => {
+  it('slugs the display name to 40, appends 8 base32 chars, and fits the CP grammar', () => {
+    const zeros = (n: number) => new Uint8Array(n); // byte 0 -> 'a'
+    expect(generateClientId('Growth Chart!', zeros)).toBe('growth-chart-aaaaaaaa');
+    expect(generateClientId('x'.repeat(80), zeros)).toBe(`${'x'.repeat(40)}-aaaaaaaa`); // breaks if the 40 cap goes
+    expect(generateClientId('***', zeros)).toBe('app-aaaaaaaa'); // empty slug falls back
+    expect(generateClientId('A', (n) => new Uint8Array(n).fill(31))).toBe('a-77777777');
+    expect(CLIENT_ID.test(generateClientId('Ünïcode app — v2'))).toBe(true);
   });
 });
 

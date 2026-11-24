@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1716 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1720 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -1039,6 +1039,10 @@ export type DynamicApiRoute =
   | `/api/governance/workspace-egress/${string}`
   | `/api/health/jobs/${string}`
   | `/api/health/tenants/${string}`
+  | `/api/health/tenants/${string}/apps`
+  | `/api/health/tenants/${string}/apps/${string}`
+  | `/api/health/tenants/${string}/apps/${string}/launch`
+  | `/api/health/tenants/${string}/apps/patient-search`
   | `/api/insights/digests/${string}`
   | `/api/insights/digests/${string}/preview`
   | `/api/insights/digests/${string}/run`

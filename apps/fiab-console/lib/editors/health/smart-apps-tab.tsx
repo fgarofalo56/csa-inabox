@@ -20,7 +20,7 @@ import {
   SkeletonItem, Spinner, Subtitle2, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Textarea,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { AppsAddIn20Regular, Open16Regular, Rocket20Regular } from '@fluentui/react-icons';
+import { AppsAddIn20Regular, Copy16Regular, Open16Regular, Rocket20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { EmptyState } from '@/lib/components/empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
@@ -87,6 +87,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
   const [registering, setRegistering] = useState(false);
   const [editing, setEditing] = useState<AppRow | null>(null);
   const [launching, setLaunching] = useState<AppRow | null>(null);
+  const [registered, setRegistered] = useState<AppRow | null>(null);
 
   const load = useCallback(async () => {
     setProblem(null);
@@ -138,6 +139,15 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
   return (
     <div className={s.root}>
       {gate && <HonestGate gate={gate} surface="Health tenant apps" onResolved={() => void load()} />}
+      {registered && (
+        <MessageBar intent="success" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Registered {registered.displayName}</MessageBarTitle>
+            <div className={s.head}>Configure the app with this client id: <CopyId value={registered.clientId} /></div>
+          </MessageBarBody>
+          <MessageBarActions><Button size="small" onClick={() => setRegistered(null)}>Dismiss</Button></MessageBarActions>
+        </MessageBar>
+      )}
       {problem && (
         <MessageBar intent="warning" layout="multiline">
           <MessageBarBody><MessageBarTitle>{problem.title}</MessageBarTitle>{problem.text}</MessageBarBody>
@@ -172,7 +182,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
                 {apps.map((a) => (
                   <TableRow key={a.clientId}>
                     <TableCell>
-                      <div className={s.name}><span>{a.displayName}</span><span className={s.mono}>{a.clientId}</span></div>
+                      <div className={s.name}><span>{a.displayName}</span><CopyId value={a.clientId} /></div>
                     </TableCell>
                     <TableCell>
                       <div className={s.badges}>
@@ -198,7 +208,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
         </div>
       )}
       {registering && (
-        <RegisterDialog base={base} onClose={() => setRegistering(false)} onCreated={(a) => { setRegistering(false); setApps((cur) => [...(cur ?? []), a]); }} />
+        <RegisterDialog base={base} onClose={() => setRegistering(false)} onCreated={(a) => { setRegistering(false); setRegistered(a); setApps((cur) => [...(cur ?? []), a]); }} />
       )}
       {editing && (
         <EditLaunchDialog app={editing} onClose={() => setEditing(null)} save={async (launchUri) => {
@@ -212,9 +222,24 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
   );
 }
 
+/** A read-only client id with a copy button. The id is assigned by the BFF, never typed. */
+function CopyId({ value }: { value: string }) {
+  const s = useStyles();
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className={s.head}>
+      <span className={s.mono}>{value}</span>
+      <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label={`Copy client id ${value}`}
+        onClick={() => { void navigator.clipboard?.writeText(value).then(() => setCopied(true), () => setCopied(false)); }}>
+        {copied ? 'Copied' : 'Copy'}
+      </Button>
+    </span>
+  );
+}
+
 function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: () => void; onCreated: (a: AppRow) => void }) {
   const s = useStyles();
-  const [f, setF] = useState({ displayName: '', clientId: '', redirectUris: '', launchUri: '', kind: 'public' as 'public' | 'asymmetric', jwksUrl: '' });
+  const [f, setF] = useState({ displayName: '', redirectUris: '', launchUri: '', kind: 'public' as 'public' | 'asymmetric', jwksUrl: '' });
   const [scopes, setScopes] = useState<string[]>(['patient/*.rs', 'user/*.rs']);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<Problem | null>(null);
@@ -227,7 +252,7 @@ function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: (
       const r = await clientFetch(base, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          displayName: f.displayName, clientId: f.clientId, launchUri: f.launchUri, kind: f.kind, allowedScopes: scopes,
+          displayName: f.displayName, launchUri: f.launchUri, kind: f.kind, allowedScopes: scopes,
           redirectUris: f.redirectUris.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
           ...(f.kind === 'asymmetric' ? { jwksUrl: f.jwksUrl } : {}),
         }),
@@ -246,9 +271,8 @@ function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: (
           <DialogTitle>Register a SMART app</DialogTitle>
           <DialogContent>
             <div className={s.form}>
-              <Field label="Display name" required><Input value={f.displayName} onChange={set('displayName')} /></Field>
-              <Field label="Client id" required hint="3 to 64 letters, digits, dot, underscore or hyphen. The app sends this as client_id.">
-                <Input value={f.clientId} onChange={set('clientId')} />
+              <Field label="Display name" required hint="Shown to users who launch the app.">
+                <Input value={f.displayName} onChange={set('displayName')} />
               </Field>
               <Field label="Redirect URIs" required hint="One per line. https, or http on localhost for development.">
                 <Textarea value={f.redirectUris} onChange={set('redirectUris')} resize="vertical" />

@@ -44,6 +44,22 @@ const SCOPE_SET = new Set(SMART_SCOPE_CHOICES.map((c) => c.scope));
  */
 export const RESERVED_CLIENT_IDS = new Set(['patient-search']);
 
+const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
+
+/**
+ * The client id the BFF assigns (OAuth dynamic registration: the authorization server, not the user, assigns
+ * client_id). `<slug of displayName, at most 40>-<8 random base32 chars>`, e.g. `growth-chart-k3x9a2bq`. Throws if
+ * the result would not match the CP's id grammar or is reserved; neither can happen with the 9-char suffix, and the
+ * guard keeps it that way if the shape changes. `rand` is injectable for tests.
+ */
+export function generateClientId(displayName: string, rand: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n))): string {
+  const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '') || 'app';
+  const suffix = Array.from(rand(8), (b) => BASE32[b % 32]).join('');
+  const id = `${slug}-${suffix}`;
+  if (!CLIENT_ID.test(id) || RESERVED_CLIENT_IDS.has(id)) throw new Error(`generated client id is not usable: ${id}`);
+  return id;
+}
+
 function httpsUrl(v: unknown, opts: { loopback?: boolean } = {}): string | null {
   if (typeof v !== 'string' || v.length === 0 || v.length > 2048) return null;
   let u: URL;
@@ -61,7 +77,6 @@ export function parseLaunchUri(v: unknown): string | null {
 }
 
 export interface RegisterInput {
-  clientId: string;
   displayName: string;
   redirectUris: string[];
   launchUri: string;
@@ -73,9 +88,6 @@ export interface RegisterInput {
 
 export function parseRegister(body: unknown): { app: RegisterInput } | { error: string } {
   const b = (body ?? {}) as Record<string, unknown>;
-  const clientId = typeof b.clientId === 'string' ? b.clientId.trim() : '';
-  if (!CLIENT_ID.test(clientId)) return { error: 'clientId: 3 to 64 letters, digits, dot, underscore or hyphen' };
-  if (RESERVED_CLIENT_IDS.has(clientId)) return { error: `clientId: '${clientId}' is reserved` };
   const displayName = typeof b.displayName === 'string' ? b.displayName.trim() : '';
   if (!displayName || displayName.length > 120) return { error: 'displayName: 1 to 120 characters' };
   if (!Array.isArray(b.redirectUris) || b.redirectUris.length < 1 || b.redirectUris.length > 10) {
@@ -98,11 +110,11 @@ export function parseRegister(body: unknown): { app: RegisterInput } | { error: 
   if (b.kind !== 'public' && b.kind !== 'asymmetric') return { error: 'kind: public or asymmetric' };
   if (b.kind === 'public') {
     if (b.jwksUrl !== undefined && b.jwksUrl !== '') return { error: 'jwksUrl: a public client has no keys' };
-    return { app: { clientId, displayName, redirectUris, launchUri, allowedScopes, kind: 'public' } };
+    return { app: { displayName, redirectUris, launchUri, allowedScopes, kind: 'public' } };
   }
   const jwksUrl = httpsUrl(b.jwksUrl);
   if (!jwksUrl) return { error: 'jwksUrl: an asymmetric client needs an https JWKS URL' };
-  return { app: { clientId, displayName, redirectUris, launchUri, allowedScopes, kind: 'asymmetric', jwksUrl } };
+  return { app: { displayName, redirectUris, launchUri, allowedScopes, kind: 'asymmetric', jwksUrl } };
 }
 
 /** True when `new URL(v)` would not throw. */
