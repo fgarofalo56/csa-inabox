@@ -376,6 +376,9 @@ describe('EHR launch (N19)', () => {
   async function mint(c: Ctx, over: Record<string, unknown> = {}) {
     const r = await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'pat-1', ...over });
     expect(r.status).toBe(201);
+    // The launcher's `iss`: the tenant FHIR base, the same value the token audience is. Breaks if the CP omits it
+    // or answers another tenant's base.
+    expect(r.json.data.iss).toBe(fhir(String(over.tenant ?? 'visn-01')));
     return r.json.data.launch as string;
   }
   async function setup() {
@@ -411,6 +414,103 @@ describe('EHR launch (N19)', () => {
     const t = (await flow(c, 'patient/*.rs user/*.rs')).token!;
     expect(t.json.scope).toBe('user/*.rs');
     expect(t.json.patient).toBeUndefined();
+  });
+  it('an EHR launch WITHOUT a patient is accepted and the token carries no patient (#5454 A6)', async () => {
+    const c = await setup();
+    // Breaks (400, so mint's expect(201) fails) if LaunchSchema makes `patient` required again.
+    const h = await mint(c, { patient: undefined });
+    const stored = [...c.stores.grants.docs.values()].find((d: any) => d.kind === 'launch') as any;
+    expect('patient' in stored).toBe(false); // breaks if the doc is written with patient: undefined/null
+    const t = (await flow(c, 'launch patient/*.rs user/*.rs', { launch: h })).token!;
+    expect(t.status).toBe(200);
+    expect(t.json.patient).toBeUndefined(); // breaks if a patient leaks in from anywhere
+    expect(t.json.need_patient_banner).toBeUndefined(); // banner only when a patient exists
+    expect(t.json.scope).toBe('user/*.rs launch'); // no patient => every patient/ scope dropped; user/ kept
+    const claimsOf = await claims(c, t.json.access_token);
+    expect(claimsOf.patient).toBeUndefined();
+    // Paired control: the same flow with a patient is unchanged.
+    const withP = (await flow(c, 'launch patient/*.rs user/*.rs', { launch: await mint(c) })).token!;
+    expect(withP.json.patient).toBe('pat-1');
+    expect(withP.json.need_patient_banner).toBe(false);
+    expect(withP.json.scope).toContain('patient/*.rs');
+    // An invalid patient id is still refused when one IS supplied.
+    expect((await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'a/b' })).status).toBe(400);
+  });
+});
+
+describe('admin patient search for the console EHR launcher (#5454 A6)', () => {
+  class Search implements PatientSearch {
+    calls: string[] = [];
+    fail = false;
+    rows: PatientSummary[] = [{ id: 'pat-1', name: 'Ada Smith', birthDate: '1970-01-02' }];
+    async search(tenant: string, oid: string, roles: readonly string[], q: PatientQuery): Promise<PatientSummary[]> {
+      this.calls.push(`${tenant} ${oid} ${[...roles].join(',')} ${q.name} ${q.birthdate ?? '-'}`);
+      if (this.fail) throw new PatientSearchUnavailableError('fhir edge unreachable');
+      return this.rows.filter((r) => r.name.toLowerCase().includes(q.name.toLowerCase()));
+    }
+    async read(): Promise<PatientSummary | undefined> {
+      return undefined;
+    }
+  }
+  async function setup() {
+    const search = new Search();
+    const c = await boot({ patientSearch: search });
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return { c, search };
+  }
+  const path = (t = 'visn-01') => `/api/health/auth/tenants/${t}/patient-search`;
+
+  it('searches as the named user with that user\'s roles and returns the rows', async () => {
+    const { c, search } = await setup();
+    const r = await c.admin('POST', path(), { oid: USER, q: 'ada', birthdate: '1970' });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toEqual({ patients: [{ id: 'pat-1', name: 'Ada Smith', birthDate: '1970-01-02' }] });
+    // Breaks if the route searches with another oid, drops the user's roles, or loses the birthdate.
+    expect(search.calls).toEqual([`visn-01 ${USER} fhir-data-reader ada 1970`]);
+  });
+  it('an unavailable search is a 200 with {unavailable, reason} and no rows', async () => {
+    const { c, search } = await setup();
+    search.fail = true;
+    const r = await c.admin('POST', path(), { oid: USER, q: 'ada' });
+    expect(r.status).toBe(200); // breaks if the error escapes as a 500
+    expect(r.json.data).toEqual({ unavailable: true, reason: 'fhir edge unreachable' });
+  });
+  it('a user with no role carrying user/Patient.rs is notPermitted and the FHIR search never runs', async () => {
+    const { c, search } = await setup();
+    c.graph.members.set(USER, new Set()); // no bound group => no role
+    const r = await c.admin('POST', path(), { oid: USER, q: 'ada' });
+    expect(r.json.data).toEqual({ notPermitted: true, patients: [] });
+    expect(search.calls).toEqual([]); // breaks if the search runs with an empty authority
+  });
+  it('needs write auth, a GUID oid, a 1-100 char query, an FHIR date and an active tenant', async () => {
+    const { c } = await setup();
+    expect((await c.call('POST', path(), { token: await readerToken(), json: { oid: USER, q: 'ada' } })).status).toBe(403);
+    expect((await c.admin('POST', path(), { oid: 'not-a-guid', q: 'ada' })).status).toBe(400);
+    expect((await c.admin('POST', path(), { oid: USER, q: '   ' })).status).toBe(400);
+    expect((await c.admin('POST', path(), { oid: USER, q: 'x'.repeat(101) })).status).toBe(400);
+    expect((await c.admin('POST', path(), { oid: USER, q: 'ada', birthdate: '02/01/1970' })).status).toBe(400);
+    expect((await c.admin('POST', path('visn-02'), { oid: USER, q: 'ada' })).status).toBe(404); // suspended tenant
+    expect((await c.admin('POST', path('visn-99'), { oid: USER, q: 'ada' })).status).toBe(404);
+    expect((await c.admin('POST', path(), { oid: USER, q: 'ada' })).status).toBe(200); // paired permit
+  });
+  it('the DEFAULT FHIR search mints a 60 s user token whose idp_tid is the CP Entra tenant', async () => {
+    // An injected patientSearch bypasses token minting, so this uses createFhirPatientSearch over a fake fetch.
+    const seen: Array<{ url: string; auth: string }> = [];
+    const fetchFhir = (async (u: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(u), auth: String((init?.headers as Record<string, string>)?.authorization ?? '') });
+      return new Response(JSON.stringify({ resourceType: 'Bundle', entry: [{ resource: { resourceType: 'Patient', id: 'pat-1', name: [{ text: 'Ada Smith' }] } }] }), { status: 200, headers: { 'content-type': 'application/fhir+json' } });
+    }) as typeof fetch;
+    const c = await boot({ fetchFhir });
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const r = await c.admin('POST', path(), { oid: USER, q: 'ada' });
+    expect(r.json.data).toEqual({ patients: [{ id: 'pat-1', name: 'Ada Smith' }] });
+    expect(seen.map((x) => x.url)).toEqual([`${fhir('visn-01')}/Patient?name=ada&_count=20`]);
+    const tok = await claims(c, seen[0]!.auth.replace(/^Bearer /, ''));
+    // Breaks if searchAs is handed anything but deps.entraTenantId (e.g. undefined: the claim would be absent).
+    expect(tok.idp_tid).toBe(TENANT);
+    expect([tok.sub, tok.sub_type, tok.scope, tok.client_id, tok.aud, tok.exp - tok.iat]).toEqual([USER, 'user', 'user/Patient.rs', 'lhds-patient-picker', fhir('visn-01'), 60]);
   });
 });
 

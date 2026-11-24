@@ -2763,6 +2763,20 @@ export const ACCEPTED = [
       'same class as the report canvas\'s webUrl button — not an address of this deployment\'s ' +
       'infrastructure, and the flow is meaningless if Loom picks it.',
   },
+  {
+    file: 'apps/fiab-console/lib/editors/health/smart-apps-tab.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: '#5454',
+    why:
+      'Registering a THIRD-PARTY SMART on FHIR app (Inferno, a vendor EHR app) on the tenant authorization ' +
+      'server. The Launch URL is the app\'s own SMART launch page and the JWKS URL its own public-key ' +
+      'endpoint; both are hosted by whoever wrote the app, outside this deployment, so there is no Azure ' +
+      'resource or discovery call that could enumerate them and nothing for Loom to provision or bind. The ' +
+      'SMART App Launch spec defines both as values the app supplies to the EHR. The client id, which IS ' +
+      'Loom\'s to assign, is generated server-side and is not an input. Both URLs are validated https-only ' +
+      'by the BFF (and by the CP) before anything is stored.',
+  },
 
   // ── FALSE POSITIVE: the classifier fired on evidence that is not an ask ──
   {

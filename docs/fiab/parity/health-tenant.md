@@ -2,6 +2,7 @@
 Reviewed-on: 2026-11-15
 Validated-against:
   - apps/fiab-console/lib/editors/health/tenant-editor.tsx
+  - apps/fiab-console/lib/editors/health/smart-apps-tab.tsx
   - apps/fiab-console/lib/install/provisioners/health-tenant.ts
   - apps/fiab-console/app/api/health/tenants/**
 -->
@@ -34,6 +35,10 @@ Design reference: `PRPs/active/loom-health-data-services/LOOM-INTEGRATION.md` s1
 | Retry after a failed deployment | built (Retry on the failure bar) |
 | Paused-stamp notice | built (W1b-4): a warning bar names the stamp and recorded reason when the stamp is paused, from the stamp the BFF reports or from the `health-stamp-capacity` gate. See the BFF note below |
 | Pause / resume / evacuate (per tenant) | tracked to W09 (#5309) - W1-8 pauses a whole stamp from the estate-power lane; the control plane has no per-tenant pause or evacuate job to call |
+| SMART apps list (AHDS: app registrations used against the FHIR service) | built (#5454 A6): **Apps** tab table with type (public / asymmetric) and status badges, read live from the authorization server, EmptyState launcher when there are none |
+| Register a SMART app | built (#5454 A6): dialog for display name, client id, redirect URIs, https launch URL, scopes picked from a fixed list (no free-text scope), public or asymmetric with a JWKS URL |
+| Enable / disable an app, edit its launch URL | built (#5454 A6): per-row actions; the BFF refuses a client of another tenant and a non-https launch URL |
+| EHR launch of an app (Launch with patient context) | built, honest-gate (#5454 A6): Launch mints a single-use handle for the signed-in user and opens `launchUri?iss=<FHIR base>&launch=<handle>`. "Launch without a patient" always works. The patient search needs the FHIR edge, which is not deployed (W1b-3a spec G1, behind apim-WA by operator decision), so today it shows "Patient search is unavailable" and no rows. The FHIR-edge gate is not yet registered in the gate registry; tracked in #5470 (G2) |
 
 Five rows are descoped to W09 by operator decision 2026-11-15 (#5309), because their engines do not exist: child
 services, Access, Keys, Consent/Feeds/Cost/Evidence, per-tenant pause/resume/evacuate. They are tracked, not built, and
@@ -54,6 +59,14 @@ banner has no live source today; it does fire when `POST` refuses a placement on
 | Tenant list | `GET /api/health/tenants` | control plane `GET /tenants` |
 | Prerequisites list + Fix it | `GET /api/admin/gates`, then the gate wizard (`/api/admin/gates/[id]/options`, `/resolve`) | gate registry; admin-scoped, hidden for non-admins |
 | Save quotas | `PATCH /api/health/tenants/[id]` `{quotas}` | control plane `PATCH /tenants/{id}` |
+| Apps tab list | `GET /api/health/tenants/[id]/apps` | control plane `GET /api/health/auth/clients` (filtered to this tenant's app clients) |
+| Register app | `POST /api/health/tenants/[id]/apps` | control plane `POST /api/health/auth/clients` (tenant = the item's binding, never the body) |
+| Disable / Enable, Edit launch URL | `PATCH /api/health/tenants/[id]/apps/[clientId]` | control plane `PATCH /api/health/auth/clients/{id}`, after checking the client belongs to this tenant |
+| Launch | `POST /api/health/tenants/[id]/apps/[clientId]/launch` `{patient?}` | control plane `POST /api/health/auth/launch` with the **session** oid; `iss` comes from the CP reply |
+| Patient search (launch dialog) | `POST /api/health/tenants/[id]/apps/patient-search` `{q, birthdate?}` | control plane `POST /api/health/auth/tenants/{t}/patient-search` with the session oid; `{unavailable}` and `{notPermitted}` are rendered, never rows |
+
+Authorization: listing, launching and searching need Reader on `health.tenant-admin`. Registering and patching need
+Contributor. A launch or search acts as the signed-in user, whose own FHIR roles bound what the token can reach.
 
 The control plane's `tenant.create` job deploys the tenant's PostgreSQL database,
 two Blob accounts, an Event Hubs hub, a managed identity, a capacity alert and
@@ -101,6 +114,10 @@ is deliberate and auditable instead of implied. Device-code sessions are refused
 ## Not done in this change
 
 - The in-browser walk (G1) has not been run (pending the W1b-1 deploy); this is not A-grade.
+- The Apps tab (#5454 A6) has not had a G1 walk either. It is proven only against a faked BFF
+  (`lib/editors/health/__tests__/smart-apps-tab.test.tsx`) and faked CP client methods
+  (`app/api/health/tenants/__tests__/smart-apps-routes.test.ts`). The console session oid must be in the same Entra
+  tenant the authorization server federates to, or the launch handle will not match the app's sign-in.
 
 ## Cloud status
 

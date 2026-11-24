@@ -14,7 +14,7 @@
 //   POST {issuerPath}/{tenant}/token
 //   OPTIONS on the discovery, jwks and token paths answers the CORS preflight.
 //   admin (control-plane bearer auth): /api/health/auth/{clients,clients/{id},tenants/{t}/bindings,
-//     tenants/{t}/fhir-users[/{oid}],launch,readiness}
+//     tenants/{t}/fhir-users[/{oid}],tenants/{t}/patient-search,launch,readiness}
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -240,11 +240,20 @@ const FhirUserPutSchema = z.strictObject({
 });
 const FHIR_USER_LIST_MAX = 500;
 
+// Admin patient search for the console's EHR launcher (#5454 A6): the same query the picker accepts.
+const PatientSearchSchema = z.strictObject({
+  oid: z.string().refine(isGuid, 'must be a GUID'),
+  q: z.string().trim().min(1).max(100),
+  birthdate: z.string().regex(FHIR_DATE, 'must be YYYY, YYYY-MM or YYYY-MM-DD').optional(),
+});
+
 const LaunchSchema = z.strictObject({
   tenant: z.string().regex(SLUG),
   oid: z.string().refine(isGuid, 'must be a GUID'),
   clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/),
-  patient: z.string().regex(FHIR_ID),
+  // Optional (#5454 A6): an EHR launch with no patient in context is valid SMART. The token then carries no
+  // `patient` and no need_patient_banner, and patient/ scopes are dropped exactly as for a standalone launch.
+  patient: z.string().regex(FHIR_ID).optional(),
   encounter: z.string().regex(FHIR_ID).optional(),
   fhirContext: z.array(FhirContextEntry).max(10).optional(),
 });
@@ -591,7 +600,9 @@ export function createAuthServer(deps: AuthServerDeps) {
   const PICK_ID = /^[A-Za-z0-9_-]{32}$/;
 
   /** The search for ONE pick: the default mints its token with that user's own Entra tid, as user tokens carry. */
-  const searchFor = (doc: GrantDoc): PatientSearch => deps.patientSearch ?? createFhirPatientSearch({
+  const searchFor = (doc: GrantDoc): PatientSearch => searchAs(doc.idpTid as string);
+  /** The search for a user of Entra tenant `idpTid`, with a 60 s token minted for that user (picker + admin route). */
+  const searchAs = (idpTid: string): PatientSearch => deps.patientSearch ?? createFhirPatientSearch({
     fhirBaseFor: deps.fhirBaseFor,
     ...(deps.fetchFhir ? { fetch: deps.fetchFhir } : {}),
     token: async (tenant, oid, roles) => {
@@ -604,7 +615,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         tenant,
         subType: 'user',
         sub: oid,
-        idpTid: doc.idpTid as string,
+        idpTid,
         clientId: PICKER_CLIENT_ID,
         scope: scope.map(serializeScope),
         roles: [...roles],
@@ -1250,6 +1261,39 @@ export function createAuthServer(deps: AuthServerDeps) {
         throw e;
       }
     }
+    // Patient search on behalf of a console user (#5454 A6), for the EHR launcher. Write-auth like launch: it reads
+    // PHI. The search runs with the SAME role-bounded 60 s user token the picker uses (user/Patient.rs intersected
+    // with that oid's role ceilings), so the FHIR engine and the PDP decide what the user may see. An honest
+    // failure is a 200 with a flag, never invented rows: {unavailable:true, reason} on PatientSearchUnavailableError
+    // or a failed role check, and {notPermitted:true} when the user's roles carry no user/Patient.rs. A 200 keeps
+    // that state a value the console renders, distinct from a CP fault (5xx) or a bad request (400).
+    const ps = /^\/api\/health\/auth\/tenants\/([a-z0-9-]{2,40})\/patient-search$/.exec(path);
+    if (ps && method === 'POST') {
+      await deps.authenticate(auth, 'write');
+      const slug = ps[1] as string;
+      const p = PatientSearchSchema.safeParse(await readJson(req));
+      if (!p.success) throw badRequest(`${p.error.issues[0]?.path.join('.') || 'body'}: ${p.error.issues[0]?.message ?? 'invalid'}`);
+      const t = await deps.tenants.get(slug);
+      if (!t || t.status !== 'active') throw notFound('tenant');
+      const oid = p.data.oid.toLowerCase();
+      let roles: string[];
+      try {
+        roles = await rolesForUser(slug, oid);
+      } catch (e) {
+        deps.log('auth.membership_error', { error: e instanceof Error ? e.name : 'unknown', consent: e instanceof GraphConsentRequiredError ? 1 : 0 });
+        return ok({ unavailable: true, reason: 'role membership could not be established' });
+      }
+      if (pickerScope(roles).length === 0) return ok({ notPermitted: true, patients: [] });
+      try {
+        // Console users sign in to the CP's own Entra tenant, the one the AS federates to (the callback refuses others).
+        const patients = await searchAs(deps.entraTenantId).search(slug, oid, roles, { name: p.data.q, ...(p.data.birthdate ? { birthdate: p.data.birthdate } : {}) });
+        return ok({ patients });
+      } catch (e) {
+        if (!(e instanceof PatientSearchUnavailableError)) throw e;
+        deps.log('auth.admin_search_unavailable', { reason: e.reason });
+        return ok({ unavailable: true, reason: e.reason });
+      }
+    }
     if (path === '/api/health/auth/launch' && method === 'POST') {
       await deps.authenticate(auth, 'write');
       const p = LaunchSchema.safeParse(await readJson(req));
@@ -1266,11 +1310,13 @@ export function createAuthServer(deps: AuthServerDeps) {
         tenant: l.tenant,
         clientId: l.clientId,
         oid: l.oid,
-        patient: l.patient,
+        ...(l.patient ? { patient: l.patient } : {}),
         ...(l.encounter ? { encounter: l.encounter } : {}),
         ...(l.fhirContext ? { fhirContext: l.fhirContext } : {}),
       });
-      return ok({ launch: handle, expiresAt }, 201);
+      // `iss` is the tenant's FHIR base (the token audience): the launcher sends the app to `launchUri?iss=&launch=`
+      // and must not derive the base itself (#5454 A6).
+      return ok({ launch: handle, expiresAt, iss: deps.fhirBaseFor(l.tenant) }, 201);
     }
     if (path === '/api/health/auth/readiness' && method === 'GET') {
       await deps.authenticate(auth, 'read');

@@ -13,10 +13,10 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1716 |
+| Total routes | 1720 |
 | Public (no session) | 60 |
 | Session-only | 617 |
-| Owner-scoped | 698 |
+| Owner-scoped | 702 |
 | Admin | 341 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 503 |
@@ -1076,6 +1076,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `health/deep/route.ts` | GET | public |  | Cosmos |
 | `health/jobs/[id]/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
 | `health/route.ts` | GET | public |  | — |
+| `health/tenants/[id]/apps/[clientId]/launch/route.ts` | POST | owner-scoped |  | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
+| `health/tenants/[id]/apps/[clientId]/route.ts` | PATCH | owner-scoped |  | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
+| `health/tenants/[id]/apps/patient-search/route.ts` | POST | owner-scoped |  | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
+| `health/tenants/[id]/apps/route.ts` | GET POST | owner-scoped |  | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
 | `health/tenants/[id]/route.ts` | GET POST PATCH | owner-scoped | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
 | `health/tenants/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
 
@@ -2445,7 +2449,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-206 function(s) across 95 module(s) reach an owner / workspace-ACL
+207 function(s) across 96 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2457,6 +2461,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/data-products/_lib/access-gate.ts` | `resolveDataProductDataAccess` |
 | `apps/fiab-console/app/api/deployment-pipelines/loom/_lib/pipeline-store.ts` | `loadPipeline`, `ownedWorkspace` |
 | `apps/fiab-console/app/api/git-integration/_lib/ctx.ts` | `loadGitCtx` |
+| `apps/fiab-console/app/api/health/tenants/_lib/smart-apps.ts` | `boundTenant` |
 | `apps/fiab-console/app/api/items/_lib/adx-item-scope.ts` | `guardAdxItemRequest` |
 | `apps/fiab-console/app/api/items/_lib/ai-content-fallback.ts` | `loadContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-checkpoints.ts` | `captureBuilderCheckpoint`, `listBuilderCheckpoints`, `restoreBuilderCheckpoint` |
