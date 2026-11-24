@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@azure/cosmos": "^4.10.1",
-    "@azure/identity": "^4.14.0",
+    "@azure/identity": "^4.14.1",
     "jose": "^6.2.13",
     "zod": "^4.6.7"
   },
