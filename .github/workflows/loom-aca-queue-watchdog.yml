@@ -1,0 +1,153 @@
+name: loom-aca queue watchdog
+
+# Detects `loom-aca` jobs the in-VNet runner's KEDA scaler never served, starts
+# ONE `gh-aca-runner` execution per tick when one has waited past a cold start,
+# and goes RED when a job is still queued after a kick had its chance (#5483).
+#
+# THE INCIDENT (2026-11-25, #5483). For ~12.5 h the `github-runner` scale rule
+# on the Container Apps Job `gh-aca-runner` polled GitHub successfully and
+# computed `MetricValue: 0.00, Active: false` while a `loom-aca` job sat queued
+# for ~10 h. Nothing alerted. A manual `az containerapp job start` registered a
+# runner and took the job at once. Root cause is NOT established; this lane
+# applies the measured remedy, bounded, and reports when it does not help.
+# Decision logic, thresholds and exit codes: scripts/ci/loom-aca-queue-watchdog.mjs.
+# Runbook: docs/fiab/github-actions-runner.md, "Queue watchdog".
+#
+# THIS WORKFLOW PINS `ubuntu-latest` ON PURPOSE, the same reasoning as
+# ci-runner-var-guard.yml. It must not depend on the thing it watches: routed
+# through `vars.CI_RUNNER` (which can point at `loom-aca`), a dead scaler would
+# leave the watchdog itself queued behind the job it exists to rescue.
+#
+# AUTH. OIDC `azure/login` with the deploy SP (AZURE_CLIENT_ID), the same
+# pattern csa-loom-exercise-services.yml uses against rg-csa-loom-admin-*. Its
+# federated credential is pinned to refs/heads/main, so scheduled runs (always
+# main) and dispatches from main log in; a dispatch from a BRANCH dies at
+# AADSTS700213. That identity's rights are an out-of-band prerequisite
+# (docs/fiab/deployment/prerequisites.md P2: Contributor at the subscription),
+# NOT a bicep role assignment; Contributor includes
+# Microsoft.App/jobs/start/action and .../executions read.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      kick:
+        description: 'Start an execution when a loom-aca job is stale. false = observe only.'
+        type: boolean
+        required: false
+        default: true
+
+# Workflow default is read-only; each job widens only what it needs. The job
+# holding the Azure token never holds `issues: write`, and the job that files
+# the issue never holds an Azure token.
+permissions:
+  contents: read
+
+# One tick at a time. cancel-in-progress:false lets a second tick QUEUE (GitHub
+# keeps one pending and cancels older pending ones) instead of killing a tick
+# that may be mid-kick.
+concurrency:
+  group: loom-aca-queue-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: loom-aca queue watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      outcome: ${{ steps.watch.outputs.outcome }}
+      exit_code: ${{ steps.watch.outputs.exit_code }}
+      alert_lines: ${{ steps.watch.outputs.alert_lines }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Azure login (OIDC, deploy SP)
+        uses: azure/login@v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Detect stale loom-aca jobs, kick, signal
+        id: watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Commercial ADMIN_SUB is this secret in csa-loom-post-deploy-bootstrap.yml
+          # too; every az call passes --subscription explicitly, never the
+          # default context.
+          LOOM_ACA_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          LOOM_ACA_RESOURCE_GROUP: rg-csa-loom-admin-centralus
+          LOOM_ACA_JOB_NAME: gh-aca-runner
+          LOOM_ACA_LABEL: loom-aca
+          KICK: ${{ github.event_name == 'schedule' && 'true' || inputs.kick }}
+        run: |
+          set -uo pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          node scripts/ci/loom-aca-queue-watchdog.mjs
+
+  # ANY non-zero outcome (red, kicked-scaler-miss, fail-closed, or a job that
+  # died before its verdict) opens or comments on ONE tracking issue, deduped
+  # by the `loom-aca-queue-watchdog` label: the open-issue-else-comment
+  # convention of loom-synthetic-monitor.yml. #5483 was an outage nobody saw; a
+  # red run on a 10-minute cron that nobody opens would be the same outage.
+  alert:
+    name: File / update tracking issue on a non-zero outcome
+    needs: watchdog
+    if: always() && needs.watchdog.result != 'success' && needs.watchdog.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Open or update the tracking issue
+        uses: actions/github-script@v9
+        env:
+          # Through the ENVIRONMENT, never `${{ }}` inside the JS source: these
+          # carry log text (see loom-synthetic-monitor.yml for why).
+          WD_OUTCOME: ${{ needs.watchdog.outputs.outcome }}
+          WD_EXIT: ${{ needs.watchdog.outputs.exit_code }}
+          WD_LINES: ${{ needs.watchdog.outputs.alert_lines }}
+          WD_RESULT: ${{ needs.watchdog.result }}
+        with:
+          script: |
+            const mod = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/loom-aca-queue-watchdog.mjs`);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = mod.buildIssueBody({
+              outcome: process.env.WD_OUTCOME,
+              exitCode: process.env.WD_EXIT,
+              linesJson: process.env.WD_LINES,
+              jobResult: process.env.WD_RESULT,
+              runUrl,
+            });
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: mod.ISSUE_LABEL, per_page: 20,
+            });
+            const plan = mod.planIssueAction(open.data);
+            if (plan.action === 'comment') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: plan.number, body,
+              });
+              core.notice(`commented on #${plan.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: mod.ISSUE_TITLE, body,
+                labels: ['csa-loom', mod.ISSUE_LABEL],
+              });
+              core.notice(`opened #${created.data.number}`);
+            }

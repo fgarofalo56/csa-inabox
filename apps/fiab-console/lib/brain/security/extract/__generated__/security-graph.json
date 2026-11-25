@@ -40481,6 +40481,39 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/loom-aca-queue-watchdog.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/loom-aca-queue-watchdog.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/loom-aca-queue-watchdog.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "console:member:547",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:560",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/measure-cron-cadence.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -53217,6 +53250,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/loom-aca-queue-watchdog.mjs#module",
+          "codeModuleId": "code:scripts/ci/loom-aca-queue-watchdog.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/measure-cron-cadence.mjs#module",
           "codeModuleId": "code:scripts/ci/measure-cron-cadence.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -54563,6 +54601,10 @@
         {
           "subject": "scripts/ci/kv-secret-sync-plan.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/loom-aca-queue-watchdog.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/measure-cron-cadence.mjs",
