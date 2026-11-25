@@ -13,7 +13,14 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-25): ACTIVE.** **Update 2026-11-25 evening: the FHIR edge (G1) is DEPLOYED on Commercial dev01 (#5481 `261d3f3cd`, deploy-health 45567856388). Its engine positive control is still owed.**
+**Status (2026-11-25): ACTIVE.** **Update 2026-11-25 late: the FHIR edge is VERIFIED on Commercial dev01 for existing AND newly created engines. #5486 (the engine drift reconciler) is DEPLOYED and VERIFIED. A NEW Inferno blocker is #5489.**
+- #5486 `3878aa279`: the CP re-applies any engine whose rendered revision differs, at startup and every 30 min. Rolled at 17:43Z. Its startup pass logged `engine_reconcile.submitted` for the demo tenant (rendered `8887bbb47f67` vs running `d0604d0daf43`), and the demo tenant's `/fhir/metadata` through the edge went 504 -> **200**.
+- Fresh engines (`fc-a`/`fc-b-202611251808`) through the edge: `/fhir/metadata` **200**, discovery **200** (the per-tenant issuer), `Patient` without a token **401**. CRUD probe 45574659735 concluded `success` (create, approved publish, in-cluster create/read with cross-tenant and scope denials, cleanup).
+- **#5489 blocks Inferno and the live A5 picker.** HAPI URL partitioning serves `/{tenant}/fhir/{partition}/{type}`. The AS advertises `/{tenant}/fhir` (`wire.ts` `fhirBaseFor`), and resource requests there answer 400/404. It needs a design decision: serve a default partition at the bare base, or advertise a per-facility base.
+- In-VNet runner incident #5483 (all `loom-aca` jobs frozen ~10 h, the scaler silently at 0): resolved. There is a dedicated runner PAT, mirrored to Key Vault with an expiry (#5490, merged), and a queue watchdog with auto-kick (#5491, merged).
+- Next, each a fresh session: the #5489 design, a TLS certificate Inferno trusts, the headed sign-in, then Inferno. An authenticated read/write THROUGH the edge is not measured yet. GCC-High is not exercised (#5123).
+
+**Update 2026-11-25 evening: the FHIR edge (G1) is DEPLOYED on Commercial dev01 (#5481 `261d3f3cd`, deploy-health 45567856388). Its engine positive control is still owed (since closed: see above).**
 - The edge is a Loom-owned nginx router behind the stamp App Gateway (operator decision 2026-11-25). Through the public stamp ingress, which answered 502 on every path before the deploy:
   - per-tenant FHIR-base discovery returns 200, byte-identical to the issuer copy;
   - an unknown tenant or a non-FHIR path returns a 404 OperationOutcome;
