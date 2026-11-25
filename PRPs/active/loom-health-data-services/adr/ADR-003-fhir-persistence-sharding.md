@@ -70,3 +70,34 @@ export, evacuation and deletion (crypto-shred + `DROP DATABASE`).
 ## Reversal cost
 High for the partition decision (must be set at creation), medium for the
 rest (ndjson export/import).
+
+## Amendment 2026-11-25: the bare tenant base serves the DEFAULT partition (#5489)
+
+**Decision (operator, 2026-11-25).** The engine serves HAPI's `DEFAULT`
+partition (id 0) at the bare tenant base `{edge}/{tenant}/fhir`, and still
+serves each facility at `{edge}/{tenant}/fhir/{facility}/…`. The AS, the edge
+and the `aud` contract (#5422 decision 13) do not change. This replaces the
+earlier engine-config wording that a request with no partition segment is a
+400 and "never a fall-through to a default partition".
+
+**Why.** The SMART AS advertises the bare base for `iss`, `aud`, `fhirUser`
+and the patient search. HAPI 8.12.0's `UrlBaseTenantIdentificationStrategy`
+falls back to `DEFAULT` only for `metadata` and `$op`, and consumes any other
+first segment as a partition name. So every resource call at the advertised
+base failed: `GET {base}/Patient?_count=1` was 400 and `GET {base}/Patient/abc`
+was 404. HAPI has no switch for this. The plugin therefore replaces the
+starter's strategy with `LoomTenantIdentificationStrategy`, which reads a first
+segment that is a FHIR resource type as `DEFAULT` and does not consume it.
+Facility names match `^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$`, so they are
+lowercase by construction, and every resource type starts with an uppercase
+letter. The two cannot collide. A fresh tenant has no facility partitions, so
+all of its data is in `DEFAULT`, and the bare base sees all of it.
+
+**Out of scope here, owned by W08a.** What a SMART app sees on a tenant with
+more than one facility (facility-aware access). `DEFAULT` is a distinct
+partition: a facility's data is not visible at the bare base, and `DEFAULT`'s
+data is not visible at a facility base.
+
+**Options not taken.** A per-facility SMART base reverses decision 13 and
+forces one launch per facility. A token-driven facility interceptor pulls
+W08a forward.

@@ -25,8 +25,12 @@ hapi:
       # Enabled: false" (measured on the pinned image).
       database_partition_mode_enabled: true
       # The partition (facility / site, ADR-003) is the FIRST path segment after the base:
-      # /fhir/<facility>/Patient. A request with no segment is a 400, never a fall-through to a default
-      # partition (measured: the starter defaults this to true; stated here so a change is a diff).
+      # /fhir/<facility>/Patient. The BARE base (/fhir/Patient, /fhir/metadata, a transaction POSTed to /fhir)
+      # serves HAPI's DEFAULT partition (#5489, ADR-003 amendment 2026-11-25): the plugin replaces the starter's
+      # UrlBaseTenantIdentificationStrategy with ai.loom.health.fhir.partition.LoomTenantIdentificationStrategy,
+      # which reads a first segment that is a FHIR resource type as DEFAULT instead of a partition name. Facility
+      # names are lowercase by construction, so the two cannot collide. The starter defaults this key to true;
+      # it is stated here so a change is a diff (turning it off also removes the strategy the plugin replaces).
       request_tenant_partitioning_mode: true
       # Two concurrent conditional creates for one match URL must yield one resource, not two (ADR-003).
       conditional_create_duplicate_identifiers_enabled: false

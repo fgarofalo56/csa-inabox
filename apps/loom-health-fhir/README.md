@@ -24,7 +24,8 @@ Two halves, both measured against the pinned image (8.12.0):
 - **Policy, tenant-independent**: `config/application.yaml`, loaded as an additional Spring config
   file (`SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/opt/loom/fhir/config/application.yaml`).
   Partition mode (database mode; the partition is the first path segment, `/fhir/<facility>/Patient`;
-  no segment is a 400), referential integrity on write and delete, validation on write, versioning
+  the bare base `/fhir/Patient` serves HAPI's DEFAULT partition through the plugin's
+  `LoomTenantIdentificationStrategy`, #5489 and the ADR-003 amendment), referential integrity on write and delete, validation on write, versioning
   (ETag, history kept; expunge, multi-delete and cascading delete off), conditional-create uniqueness,
   external references off, page-size ceiling 200.
 - **Per tenant**: rendered by `apps/loom-health-cp/src/jobs/fhir-tenant-config.ts` as environment

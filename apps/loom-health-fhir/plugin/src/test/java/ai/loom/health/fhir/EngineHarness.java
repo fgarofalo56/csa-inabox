@@ -123,6 +123,12 @@ final class EngineHarness implements AutoCloseable {
 
   /** @return {status, body} */
   String[] call(String method, String path, String bearer, String body, String contentType) throws Exception {
+    HttpResponse<String> r = send(method, path, bearer, body, contentType);
+    return new String[] {String.valueOf(r.statusCode()), r.body()};
+  }
+
+  /** Like {@link #call} but returns the whole response, for tests that read headers (e.g. Location). */
+  HttpResponse<String> send(String method, String path, String bearer, String body, String contentType) throws Exception {
     HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path))
         .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body))
         .header("Accept", "application/fhir+json");
@@ -134,8 +140,7 @@ final class EngineHarness implements AutoCloseable {
     }
     extraHeaders.forEach(b::header);
     sent.incrementAndGet();
-    HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString());
-    return new String[] {String.valueOf(r.statusCode()), r.body()};
+    return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
   }
 
   final AtomicInteger sent = new AtomicInteger();
