@@ -21,6 +21,8 @@ import ca.uhn.fhir.util.UrlPathTokenizer;
  *   <li>{@link #massageServerBaseUrl} never appends {@code /DEFAULT}: the bare base IS the DEFAULT partition's
  *       address, so Location headers, Bundle links and fullUrls stay at the base the client used. Every other
  *       partition still gets its {@code /<facility>} segment, exactly as before.</li>
+ *   <li>a {@code SystemRequestDetails} whose first token is a resource type also selects DEFAULT (HAPI consumed
+ *       that token as a partition name).</li>
  * </ul>
  *
  * <p>No ambiguity with a facility: a facility name must match {@code ^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$} (the CP's
@@ -28,7 +30,7 @@ import ca.uhn.fhir.util.UrlPathTokenizer;
  * so it is lowercase by construction, and every FHIR resource type starts with an uppercase letter. Membership is
  * tested against {@code FhirContext.getResourceTypes()} rather than "starts uppercase", so an explicit
  * {@code /DEFAULT/...} (HAPI's own admin path, e.g. partition management) is still consumed as a partition name.
- * Pinned by LoomTenantIdentificationStrategyTest.
+ * Pinned by BareBaseDefaultPartitionTest.
  */
 public final class LoomTenantIdentificationStrategy implements ITenantIdentificationStrategy {
   /** HAPI's built-in default partition name (id 0), the value its own strategy sets for metadata and $op. */

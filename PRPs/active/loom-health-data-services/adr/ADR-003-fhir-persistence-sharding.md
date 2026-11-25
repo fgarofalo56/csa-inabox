@@ -95,8 +95,13 @@ all of its data is in `DEFAULT`, and the bare base sees all of it.
 
 **Out of scope here, owned by W08a.** What a SMART app sees on a tenant with
 more than one facility (facility-aware access). `DEFAULT` is a distinct
-partition: a facility's data is not visible at the bare base, and `DEFAULT`'s
-data is not visible at a facility base.
+partition: for direct REST requests, a facility's data is not visible at the
+bare base, and `DEFAULT`'s data is not visible at a facility base. This does
+NOT hold for batch/transaction entries. HAPI's `resolveRelativeUrl` keeps an
+entry URL that starts with another partition name (`facility-b/Patient/p1`),
+so a bundle posted at any base can address another facility. That predates
+this amendment (it already worked via `/DEFAULT` and facility bases) and is
+tracked for W08a.
 
 **Options not taken.** A per-facility SMART base reverses decision 13 and
 forces one launch per facility. A token-driven facility interceptor pulls
