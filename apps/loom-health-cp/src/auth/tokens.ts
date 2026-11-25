@@ -3,13 +3,13 @@
 // contract and must bump LHDS_AT_VERSION.
 
 import { randomUUID } from 'node:crypto';
-import type { Signer } from './signer.js';
+import type { IdTokenSigner, JwsSigner, Signer } from './signer.js';
 import { SCOPE_MAP_VERSION } from './role-map.js';
 
 export const LHDS_AT_VERSION = 'lhds-at/1';
 export const ACCESS_TOKEN_TTL_S = 300;
 
-export async function signJwt(signer: Signer, typ: string, payload: Record<string, unknown>): Promise<string> {
+export async function signJwt(signer: JwsSigner, typ: string, payload: Record<string, unknown>): Promise<string> {
   const header = { typ, alg: signer.alg, kid: await signer.kid() };
   const input = `${Buffer.from(JSON.stringify(header)).toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
   const sig = await signer.sign(Buffer.from(input, 'utf8'));
@@ -63,7 +63,7 @@ export async function mintAccessToken(signer: Signer, i: AccessTokenInput): Prom
 }
 
 export async function mintIdToken(
-  signer: Signer,
+  signer: IdTokenSigner,
   i: { issuer: string; clientId: string; sub: string; nonce?: string; fhirUser?: string; now: Date },
 ): Promise<string> {
   const iat = Math.floor(i.now.getTime() / 1000);

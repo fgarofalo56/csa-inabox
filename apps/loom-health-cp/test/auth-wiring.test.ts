@@ -6,7 +6,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadAuthServerConfig } from '../src/auth/config.js';
-import { LocalSigner } from '../src/auth/signer.js';
+import { ID_TOKEN_KEY_NAME, KeyVaultRsaSigner, LocalRsaSigner, LocalSigner } from '../src/auth/signer.js';
 import type { AuthStores, FhirUserDoc } from '../src/auth/types.js';
 import { authServerInitFromConfig } from '../src/auth/wire.js';
 import { compose } from '../src/compose.js';
@@ -39,6 +39,7 @@ async function boot(wired: boolean, tenantArm?: TenantArm) {
             entraTenantId: TENANT,
             stores: { bindings: new MemoryCollection(), clients: new MemoryCollection(), replay: new MemoryCollection(), grants: new MemoryCollection() } as unknown as AuthStores,
             signer: new LocalSigner(),
+            idTokenSigner: new LocalRsaSigner(),
             federation: { authorizeUrl: () => 'https://entra.test/a', exchange: async () => ({ oid: 'o', tid: TENANT }) },
             graph: { memberOf: async () => [] },
             fhirBaseFor: (t: string) => `https://edge.test/${t}/fhir`,
@@ -95,6 +96,18 @@ describe('production wiring resolves fhirUser from the mapping store (#5454 A4)'
     expect(await init.resolveFhirUser!('o', 'visn-01')).toBe('https://edge.test/visn-01/fhir/Practitioner/p1');
     expect(seen).toEqual(['fhiruser-visn-01-o']); // the tenant-keyed id, not the oid alone
     expect(await init.resolveFhirUser!('o', 'visn-02')).toBeUndefined(); // a doc for another tenant is refused
+  });
+});
+
+describe('production wiring signs id_tokens with the Key Vault RSA key (#5454 A7)', () => {
+  it('idTokenSigner is a KeyVaultRsaSigner on the access-token key vault, fixed name, no new env var', () => {
+    const cfg = { cloud: 'gcc-high', authorityHost: AUTHORITY, entraTenantId: TENANT, cosmosEndpoint: 'https://cosmos.test:443/', cosmosDatabase: 'db' } as unknown as Config;
+    const init = authServerInitFromConfig(cfg, { issuer: ISSUER, fhirEdgeBase: 'https://edge.test', asClientId: 'x', signingKeyId: `https://kv-x.vault.usgovcloudapi.net/keys/lhds-sign/${'a'.repeat(32)}` });
+    // Breaks if wire.ts wires the in-process LocalRsaSigner (or the ES384 signer) as the id_token signer.
+    expect(init.idTokenSigner).toBeInstanceOf(KeyVaultRsaSigner);
+    expect(init.idTokenSigner.alg).toBe('RS256');
+    // Breaks if the vault is not derived from LOOM_HEALTH_CP_SIGNING_KEY_ID (another host, or the versioned path).
+    expect((init.idTokenSigner as KeyVaultRsaSigner).keyUrl).toBe(`https://kv-x.vault.usgovcloudapi.net/keys/${ID_TOKEN_KEY_NAME}`);
   });
 });
 
