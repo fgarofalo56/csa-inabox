@@ -13,12 +13,18 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-25): ACTIVE.** **Update 2026-11-25: W1b-3a PR4 (#5469, the Apps tab) is DEPLOYED and VERIFIED on Commercial; all four W1b-3a PRs are now live.**
+**Status (2026-11-25): ACTIVE.** **Update 2026-11-25 later: A7, the RS256 id_token key (#5478, `3dcd21f0f`), is DEPLOYED on Commercial dev01. Its id_token receipt waits for the headed sign-in.**
+- Live (05:40Z, after an ACR build and a restart of revision `loom-health-cp--0000030`): on 3 of 3 reads, the public JWKS serves the unchanged EC/ES384 key plus an RSA/RS256 key (3072 bits, no private members), and the tenant openid-configuration lists `RS256`. The baseline before the roll was `ES384` with the EC key only.
+- ARM read-back: `lhds-as-idtoken-rs256` is `RSA-HSM`, non-exportable and sign/verify only. The CP created it itself at 05:40:13Z (runtime get-or-create, no bicep).
+- NOT yet verified: a real id_token checked against the JWKS. id_tokens come only from user grants, so that receipt is the headed sign-in item.
+- Measured during review: OPA 1.9.0 `verify_es384` still passes against the mixed JWKS. Follow-ups #5479.
+
+**Update 2026-11-25: W1b-3a PR4 (#5469, the Apps tab) is DEPLOYED and VERIFIED on Commercial; all four W1b-3a PRs are now live.**
 - The console roll had been refused since `0f27ffc40` (R1): `vitest (node 20)` was red on main. A non-hermetic test was fixed in #5474 (`9a7db052b`); the flake is #5475. Roll run 45530832458 succeeded, and Commercial and Gov both run `9a7db052`.
 - G1 walk of the Apps tab passed: register, disable/enable, edit launch URL, launch without a patient, the not-permitted search state, and 768 px. Record: #5454 comment 7150939773. Defects: #5476 (R7 "tenant not found" while the tenant is `creating`; launch-dialog alignment).
 - #5467 (sidebar collapse, #5468) passed its G1 walk and is closed.
 - The Demo health-tenant item self-healed into tenant `demo-loom-hea-ab3844` on dev01 when it was opened (#5453 live). Operator decision 2026-11-25: keep it for the sign-in and Inferno items.
-- Next, each a fresh session: RS256, then the FHIR edge (bicep slot), headed sign-in, Inferno. #4972 (`full-app-deploy-commercial`, no success for 42 days) is a separate R1 item for its own session.
+- Next, each a fresh session: the FHIR edge (bicep slot), then the headed sign-in (which also closes the A7 id_token receipt), then Inferno. RS256 is done (A7, above). #4972 (`full-app-deploy-commercial`, no success for 42 days) is a separate R1 item for its own session.
 
 **Update 2026-11-24 evening: W1b-3a (#5454), the SMART AS features Inferno needs, is built as 4 PRs, all merged.**
 - PR1-3 (#5461, #5462, #5464) are DEPLOYED and VERIFIED on Commercial dev01. Receipt: admin-contract probe 45484434459, 23/23.
