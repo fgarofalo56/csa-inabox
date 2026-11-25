@@ -115,6 +115,32 @@ carries it. Since #5461, a public client that sends `client_id` together with a
 `client_assertion` that is not a JWT receives `invalid_client`, because the
 assertion `iss` cannot match the `client_id`.
 
+**RS256 id_tokens (W1b-3a A7, #5454; merged, not deployed).** id_tokens are
+signed **RS256**; access tokens stay **ES384** (A7 below is unchanged). The
+id_token key is an `RSA-HSM` 3072-bit key named `lhds-as-idtoken-rs256`
+(key_ops sign and verify, non-exportable), in the same stamp vault as the
+ES384 access-token key. No bicep creates it and no new environment variable
+names it: the control plane derives the vault from
+`LOOM_HEALTH_CP_SIGNING_KEY_ID` and, on first use, GETs the key and creates it
+on a 404. Its `Key Vault Crypto Officer` assignment on the stamp vault
+(`control-plane.bicep`) covers the create. Signing goes through the Key Vault
+`sign` operation (`alg: RS256`, a SHA-256 digest of the signing input) on a
+versioned key URL. The private key never enters the process. `jwks.json`
+publishes both keys: the EC P-384 key (`alg: ES384`) and every enabled
+version of the RSA key (`alg: RS256`). Each has an RFC 7638 thumbprint as its
+`kid`, `use: sig`, and public members only. Normally that is one RSA key. Two
+replicas can race the first create. Each then waits 3 s, lists the versions and
+signs with the oldest enabled one, and the JWKS publishes all of them, so the
+kid of an issued id_token is in the JWKS of either replica. The per-tenant
+`openid-configuration` lists `id_token_signing_alg_values_supported:
+["RS256"]`. If the key cannot be read or created (for example, Key Vault
+answers 403), a token request that asks for `openid` fails with
+`server_error`. The log line `auth.internal_error` then carries `step:
+id_token` and the Key Vault status. There is no ES384 id_token fallback.
+`jwks.json` keeps serving the EC key and logs `auth.idtoken_key_unavailable`.
+A failed read is never cached. Rotating the key means adding a version,
+disabling the old one, and restarting the control plane.
+
 **Standalone patient picker (W1b-3a A5, #5454; merged, not deployed).** When
 an app asks for `launch/patient` without an EHR launch handle, and a patient
 context would leave the user at least one `patient/` scope (their role

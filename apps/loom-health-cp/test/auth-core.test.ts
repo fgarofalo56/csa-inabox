@@ -2,16 +2,16 @@
 // ceiling intersection, per-cloud hosts, signer and federation seams.
 // Each assertion names, in a comment, the defect that turns it red.
 
-import { createHash } from 'node:crypto';
-import { createLocalJWKSet, generateKeyPair, jwtVerify, SignJWT } from 'jose';
+import { constants, createHash, generateKeyPairSync, privateEncrypt, randomBytes, type KeyObject } from 'node:crypto';
+import { calculateJwkThumbprint, createLocalJWKSet, generateKeyPair, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { GRAPH_BY_CLOUD, KEYVAULT_SUFFIX_BY_CLOUD } from '../src/auth/clouds.js';
 import { createEntraFederation, createGraphMembership, GraphConsentRequiredError } from '../src/auth/federation.js';
 import { computeGrant } from '../src/auth/grant.js';
 import { ROLES, ROLE_IDS, ceilingsFor } from '../src/auth/role-map.js';
 import { intersectWithCeilings, parseDataScope, parseRequest, serializeScope } from '../src/auth/scopes.js';
-import { KeyVaultSigner, LocalSigner } from '../src/auth/signer.js';
-import { mintAccessToken } from '../src/auth/tokens.js';
+import { ID_TOKEN_KEY_NAME, KeyVaultHttpError, KeyVaultRsaSigner, KeyVaultSigner, LocalSigner, idTokenKeyUrlFrom } from '../src/auth/signer.js';
+import { mintAccessToken, mintIdToken } from '../src/auth/tokens.js';
 import type { Cloud } from '../src/config.js';
 
 const V2 = { v1: false };
@@ -237,6 +237,203 @@ describe('signers', () => {
     // and a success IS cached: no third read
     await s.kid();
     expect(gets).toBe(2);
+  });
+});
+
+// ---- #5454 A7: the RS256 id_token key, get-or-create in the stamp vault ----
+
+/** DER DigestInfo prefix for SHA-256 (RFC 8017 9.2): what an RSA-HSM prepends before PKCS#1 v1.5 padding. */
+const DIGEST_INFO_SHA256 = Buffer.from('3031300d060960864801650304020105000420', 'hex');
+const KV_KEY = 'https://kv-t.vault.azure.net/keys/lhds-as-idtoken-rs256';
+
+/** A Key Vault fake for one RSA key: GET latest, create, list versions, GET a version, sign a digest. */
+class FakeRsaVault {
+  versions: Array<{ ver: string; created: number; enabled: boolean; priv: KeyObject }> = [];
+  calls: Array<{ method: string; host: string; path: string; body?: Record<string, unknown> }> = [];
+  createStatus = 200;
+  /** When set, the versions list is paged: page 1 is empty and points here; a URL with `page=2` returns the list. */
+  firstPageNext: string | undefined;
+  /** Versions whose /sign answers 403 (disabled out-of-band). */
+  refuseSign = new Set<string>();
+  private clock = 1_000;
+  add(created = this.clock++, enabled = true): string {
+    const ver = randomBytes(16).toString('hex');
+    this.versions.push({ ver, created, enabled, priv: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey });
+    return ver;
+  }
+  private jwkOf(v: FakeRsaVault['versions'][number]) {
+    const { n, e } = v.priv.export({ format: 'jwk' });
+    return { kid: `${KV_KEY}/${v.ver}`, kty: 'RSA-HSM', n, e, key_ops: ['sign', 'verify'] };
+  }
+  readonly fetch = (async (u: string, init: RequestInit) => {
+    const parsed = new URL(u);
+    const path = parsed.pathname;
+    const method = init.method ?? 'GET';
+    const body = init.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : undefined;
+    this.calls.push({ method, host: parsed.host, path, ...(body ? { body } : {}) });
+    const json = (status: number, b: unknown) => new Response(JSON.stringify(b), { status });
+    const base = new URL(KV_KEY).pathname;
+    if (method === 'GET' && path === base) {
+      const latest = this.versions.at(-1);
+      return latest ? json(200, { key: this.jwkOf(latest) }) : json(404, { error: { code: 'KeyNotFound' } });
+    }
+    if (method === 'POST' && path === `${base}/create`) {
+      if (this.createStatus !== 200) return json(this.createStatus, { error: { code: 'Forbidden', message: 'not allowed' } });
+      const ver = this.add();
+      return json(200, { key: this.jwkOf(this.versions.find((v) => v.ver === ver)!) });
+    }
+    // Answers on ANY host, so only the signer's own origin check can keep a request off a foreign host.
+    if (method === 'GET' && path.endsWith('/versions') && this.firstPageNext && !parsed.searchParams.has('page')) {
+      return json(200, { value: [], nextLink: this.firstPageNext });
+    }
+    if (method === 'GET' && path.endsWith('/versions')) {
+      return json(200, { value: this.versions.map((v) => ({ kid: `${KV_KEY}/${v.ver}`, attributes: { enabled: v.enabled, created: v.created } })), nextLink: null });
+    }
+    const m = new RegExp(`^${base}/([0-9a-f]{32})(/sign)?$`).exec(path);
+    const v = m && this.versions.find((x) => x.ver === m[1]);
+    if (!v) return json(404, { error: { code: 'KeyNotFound' } });
+    if (method === 'GET') return json(200, { key: this.jwkOf(v) });
+    if (this.refuseSign.has(v.ver)) return json(403, { error: { code: 'Forbidden' } });
+    const digest = Buffer.from(String(body!.value), 'base64url');
+    const sig = privateEncrypt({ key: v.priv, padding: constants.RSA_PKCS1_PADDING }, Buffer.concat([DIGEST_INFO_SHA256, digest]));
+    return json(200, { kid: `${KV_KEY}/${v.ver}`, value: sig.toString('base64url') });
+  }) as unknown as typeof fetch;
+}
+
+describe('KeyVaultRsaSigner: the RS256 id_token key (#5454 A7)', () => {
+  const make = (kv: FakeRsaVault, slept: number[] = []) =>
+    new KeyVaultRsaSigner({ cloud: 'commercial', keyUrl: KV_KEY, getToken: async () => 't', fetchImpl: kv.fetch, sleep: async (ms) => void slept.push(ms) });
+  const thumb = (kv: FakeRsaVault, ver: string) => {
+    const { n, e } = kv.versions.find((v) => v.ver === ver)!.priv.export({ format: 'jwk' });
+    return calculateJwkThumbprint({ kty: 'RSA', n: n!, e: e! }, 'sha256');
+  };
+
+  it('a 404 GET creates an RSA-HSM key, waits to settle, and the id_token it signs verifies RS256 against publicJwks', async () => {
+    const kv = new FakeRsaVault();
+    const slept: number[] = [];
+    const s = make(kv, slept);
+    const jwt = await mintIdToken(s, { issuer: 'https://as.test/auth/visn-01', clientId: 'app-1', sub: 'o', now: new Date() });
+    const create = kv.calls.filter((c) => c.path.endsWith('/create'));
+    // Breaks if a 404 does not lead to exactly one create, or the create asks for a non-HSM / non-RSA / exportable key.
+    expect(create).toHaveLength(1);
+    expect(create[0]!.body).toEqual({ kty: 'RSA-HSM', key_size: 3072, key_ops: ['sign', 'verify'] });
+    expect(slept).toEqual([3000]); // breaks if the race settle is skipped after a create
+    // Real verification over the fake HSM's PKCS#1 v1.5 signature: breaks on a wrong digest, alg or kid.
+    const { protectedHeader } = await jwtVerify(jwt, createLocalJWKSet({ keys: await s.publicJwks() }), { algorithms: ['RS256'], audience: 'app-1' });
+    expect(protectedHeader.kid).toBe(await thumb(kv, kv.versions[0]!.ver));
+    // Breaks if signing goes to the unversioned key URL.
+    expect(kv.calls.find((c) => c.path.endsWith('/sign'))!.path).toBe(`${new URL(KV_KEY).pathname}/${kv.versions[0]!.ver}/sign`);
+  });
+
+  it('a 200 GET uses the existing key: no create, no settle wait', async () => {
+    const kv = new FakeRsaVault();
+    const ver = kv.add();
+    const slept: number[] = [];
+    const s = make(kv, slept);
+    expect(await s.kid()).toBe(await thumb(kv, ver));
+    // Breaks if an existing key is re-created (a new version on every start).
+    expect(kv.calls.some((c) => c.path.endsWith('/create'))).toBe(false);
+    expect(kv.calls.some((c) => c.path === new URL(KV_KEY).pathname)).toBe(true); // positive control: the GET happened
+    expect(slept).toEqual([]);
+  });
+
+  it('a 403 on create surfaces an error naming the 403, signs nothing, and is not cached', async () => {
+    const kv = new FakeRsaVault();
+    kv.createStatus = 403;
+    const s = make(kv);
+    const err = await s.kid().catch((e: unknown) => e);
+    // Breaks if the failure is swallowed, rephrased as another cause, or loses the status classifyError logs.
+    expect(err).toBeInstanceOf(KeyVaultHttpError);
+    expect((err as KeyVaultHttpError).statusCode).toBe(403);
+    expect((err as Error).message).toBe('key vault returned 403 (Forbidden) creating id_token key lhds-as-idtoken-rs256');
+    await expect(mintIdToken(s, { issuer: 'https://as.test', clientId: 'c', sub: 'o', now: new Date() })).rejects.toThrow('403');
+    expect(kv.calls.some((c) => c.path.endsWith('/sign'))).toBe(false); // no signature from any key
+    // Not cached: once creation is allowed, the next call reads and creates again. Breaks on a cached rejection.
+    kv.createStatus = 200;
+    expect(await s.kid()).toBe(await thumb(kv, kv.versions[0]!.ver));
+    // GUARD, not no-fallback evidence: `alg` is a readonly constant, so no input can make this fail. It only pins the
+    // declared value against a future edit. The no-fallback evidence is the server-level step=id_token 500 test.
+    expect(s.alg).toBe('RS256');
+  });
+
+  it('with several versions (a create race) it signs with the OLDEST enabled one and publishes every enabled one', async () => {
+    const kv = new FakeRsaVault();
+    const disabled = kv.add(50, false); // oldest of all, but disabled
+    const newer = kv.add(200); // listed before `older`
+    const older = kv.add(100);
+    const s = make(kv);
+    // Breaks if the pick is first-listed or latest (`newer`), or ignores `enabled` (`disabled`): replicas would diverge.
+    expect(await s.kid()).toBe(await thumb(kv, older));
+    const kids = (await s.publicJwks()).map((k) => k.kid);
+    // Breaks if only the signing version is published (another replica's pick would be missing from this JWKS).
+    expect(kids).toEqual([await thumb(kv, older), await thumb(kv, newer)]);
+    expect(kids).not.toContain(await thumb(kv, disabled)); // paired with the positive list above
+    await s.sign(Buffer.from('x'));
+    expect(kv.calls.find((c) => c.path.endsWith('/sign'))!.path).toContain(older);
+  });
+
+  it('the sign call sends alg RS256 and the 32-byte SHA-256 digest of the signing input', async () => {
+    const kv = new FakeRsaVault();
+    kv.add();
+    const s = make(kv);
+    const sig = await s.sign(Buffer.from('header.payload'));
+    expect(sig.length).toBe(256); // 2048-bit fake key; breaks if the length check is dropped and a short value passes
+    const body = kv.calls.find((c) => c.path.endsWith('/sign'))!.body!;
+    expect(body.alg).toBe('RS256'); // breaks on ES384 / RS384 / PS256
+    const digest = Buffer.from(String(body.value), 'base64url');
+    expect(digest.length).toBe(32); // breaks on SHA-384 (48) or the raw input (14)
+    expect(digest.equals(createHash('sha256').update('header.payload').digest())).toBe(true);
+  });
+
+  it('a nextLink off the vault origin is refused before any request or token; a same-origin nextLink is followed', async () => {
+    const vaultHost = new URL(KV_KEY).host;
+    for (const evil of ['https://evil.example/keys/x/versions?page=2', `https://${vaultHost}.evil.example/keys/lhds-as-idtoken-rs256/versions?page=2`]) {
+      const kv = new FakeRsaVault();
+      kv.add();
+      kv.firstPageNext = evil;
+      const scopes: string[] = [];
+      const s = new KeyVaultRsaSigner({ cloud: 'commercial', keyUrl: KV_KEY, getToken: async (sc) => (scopes.push(sc), 't'), fetchImpl: kv.fetch });
+      // Breaks if the link is followed (the fake answers any host). The second URL starts with `https://<vault-host>`,
+      // so a prefix check without the trailing slash would let it through.
+      await expect(s.kid()).rejects.toThrow('key vault link left the vault origin');
+      expect(kv.calls.filter((c) => c.host !== vaultHost)).toEqual([]);
+      expect(kv.calls.some((c) => c.path.endsWith('/versions'))).toBe(true); // positive: page 1 WAS read on the vault
+      // Breaks if getToken runs before the origin check: one token per vault call, none for the refused URL.
+      expect(scopes).toHaveLength(kv.calls.length);
+    }
+    // Paired permit: the same paging with a same-origin nextLink resolves.
+    const good = new FakeRsaVault();
+    const ver = good.add();
+    good.firstPageNext = `${KV_KEY}/versions?page=2`;
+    const s = new KeyVaultRsaSigner({ cloud: 'commercial', keyUrl: KV_KEY, getToken: async () => 't', fetchImpl: good.fetch });
+    expect(await s.kid()).toBe(await thumb(good, ver)); // breaks if same-origin paging is refused or page 2 is not read
+  });
+
+  it('a 4xx on sign drops the resolved version, so the next sign re-resolves instead of hitting the old kid', async () => {
+    const kv = new FakeRsaVault();
+    const old = kv.add(100);
+    const s = make(kv);
+    await s.sign(Buffer.from('a')); // resolves and signs with `old`
+    // Out of band: the old version is disabled and a new one exists; the vault now refuses signing with `old`.
+    kv.versions.find((v) => v.ver === old)!.enabled = false;
+    kv.refuseSign.add(old);
+    const fresh = kv.add(200);
+    await expect(s.sign(Buffer.from('b'))).rejects.toThrow('403');
+    await s.sign(Buffer.from('c'));
+    const signs = kv.calls.filter((c) => c.path.endsWith('/sign')).map((c) => c.path);
+    expect(signs).toHaveLength(3);
+    expect(signs[1]).toContain(old); // positive control: the refused call really was the old version
+    // Breaks if the state stays cached after the 403: the third sign hits `old` again and throws.
+    expect(signs[2]).toContain(fresh);
+    expect(await s.kid()).toBe(await thumb(kv, fresh));
+  });
+
+  it('idTokenKeyUrlFrom derives the same vault from the access-token key id, and the signer refuses a wrong-cloud URL', () => {
+    // Breaks on another host, a versioned path, or a name other than the fixed one.
+    expect(idTokenKeyUrlFrom('gcc-high', `https://kv-x.vault.usgovcloudapi.net/keys/lhds-as-signing/${'a'.repeat(32)}`)).toBe(
+      `https://kv-x.vault.usgovcloudapi.net/keys/${ID_TOKEN_KEY_NAME}`,
+    );
+    expect(() => new KeyVaultRsaSigner({ cloud: 'gcc-high', keyUrl: KV_KEY, getToken: async () => 't' })).toThrow('id_token key url must be');
   });
 });
 

@@ -6,13 +6,13 @@
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SignJWT, createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
+import { SignJWT, createLocalJWKSet, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAuthenticator } from '../src/middleware/auth.js';
 import { createAuthServer } from '../src/auth/server.js';
 import { ASSERTION_TYPE } from '../src/auth/backend-auth.js';
 import { GraphConsentRequiredError, type Federation, type GraphMembership } from '../src/auth/federation.js';
-import { LocalSigner } from '../src/auth/signer.js';
+import { LocalRsaSigner, LocalSigner, type IdTokenSigner } from '../src/auth/signer.js';
 import { createFhirUserResolver } from '../src/auth/fhir-user.js';
 import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.js';
 import { PatientSearchUnavailableError, type PatientQuery, type PatientSearch, type PatientSummary } from '../src/auth/patient-search.js';
@@ -76,6 +76,7 @@ interface Ctx {
   jwksFetched: string[];
   jwksByUrl: Map<string, JWK[]>;
   signer: LocalSigner;
+  idTokenSigner: IdTokenSigner;
   call(method: string, path: string, o?: { token?: string; json?: unknown; form?: Record<string, string>; cookie?: string }): Promise<{ status: number; json: any; headers: Headers }>;
   /** Like call, for HTML responses (the patient picker): the body as text. */
   page(method: string, path: string, o?: { form?: Record<string, string>; cookie?: string }): Promise<{ status: number; text: string; headers: Headers }>;
@@ -94,6 +95,7 @@ afterEach(async () => {
 
 async function boot(over: {
   signer?: LocalSigner;
+  idTokenSigner?: IdTokenSigner;
   log?: (event: string, f: Record<string, string | number>) => void;
   patientSearch?: PatientSearch;
   fetchFhir?: typeof fetch;
@@ -112,6 +114,7 @@ async function boot(over: {
   const fed = new FakeFed();
   const graph = new FakeGraph();
   const signer = over.signer ?? new LocalSigner();
+  const idTokenSigner = over.idTokenSigner ?? new LocalRsaSigner();
   const jwksFetched: string[] = [];
   const jwksByUrl = new Map<string, JWK[]>();
   const authSrv = createAuthServer({
@@ -121,6 +124,7 @@ async function boot(over: {
     stores,
     tenants,
     signer,
+    idTokenSigner,
     federation: fed,
     graph,
     fhirBaseFor: fhir,
@@ -172,7 +176,7 @@ async function boot(over: {
   const admin: Ctx['admin'] = async (method, path, json) => call(method, path, { token: await adminToken(), ...(json !== undefined ? { json } : {}) });
 
   const ctx: Ctx = {
-    url, fed, graph, stores, tenants, jwksFetched, jwksByUrl, signer, call, page, admin,
+    url, fed, graph, stores, tenants, jwksFetched, jwksByUrl, signer, idTokenSigner, call, page, admin,
     async registerApp(id, o = {}) {
       const r = await admin('POST', '/api/health/auth/clients', {
         clientId: id, tenant: o.tenant ?? 'visn-01', clientType: 'app', displayName: id,
@@ -252,14 +256,14 @@ describe('discovery and jwks', () => {
     expect(r.json.issuer).toBe(ISSUER);
     expect(r.json.jwks_uri).toBe(`${ISSUER}/jwks.json`);
     // paired: the advertised jwks_uri resolves to a key; a suspended tenant does not affect the root doc
-    expect((await c.call('GET', '/auth/jwks.json')).json.keys).toHaveLength(1);
+    expect((await c.call('GET', '/auth/jwks.json')).json.keys).toHaveLength(2); // ES384 access-token key + RS256 id_token key (A7)
     expect((await c.call('GET', '/auth/visn-02/.well-known/smart-configuration')).status).toBe(400);
     expect((await c.call('POST', '/auth/.well-known/openid-configuration')).status).not.toBe(200);
   });
   it('jwks.json carries the public key only', async () => {
     const c = await boot();
     const j = (await c.call('GET', '/auth/jwks.json')).json;
-    expect(j.keys).toHaveLength(1);
+    expect(j.keys).toHaveLength(2); // A7: EC + RSA; the full key-shape test is in the A7 block below
     expect(j.keys[0].d).toBeUndefined(); // breaks if the private scalar is published
     expect(j.keys[0].alg).toBe('ES384');
   });
@@ -997,7 +1001,7 @@ describe('discovery documents (#5454 A1 + A2)', () => {
       jwks_uri: `${ISSUER}/jwks.json`,
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
-      id_token_signing_alg_values_supported: ['ES384'],
+      id_token_signing_alg_values_supported: ['RS256'], // A7: breaks on ['ES384'] (the pre-A7 value) or an empty list
       scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'],
       token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'],
       code_challenge_methods_supported: ['S256'],
@@ -1685,5 +1689,87 @@ describe('standalone patient picker (#5454 A5)', () => {
     const launch = async (patient: string) => (await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient })).status;
     expect(await launch('..')).toBe(400);
     expect(await launch('pat.1')).toBe(201);
+  });
+});
+
+// ---- W1b-3a A7 (#5454): RS256 id_tokens, ES384 access tokens, one JWKS with both keys ----
+describe('RS256 id_tokens (#5454 A7)', () => {
+  async function signedIn(over: Parameters<typeof boot>[0] = {}) {
+    const c = await boot(over);
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    return c;
+  }
+  const PRIVATE = ['d', 'p', 'q', 'dp', 'dq', 'qi'];
+
+  it('the id_token is RS256, its kid is in the published JWKS, and it verifies against that JWKS', async () => {
+    const c = await signedIn();
+    const t = (await flow(c, 'openid user/*.rs')).token!;
+    expect(t.status).toBe(200);
+    const jwks = (await c.call('GET', '/auth/jwks.json')).json as { keys: JWK[] };
+    const header = decodeProtectedHeader(t.json.id_token);
+    // Breaks on an ES384-signed id_token (the pre-A7 signer, or a fallback to the access-token key).
+    expect(header.alg).toBe('RS256');
+    // Breaks if the id_token kid is absent from the JWKS a relying party fetches.
+    expect(jwks.keys.map((k) => k.kid)).toContain(header.kid);
+    // Real verification, restricted to RS256: breaks on an ES384 id_token, a kid missing from the JWKS, or a
+    // signature that is not RSASSA-PKCS1-v1_5/SHA-256 over the signing input.
+    const { payload, protectedHeader } = await jwtVerify(t.json.id_token, createLocalJWKSet(jwks), {
+      algorithms: ['RS256'], issuer: `${ISSUER}/visn-01`, audience: 'app-1',
+    });
+    expect(protectedHeader.kid).toBe(await c.idTokenSigner.kid());
+    expect(payload.sub).toBe(USER);
+  });
+
+  it('the access token stays ES384 and verifies against the EC JWK alone', async () => {
+    const c = await signedIn();
+    const t = (await flow(c, 'openid user/*.rs')).token!;
+    const jwks = (await c.call('GET', '/auth/jwks.json')).json as { keys: JWK[] };
+    const ec = jwks.keys.filter((k) => k.kty === 'EC');
+    expect(ec).toHaveLength(1);
+    // Breaks if the access token moves to RS256 (the PDP and APIM pin ES384), or is signed by the RSA key.
+    expect(decodeProtectedHeader(t.json.access_token).alg).toBe('ES384');
+    await expect(jwtVerify(t.json.access_token, createLocalJWKSet({ keys: ec }), { algorithms: ['ES384'], issuer: ISSUER })).resolves.toBeTruthy();
+  });
+
+  it('the JWKS publishes exactly the EC (ES384) and RSA (RS256) keys, public members only', async () => {
+    const c = await boot();
+    const { keys } = (await c.call('GET', '/auth/jwks.json')).json as { keys: JWK[] };
+    // Breaks if the RSA key is missing (one key, the pre-A7 JWKS), or if a key is published twice.
+    expect(keys).toHaveLength(2);
+    const ec = keys.find((k) => k.kty === 'EC')!;
+    const rsa = keys.find((k) => k.kty === 'RSA')!;
+    // Positive: each key carries its public material, alg and use; breaks if either key is absent or mislabelled.
+    expect([ec.alg, ec.crv, typeof ec.x, typeof ec.y, ec.use]).toEqual(['ES384', 'P-384', 'string', 'string', 'sig']);
+    expect([rsa.alg, typeof rsa.n, rsa.e, rsa.use]).toEqual(['RS256', 'string', 'AQAB', 'sig']);
+    expect(ec.kid).not.toBe(rsa.kid); // breaks if both keys share one kid
+    // Absence, paired with the positives above: breaks if any private member reaches the public document.
+    for (const k of keys) for (const m of PRIVATE) expect(m in k, `${k.kty}.${m}`).toBe(false);
+  });
+
+  it('an unavailable id_token key fails the openid token request with step=id_token and never falls back to ES384; the JWKS keeps the EC key', async () => {
+    class DeniedRsa extends LocalRsaSigner {
+      override async kid(): Promise<string> {
+        throw Object.assign(new Error('key vault returned 403 creating id_token key lhds-as-idtoken-rs256'), { statusCode: 403 });
+      }
+      override async publicJwks(): Promise<JWK[]> {
+        throw Object.assign(new Error('key vault returned 403 creating id_token key lhds-as-idtoken-rs256'), { statusCode: 403 });
+      }
+    }
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await signedIn({ idTokenSigner: new DeniedRsa(), log: (event, f) => logs.push({ event, f }) });
+    const withOpenid = (await flow(c, 'openid user/*.rs')).token!;
+    // Breaks (200 with an ES384 id_token) if the server falls back to the access-token signer.
+    expect(withOpenid.status).toBe(500);
+    expect(withOpenid.json.id_token).toBeUndefined();
+    expect(logs.find((l) => l.event === 'auth.internal_error')?.f).toMatchObject({ step: 'id_token', statusCode: 403 });
+    // Paired permit: without `openid` the same server still issues an access token.
+    const noOpenid = (await flow(c, 'user/*.rs')).token!;
+    expect(noOpenid.status).toBe(200);
+    const { keys } = (await c.call('GET', '/auth/jwks.json')).json as { keys: JWK[] };
+    // Breaks (500 or no keys) if an id_token key failure takes the access-token key out of the JWKS.
+    expect(keys.map((k) => k.kty)).toEqual(['EC']);
+    expect(logs.some((l) => l.event === 'auth.idtoken_key_unavailable' && l.f.statusCode === 403)).toBe(true);
   });
 });

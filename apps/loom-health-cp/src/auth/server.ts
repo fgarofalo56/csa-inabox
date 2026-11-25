@@ -18,7 +18,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { decodeJwt } from 'jose';
+import { decodeJwt, type JWK } from 'jose';
 import { z } from 'zod';
 import { HttpError, StoreConflictError, badRequest, conflict, notFound } from '../http/errors.js';
 import type { Authenticator } from '../middleware/auth.js';
@@ -34,7 +34,7 @@ import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type
 import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
 import { parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
-import type { Signer } from './signer.js';
+import type { IdTokenSigner, Signer } from './signer.js';
 import { ACCESS_TOKEN_TTL_S, mintAccessToken, mintIdToken } from './tokens.js';
 import {
   OAuthError,
@@ -56,7 +56,10 @@ export interface AuthServerDeps {
   entraTenantId: string;
   stores: AuthStores;
   tenants: Collection<TenantDoc>;
+  /** Access-token signer (ES384). */
   signer: Signer;
+  /** id_token signer (RS256, #5454 A7). Required: there is no ES384 fallback for id_tokens. */
+  idTokenSigner: IdTokenSigner;
   federation: Federation;
   graph: GraphMembership;
   fhirBaseFor: (tenant: string) => string;
@@ -361,6 +364,20 @@ export function createAuthServer(deps: AuthServerDeps) {
     };
   }
 
+  /**
+   * The id_token RSA keys for the JWKS (A7). If they cannot be read, the JWKS still serves the ES384 access-token key,
+   * so the PDP and APIM keep verifying access tokens; the failure is logged, and no id_token can be minted in that
+   * state either (the same resolve fails at mint), so no issued token carries a kid this JWKS omits.
+   */
+  async function idTokenJwks(): Promise<JWK[]> {
+    try {
+      return await deps.idTokenSigner.publicJwks();
+    } catch (e) {
+      deps.log('auth.idtoken_key_unavailable', { ...classifyError(e) });
+      return [];
+    }
+  }
+
   async function openidConfiguration(tenant: string): Promise<unknown> {
     const t = await activeTenant(tenant);
     return {
@@ -370,8 +387,9 @@ export function createAuthServer(deps: AuthServerDeps) {
       jwks_uri: `${issuer}/jwks.json`,
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
-      // The signer's alg (ES384). RS256, which OIDC makes the default, waits on the held RSA key (W1b-3a A7).
-      id_token_signing_alg_values_supported: [deps.signer.alg],
+      // The id_token signer's alg: RS256, the OIDC default (W1b-3a A7). Access tokens stay ES384 and are not
+      // described here; id_tokens are never ES384, so ES384 is not listed.
+      id_token_signing_alg_values_supported: [deps.idTokenSigner.alg],
       scopes_supported: SCOPES_SUPPORTED,
       token_endpoint_auth_methods_supported: TOKEN_AUTH_METHODS,
       code_challenge_methods_supported: ['S256'],
@@ -880,14 +898,16 @@ export function createAuthServer(deps: AuthServerDeps) {
     if (g.encounter) out.encounter = g.encounter;
     if (g.fhirContext && g.fhirContext.length > 0) out.fhirContext = g.fhirContext; // SMART STU2.2: objects, never strings
     if (g.scope.includes('openid')) {
-      out.id_token = await mintIdToken(deps.signer, {
+      // RS256 through the id_token signer (A7). A failure here (e.g. Key Vault refusing to create the key) fails the
+      // request with step=id_token in the log; it never falls back to an ES384 id_token.
+      out.id_token = await inStep('id_token', () => mintIdToken(deps.idTokenSigner, {
         issuer: oidcIssuerFor(g.tenant),
         clientId: g.clientId,
         sub: g.oid,
         ...(g.nonce ? { nonce: g.nonce } : {}),
         ...(g.fhirUser ? { fhirUser: g.fhirUser } : {}),
         now: t,
-      });
+      }));
     }
     if (g.refresh) {
       const rt = rand(32);
@@ -1404,7 +1424,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       }
       if (path === `${base}/jwks.json` && method === 'GET') {
         status = 200;
-        sendJson(res, 200, { keys: [await deps.signer.publicJwk()] }, cors);
+        sendJson(res, 200, { keys: [await deps.signer.publicJwk(), ...(await idTokenJwks())] }, cors);
         return true;
       }
       if (path === `${base}/.well-known/openid-configuration` && method === 'GET') {

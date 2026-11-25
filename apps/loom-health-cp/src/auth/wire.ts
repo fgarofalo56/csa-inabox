@@ -14,7 +14,7 @@ import { createCosmosAuthStores } from './cosmos.js';
 import { createEntraFederation, createGraphMembership } from './federation.js';
 import { createFhirUserResolver } from './fhir-user.js';
 import type { AuthServerInit } from './server.js';
-import { KeyVaultSigner } from './signer.js';
+import { KeyVaultRsaSigner, KeyVaultSigner, idTokenKeyUrlFrom } from './signer.js';
 
 export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): AuthServerInit {
   const credential = new DefaultAzureCredential({ authorityHost: `https://${cfg.authorityHost}` });
@@ -27,6 +27,8 @@ export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): Auth
     entraTenantId: cfg.entraTenantId,
     stores,
     signer: new KeyVaultSigner({ cloud: cfg.cloud, keyId: a.signingKeyId, getToken }),
+    // RS256 id_token key (#5454 A7): same vault as the access-token key, fixed name, created at runtime if missing.
+    idTokenSigner: new KeyVaultRsaSigner({ cloud: cfg.cloud, keyUrl: idTokenKeyUrlFrom(cfg.cloud, a.signingKeyId), getToken }),
     federation: createEntraFederation({
       authorityHost: cfg.authorityHost,
       entraTenantId: cfg.entraTenantId,
