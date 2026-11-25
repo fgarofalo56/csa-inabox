@@ -37,6 +37,52 @@ export const OverridesSchema = z.strictObject({
 });
 export type EngineOverrides = z.infer<typeof OverridesSchema>;
 
+/** One admitted ingress peer: a `from` entry of the engine NetworkPolicy. Selectors are required so no peer can widen to "every pod". */
+export interface IngressPeer {
+  namespaceSelector: { matchLabels: Record<string, string> };
+  podSelector?: { matchLabels: Record<string, string> };
+}
+
+/**
+ * Peers admitted to an engine today (#5441). Measured 2026-11-23:
+ *  - `aks-command`: the pod `az aks command invoke` / ARM runCommand starts, where the B3 CRUD probe curls the engine Service
+ *    (.github/workflows/lhds-fhir-crud-probe.yml:21,268).
+ *  - `kube-system` konnectivity-agent: the CP's probeEngine reads /metadata through the API server service proxy, and AKS tunnels
+ *    API-server-to-pod traffic through konnectivity-agent. NOT verified live against a policy yet: the live-verify plan is the probe
+ *    (engine_probe ready=true) after the CP roll; a wrong label shows up as ready=false, never as an opened door.
+ * The FHIR edge (#5410, G1) is NOT one of these: it is the stamp edge router (platform/fiab/bicep/modules/health/edge-router.bicep),
+ * admitted through `edgePeers` (ENGINE_EDGE_PEERS below), never by widening these.
+ */
+export const COMMAND_NAMESPACE = 'aks-command';
+export const ENGINE_INGRESS_PEERS: readonly IngressPeer[] = [
+  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': COMMAND_NAMESPACE } } },
+  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
+];
+
+/**
+ * The stamp FHIR edge router (G1): the nginx pods behind the App Gateway's internal-LB address, which forward
+ * `/{tenant}/fhir/*` to `fhir-{tenant}.loom-health.svc`. The namespace and pod label MUST equal what edge-router.bicep renders
+ * (edgeNamespace / edgeAppLabel); scripts/ci/__tests__/lhds-edge-router.test.mjs lifts both and compares. The router does no
+ * authorization: the engine's PDP interceptor is the tenant boundary, so admitting it opens no path the token check does not guard.
+ */
+export const EDGE_NAMESPACE = 'loom-health-edge';
+export const EDGE_APP_LABEL = 'loom-health-edge';
+export const EDGE_ROUTER_PEER: IngressPeer = {
+  namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': EDGE_NAMESPACE } },
+  podSelector: { matchLabels: { app: EDGE_APP_LABEL } },
+};
+/** The edge peers the production host passes to every engine NetworkPolicy (fhir-engine-host.ts applyEngineConfig). */
+export const ENGINE_EDGE_PEERS: readonly IngressPeer[] = [EDGE_ROUTER_PEER];
+
+/**
+ * The revision term for the engine NetworkPolicy's peer list: sha256 of the canonical JSON of EXACTLY the list the policy renders
+ * (base peers, then edge peers). Without it the revision did not move when a peer was added (#5481), applyAndVerify skipped the apply,
+ * and an engine created earlier kept a policy that drops the new peer. Derived, not a hand-kept version number.
+ */
+export function ingressPeersTerm(peers: readonly IngressPeer[] = [...ENGINE_INGRESS_PEERS, ...ENGINE_EDGE_PEERS]): string {
+  return createHash('sha256').update(canonical(peers)).digest('hex');
+}
+
 export interface FhirNames {
   databaseName: string;
   /** Kubernetes name of the engine's ServiceAccount, Deployment and Service, in the `loom-health` namespace. */
@@ -145,6 +191,8 @@ export interface RenderInput {
   partitions?: PartitionSpec[];
   /** The stamp PG administrator role (`pgAdminIdentity.name`): the engine grants it SELECT on the partition table, nothing else. */
   pgAdminName: string;
+  /** The NetworkPolicy peer list hashed into the revision. Defaults to what the production host renders; tests vary it. */
+  ingressPeers?: readonly IngressPeer[];
 }
 
 export interface RenderedEngineConfig {
@@ -254,6 +302,10 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   };
   const identity = { name: i.identity.name, clientId: i.identity.clientId, principalId: i.identity.principalId };
   const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const, partitions };
-  const revision = createHash('sha256').update(canonical(body)).digest('hex');
+  // The NetworkPolicy peer list is in the revision but not in the returned body: it is not engine config, it is what the host
+  // renders beside it. A peer change therefore re-applies (and, through the pod-template revision annotation, restarts) every engine once.
+  const revision = createHash('sha256')
+    .update(canonical({ ...body, ingressPeers: ingressPeersTerm(i.ingressPeers) }))
+    .digest('hex');
   return { ...body, revision };
 }

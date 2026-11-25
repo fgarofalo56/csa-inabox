@@ -10,7 +10,17 @@
 // established; output is excerpted, masked and bounded before it reaches a job message.
 
 import { randomBytes } from 'node:crypto';
-import { assertPartitions, fhirNames, IDENTITY_NAME, type EngineOverrides, type PartitionSpec, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import {
+  assertPartitions,
+  ENGINE_EDGE_PEERS,
+  ENGINE_INGRESS_PEERS,
+  fhirNames,
+  IDENTITY_NAME,
+  type EngineOverrides,
+  type IngressPeer,
+  type PartitionSpec,
+  type RenderedEngineConfig,
+} from './fhir-tenant-config.js';
 import type { AppliedEngineConfig, EngineProbe, FhirEngineHost, RoleReadback } from './fhir-tenant-jobs.js';
 import type { AksRunCommand, AksTarget, RunCommandResult } from './aks-run-command.js';
 import { classifyArm, stampResourceGroup, type TenantArm } from './tenant-arm.js';
@@ -90,27 +100,9 @@ function envList(env: Record<string, string>): Array<{ name: string; value: stri
     .map((name) => ({ name, value: env[name] as string }));
 }
 
-/** One admitted ingress peer: a `from` entry of the engine NetworkPolicy. Selectors are required so no peer can widen to "every pod". */
-export interface IngressPeer {
-  namespaceSelector: { matchLabels: Record<string, string> };
-  podSelector?: { matchLabels: Record<string, string> };
-}
-
-/**
- * Peers admitted to an engine today (#5441). Measured 2026-11-23:
- *  - `aks-command`: the pod `az aks command invoke` / ARM runCommand starts, where the B3 CRUD probe curls the engine Service
- *    (.github/workflows/lhds-fhir-crud-probe.yml:21,268).
- *  - `kube-system` konnectivity-agent: the CP's probeEngine reads /metadata through the API server service proxy, and AKS tunnels
- *    API-server-to-pod traffic through konnectivity-agent. NOT verified live against a policy yet: the live-verify plan is the probe
- *    (engine_probe ready=true) after the CP roll; a wrong label shows up as ready=false, never as an opened door.
- * No in-cluster ingress controller exists in the stamp bicep (only an ILB address is reserved, network.bicep:67; nothing deploys a
- * controller or an Ingress), so no edge peer is admitted today. The edge (#5410) is added through `edgePeers`, never by widening these.
- */
-export const COMMAND_NAMESPACE = 'aks-command';
-export const ENGINE_INGRESS_PEERS: readonly IngressPeer[] = [
-  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': COMMAND_NAMESPACE } } },
-  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
-];
+// The ingress peer set lives in fhir-tenant-config.ts: it is part of the rendered revision there (so a peer change re-applies
+// every engine), and this file imports from that one, never the reverse. Re-exported here for existing importers.
+export { COMMAND_NAMESPACE, EDGE_APP_LABEL, EDGE_NAMESPACE, EDGE_ROUTER_PEER, ENGINE_EDGE_PEERS, ENGINE_INGRESS_PEERS, type IngressPeer } from './fhir-tenant-config.js';
 
 /**
  * The NetworkPolicy of one engine: ingress only, from the peers above, to the engine container port only, selecting only THIS tenant's pods.
@@ -512,7 +504,9 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async applyEngineConfig(cfg: RenderedEngineConfig): Promise<void> {
     const t = await this.resolve(cfg.tenantId);
     const name = fhirNames(cfg.tenantId).workloadName;
-    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns });
+    // The edge router is admitted on every apply. The same peer list is hashed into cfg.revision (fhir-tenant-config.ts
+    // ingressPeersTerm), so an engine rendered before a peer change differs in revision and is re-applied on its next ensure.
+    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns, edgePeers: ENGINE_EDGE_PEERS });
     const secs = this.o.rolloutSeconds ?? DEFAULT_ROLLOUT_SECONDS;
     const r = await this.o.run.run(t, applyCommand(manifest, `kubectl rollout status deployment/${name} -n ${this.ns} --timeout=${secs}s`));
     if (r.exitCode === 0) return;

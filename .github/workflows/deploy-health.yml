@@ -1014,7 +1014,8 @@ jobs:
             echo "::notice::The stamp PDP was not deployed by this run, so there are no stamp images (PDP, PG client) to import."
             exit 0
           fi
-          SPECS="platform/fiab/bicep/modules/health/pdp-image.json platform/fiab/bicep/modules/health/pg-client-image.json"
+          # G1: the FHIR edge router image (edge-router-image.json) deploys exactly with the PDP (health.bicep edgeDeploy), so it rides here.
+          SPECS="platform/fiab/bicep/modules/health/pdp-image.json platform/fiab/bicep/modules/health/pg-client-image.json platform/fiab/bicep/modules/health/edge-router-image.json"
           # 0. Every spec is validated BEFORE any Azure call: an empty or non-digest value fails the deploy, it is never skipped.
           for SPEC in $SPECS; do
             SRC=$(jq -r '.source // ""' "$SPEC"); REPO=$(jq -r '.acrRepository // ""' "$SPEC")
@@ -1134,6 +1135,62 @@ jobs:
             exit 1
           fi
           echo "Stamp PDP: manifest applied and $NS/$DEP rolled out in $CLUSTER (read back from kubectl)." >> "$GITHUB_STEP_SUMMARY"
+
+      # FHIR EDGE ROUTER DELIVERY (G1, #5410). Same mechanism as the PDP: health.bicep renders the manifest as
+      # healthEdgeState.manifest (single source of truth: edge-router.bicep) and aks-apply-manifest.sh applies it and waits,
+      # bounded, for the router Deployment to be Ready. It runs even when the PDP apply failed (the router does not depend on a
+      # bundle, and the first PDP apply is expected to fail at rollout), but not when the image import failed: its image would
+      # not be in the registry. Ready means nginx answers /healthz in the pod; it does NOT establish that a request through the
+      # stamp ingress reaches an engine (that is the probe's receipt, not this step's).
+      - name: Apply the stamp FHIR edge router manifest (az aks command invoke)
+        id: edgeapply
+        if: ${{ !cancelled() && steps.stampimages.outcome == 'success' && steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        run: |
+          set -uo pipefail
+          set +e
+          if [ "$(jq -r '.healthEdgeState.value.deployed' temp/outputs.json)" != "true" ]; then
+            echo "::warning::The FHIR edge router was not deployed by this run ($(jq -r '.healthEdgeState.value.reason // "no reason reported"' temp/outputs.json)), so there is no manifest to apply."
+            echo "FHIR edge router: NOT deployed ($(jq -r '.healthEdgeState.value.reason // "no reason reported"' temp/outputs.json))." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          RG=$(jq -r '.healthEdgeState.value.resourceGroup // ""' temp/outputs.json)
+          CLUSTER=$(jq -r '.healthEdgeState.value.aksClusterName // ""' temp/outputs.json)
+          NS=$(jq -r '.healthEdgeState.value.namespace // ""' temp/outputs.json)
+          DEP=$(jq -r '.healthEdgeState.value.deploymentName // ""' temp/outputs.json)
+          ILB=$(jq -r '.healthEdgeState.value.ilbIp // ""' temp/outputs.json)
+          jq -r '.healthEdgeState.value.manifest // ""' temp/outputs.json > temp/edge-manifest.yaml
+          if [ -z "$RG" ] || [ -z "$CLUSTER" ] || [ -z "$NS" ] || [ -z "$DEP" ] || [ -z "$ILB" ] || ! grep -q '^kind: Deployment' temp/edge-manifest.yaml; then
+            echo "::error::healthEdgeState says deployed but lacks what the apply needs (resourceGroup='$RG', cluster='$CLUSTER', namespace='$NS', deployment='$DEP', ilbIp='$ILB', manifest bytes=$(wc -c < temp/edge-manifest.yaml)). This is a template defect."
+            exit 1
+          fi
+          bash scripts/csa-loom/aks-apply-manifest.sh --resource-group "$RG" --cluster "$CLUSTER" --namespace "$NS" --deployment "$DEP" --manifest temp/edge-manifest.yaml
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "::error::The FHIR edge router manifest was NOT confirmed applied and Ready (aks-apply-manifest.sh exit $RC: 3 permission, 4 kubectl failure, 5 not Ready in time, 6 outcome unknown, 2 usage). The cause is in the step output above."
+            exit 1
+          fi
+          # The Deployment being Ready says nothing about the internal LB: a Service the cloud provider could not bind stays
+          # <pending> while the pods are healthy. Read the assigned address back (bounded) and require it to be the gateway's.
+          GOT=""
+          for i in $(seq 1 12); do
+            az aks command invoke --resource-group "$RG" --name "$CLUSTER" --command "kubectl get service $DEP -n $NS -o jsonpath='{.status.loadBalancer.ingress[0].ip}'" -o json > temp/edge-svc.json 2> temp/edge-svc.err
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "attempt $i/12: az aks command invoke exited $RC: $(head -c 300 temp/edge-svc.err)"
+            elif [ "$(jq -r '.exitCode // "unknown"' temp/edge-svc.json)" != "0" ]; then
+              echo "attempt $i/12: kubectl exited $(jq -r '.exitCode // "unknown"' temp/edge-svc.json): $(jq -r '.logs // ""' temp/edge-svc.json | head -c 300)"
+            else
+              GOT=$(jq -r '.logs // ""' temp/edge-svc.json | tr -d '\r\n ')
+              if [ "$GOT" = "$ILB" ]; then break; fi
+              echo "attempt $i/12: the Service reports load-balancer address '${GOT:-none yet}', expected $ILB."
+            fi
+            sleep 15
+          done
+          if [ "$GOT" != "$ILB" ]; then
+            echo "::error::The FHIR edge router pods are Ready but its internal load balancer did not report $ILB (last read: '${GOT:-none}'; the attempts above say whether the read itself failed). The App Gateway forwards to $ILB, so the edge is NOT reachable. Read the Service events: kubectl describe service $DEP -n $NS (through az aks command invoke)."
+            exit 1
+          fi
+          echo "FHIR edge router: manifest applied, $NS/$DEP rolled out in $CLUSTER, and its internal load balancer reports $ILB (read back). Discovery proxied: $(jq -r '.healthEdgeState.value.discoveryProxied' temp/outputs.json). Not established here: a request through the stamp ingress." >> "$GITHUB_STEP_SUMMARY"
 
       # LAST STEP (#5422). TLS phase 2 and the console bind have run by now. If the PDP key could not be fetched the PDP was
       # not deployed, and this run must not read as a deployed PDP: fail it here with the reason the fetch step recorded.
