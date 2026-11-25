@@ -51,8 +51,9 @@ class FakeHost implements FhirEngineHost {
     if (this.listFails) throw Object.assign(new Error('x'), { name: 'ArmError' });
     return [...this.configs].map(([tenantId, config]) => ({ tenantId, config: structuredClone(config) }));
   }
-  async probeEngine(): Promise<EngineProbe> {
-    return { ready: true, fhirVersion: '4.0.1', partitions: [] };
+  /** The engine reports the partitions its applied config carries (it creates them itself at startup). */
+  async probeEngine(tenantId: string): Promise<EngineProbe> {
+    return { ready: true, fhirVersion: '4.0.1', partitions: (this.configs.get(tenantId)?.partitions ?? []).map((p) => p.name) };
   }
   async readPartitionRows() {
     return undefined;
@@ -248,6 +249,50 @@ describe('engine drift reconciler (#5482 item 6)', () => {
     expect(done.error?.code).toBe('revision_moved');
     expect(s.host.applyCalls.length).toBe(applied);
     // Positive pair: the same job with the revision this code renders applies it.
+    const ok = await s.a.runner.submit({ kind: RECONCILE_KIND, subjectType: 'tenant', subjectId: 'acme-health', idempotencyKey: 'k2', input: { expectedRevision: fresh, runningRevision: stale }, requestedBy: 't' });
+    await s.a.runner.idle();
+    expect((await s.a.runner.get(ok.job.id)).state).toBe('succeeded');
+    expect(s.host.applyCalls.length).toBe(applied + 1);
+  });
+
+  it('a reconcile keeps the engine overrides and partitions it re-renders (no data-loss on re-apply)', async () => {
+    const s = setup(['acme-health']);
+    const run = async (kind: string, key: string, input: Record<string, unknown>) => {
+      const { job } = await s.a.runner.submit({ kind, subjectType: 'tenant', subjectId: 'acme-health', idempotencyKey: key, input, requestedBy: 't' });
+      await s.a.runner.idle();
+      const done = await s.a.runner.get(job.id);
+      expect(done.state, JSON.stringify(done.error)).toBe('succeeded');
+    };
+    await run('fhir-tenant.create', 'c1', { partitions: ['north'] });
+    await run('fhir-tenant.configure', 'cf1', { maxPageSize: 50 });
+    const c = s.host.configs.get('acme-health') as AppliedEngineConfig;
+    // Fixture check: the engine really carries a non-default override and a partition before it goes stale.
+    expect([c.overrides, c.partitions]).toEqual([{ maxPageSize: 50 }, [{ id: 1, name: 'north' }]]);
+    s.host.configs.set('acme-health', { ...c, revision: 'd'.repeat(64) });
+    const applied = s.host.applyCalls.length;
+    expect((await s.a.pass()).submitted).toEqual(['acme-health']);
+    await s.a.runner.idle();
+    expect(s.host.applyCalls.length).toBe(applied + 1);
+    // Breaks if the reconcile renders from defaults (render(deps, r, {}, [])): overrides {} and partitions [] would be applied.
+    const after = s.host.configs.get('acme-health') as AppliedEngineConfig;
+    expect(after.overrides).toEqual({ maxPageSize: 50 });
+    expect(after.partitions).toEqual([{ id: 1, name: 'north' }]);
+    expect(after.revision).toBe(c.revision);
+  });
+
+  it('the job refuses at RUN time a tenant that is no longer active (tenant_not_active, zero applies)', async () => {
+    const s = setup(['acme-health']);
+    const [stale, fresh] = await s.makeStale('acme-health');
+    const applied = s.host.applyCalls.length;
+    // Flipped after the drift was observed and before the runner executes the job: only the handler's own check can stop it.
+    s.tenants.docs.set('acme-health', { ...(s.tenants.docs.get('acme-health') as TenantDoc), status: 'destroying' });
+    const { job } = await s.a.runner.submit({ kind: RECONCILE_KIND, subjectType: 'tenant', subjectId: 'acme-health', idempotencyKey: 'k1', input: { expectedRevision: fresh, runningRevision: stale }, requestedBy: 't' });
+    await s.a.runner.idle();
+    // Breaks if that check is removed: the job succeeds and applies the fresh revision to a tenant being destroyed.
+    expect((await s.a.runner.get(job.id)).error?.code).toBe('tenant_not_active');
+    expect(s.host.applyCalls.length).toBe(applied);
+    // Positive pair: the same submit on the active tenant applies.
+    s.tenants.docs.set('acme-health', { ...(s.tenants.docs.get('acme-health') as TenantDoc), status: 'active' });
     const ok = await s.a.runner.submit({ kind: RECONCILE_KIND, subjectType: 'tenant', subjectId: 'acme-health', idempotencyKey: 'k2', input: { expectedRevision: fresh, runningRevision: stale }, requestedBy: 't' });
     await s.a.runner.idle();
     expect((await s.a.runner.get(ok.job.id)).state).toBe('succeeded');
