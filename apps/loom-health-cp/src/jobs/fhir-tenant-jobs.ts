@@ -42,6 +42,14 @@ export interface AppliedEngineConfig {
   partitions: PartitionSpec[];
 }
 
+/** One engine of a stamp listing: its tenant (the `loom.health/tenant` label) and either what it runs or why that could not be read. */
+export interface ListedEngine {
+  tenantId: string;
+  config?: AppliedEngineConfig;
+  /** A JobFailure code (e.g. engine_unmanaged) when the annotations could not be read. Such an engine is never re-rendered. */
+  problem?: string;
+}
+
 export interface RoleReadback {
   exists: boolean;
   /** Every application database the principal can CONNECT to. Isolation holds only if this is exactly the tenant's own. */
@@ -68,6 +76,8 @@ export interface FhirEngineHost {
   applyEngineConfig(cfg: RenderedEngineConfig): Promise<void>;
   /** undefined = no engine config exists for the tenant. */
   readEngineConfig(tenantId: string): Promise<AppliedEngineConfig | undefined>;
+  /** Every engine this control plane manages on a stamp, in one read (the drift reconciler). Throws when the stamp cannot be listed; never reports "none" for a failed read. */
+  listEngineConfigs(stampId: string): Promise<ListedEngine[]>;
   /** `partitions: true` also lists the partitions, read from the tenant database (never over HTTP); a host that cannot read them throws rather than report none. */
   probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe>;
   /** The tenant database's `hfj_partition` rows, or undefined when they cannot be read (a fresh tenant: no table yet; or a failed read). Never throws for that. */
@@ -91,8 +101,11 @@ export interface FhirTenantJobDeps {
 }
 
 export function fhirTenantHandlers(deps: FhirTenantJobDeps): JobHandler[] {
-  return [fhirTenantCreateHandler(deps), fhirTenantConfigureHandler(deps), fhirTenantTeardownHandler(deps)];
+  return [fhirTenantCreateHandler(deps), fhirTenantConfigureHandler(deps), fhirTenantReconcileHandler(deps), fhirTenantTeardownHandler(deps)];
 }
+
+export const RECONCILE_KIND = 'fhir-tenant.reconcile';
+const REVISION = /^[0-9a-f]{64}$/;
 
 // DEFAULT is HAPI's built-in partition; a tenant partition named it (any case) is refused at the door, not at the engine.
 const PartitionsSchema = z
@@ -111,8 +124,12 @@ interface Resolved {
   identity: FhirIdentity;
 }
 
-async function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolved> {
-  const tenant = await deps.tenants.get(ctx.job.subjectId);
+function resolve(ctx: JobContext, deps: FhirTenantJobDeps): Promise<Resolved> {
+  return resolveTenant(deps, ctx.job.subjectId);
+}
+
+async function resolveTenant(deps: FhirTenantJobDeps, tenantId: string): Promise<Resolved> {
+  const tenant = await deps.tenants.get(tenantId);
   if (!tenant) throw new JobFailure('tenant_missing', 'the tenant record no longer exists');
   const stamp = await deps.stamps.get(tenant.stampId);
   if (!stamp) throw new JobFailure('stamp_missing', 'the tenant references a stamp that is not registered');
@@ -307,6 +324,56 @@ export function fhirTenantConfigureHandler(deps: FhirTenantJobDeps): JobHandler 
       const { partitions, ...patch } = ctx.input as EngineOverrides & { partitions?: string[] };
       const merged: EngineOverrides = { ...existing.overrides, ...patch };
       const cfg = render(deps, r, merged, await desiredPartitions(ctx, deps, r.tenant.id, existing.partitions, partitions ?? []));
+      await ensureRole(ctx, deps, cfg);
+      await applyAndVerify(ctx, deps, cfg);
+    },
+  };
+}
+
+/** What an existing engine renders to now: its OWN overrides and partitions (nothing requested, so the tenant database is not read). */
+function renderApplied(deps: FhirTenantJobDeps, r: Resolved, applied: AppliedEngineConfig): RenderedEngineConfig {
+  return render(deps, r, applied.overrides, mergePartitions(applied.partitions, []));
+}
+
+/**
+ * The revision this control plane renders for a tenant's existing engine, through the same resolve + render the jobs use (the drift
+ * reconciler compares it with the engine's own annotation). Throws the resolve/render JobFailure: a tenant that cannot be rendered is skipped.
+ */
+export async function renderedRevisionFor(deps: FhirTenantJobDeps, tenantId: string, applied: AppliedEngineConfig): Promise<string> {
+  return renderApplied(deps, await resolveTenant(deps, tenantId), applied).revision;
+}
+
+/**
+ * fhir-tenant.reconcile (#5482 item 6): re-render an EXISTING engine from what it already runs and apply it when the revision moved. It is
+ * fhir-tenant.configure with an empty patch, which configure's schema refuses by contract, and unlike fhir-tenant.create it never makes an
+ * engine that does not exist. The drift reconciler (fhir-engine-reconcile.ts) submits it; nobody has to.
+ *
+ * `expectedRevision` is what the submitter rendered. A replica whose code renders something else (a control-plane roll in progress, or a
+ * configure that ran since) refuses with nothing changed, so a reconcile is only ever applied by code that renders the revision it was
+ * submitted for. `runningRevision` is what the submitter saw on the engine; it is in the input for the audit trail and the job id.
+ */
+export function fhirTenantReconcileHandler(deps: FhirTenantJobDeps): JobHandler {
+  return {
+    kind: RECONCILE_KIND,
+    exclusiveGroup: TENANT_ENGINE_GROUP,
+    subjectType: 'tenant',
+    inputSchema: z.strictObject({ expectedRevision: z.string().regex(REVISION), runningRevision: z.string().regex(REVISION) }),
+    async run(ctx) {
+      const expected = String(ctx.input.expectedRevision);
+      const r = await resolve(ctx, deps);
+      if (r.tenant.status !== 'active') {
+        throw new JobFailure('tenant_not_active', `the tenant is ${r.tenant.status}; only an active tenant's engine is reconciled. Nothing was changed.`);
+      }
+      const existing = await deps.engine.readEngineConfig(r.tenant.id);
+      if (!existing) throw new JobFailure('engine_not_configured', `no engine config exists for ${r.tenant.id}; a reconcile never creates one. Nothing was changed.`);
+      const cfg = renderApplied(deps, r, existing);
+      await ctx.receipt('reconcile.render', `rendered=${cfg.revision.slice(0, 12)} expected=${expected.slice(0, 12)} running=${existing.revision.slice(0, 12)}`);
+      if (cfg.revision !== expected) {
+        throw new JobFailure(
+          'revision_moved',
+          `this control plane renders revision ${cfg.revision.slice(0, 12)} for ${r.tenant.id}, not the ${expected.slice(0, 12)} this job was submitted for (a configure ran since, or replicas run different code). Nothing was changed; the next reconcile pass reads the engine again.`,
+        );
+      }
       await ensureRole(ctx, deps, cfg);
       await applyAndVerify(ctx, deps, cfg);
     },

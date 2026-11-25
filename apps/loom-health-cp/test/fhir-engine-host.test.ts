@@ -8,6 +8,11 @@ import { compose } from '../src/compose.js';
 import { RestAksRunCommand, RUN_COMMAND_API, RUN_COMMAND_ATTEMPTS, type AksRunCommand, type AksTarget, type RunCommandResult } from '../src/jobs/aks-run-command.js';
 import {
   ANN_REVISION,
+  ANN_OVERRIDES,
+  ANN_PARTITIONING,
+  ANN_PARTITIONS,
+  engineListCommand,
+  parseEngineList,
   RunCommandFhirEngineHost,
   engineProbeScript,
   armEngineTarget,
@@ -1021,5 +1026,69 @@ describe('engine image pin', () => {
     expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir:latest' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE.*latest/);
     expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE/);
     expect(loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: FHIR_IMAGE })?.fhirImage).toBe(FHIR_IMAGE);
+  });
+});
+
+// #5482 item 6: one runCommand lists every managed engine of a stamp for the drift reconciler. kubectl's real jsonpath output is NOT
+// exercised here (the fake prints the line); the key names are pinned against the manifest constants instead.
+describe('listEngineConfigs (engine drift reconciler)', () => {
+  /** What kubectl would print for the cluster's one Deployment, in the field order engineListCommand asks for. */
+  function listing(c: FakeCluster, over: Partial<Record<'tenant' | 'name', string>> = {}): string {
+    if (!c.deployment) return 'LOOM_LIST_DONE=1\n';
+    const d = c.deployment;
+    const cols = [`LOOM_ENGINE=${over.tenant ?? SLUG}`, `NAME=${over.name ?? `fhir-${SLUG}`}`, `REV=${d.rev}`, `PART=${d.part}`, `OVR=${d.ovr}`, `PARTS=${c.partsAnnotation}`];
+    return [cols.join('\t'), 'LOOM_LIST_DONE=1', ''].join('\n');
+  }
+  function listingHost(c: FakeCluster, logs: (c: FakeCluster) => string) {
+    const run = c.run.bind(c);
+    c.run = async (t, cmd) => {
+      if (!cmd.includes('kubectl get deployments -n')) return run(t, cmd);
+      c.commands.push(cmd);
+      return { exitCode: 0, logs: logs(c) };
+    };
+    return new RunCommandFhirEngineHost({ run: c, target: async () => TARGET, stampTarget: async () => TARGET, fhirImage: FHIR_IMAGE, pgClientImage: PG_IMAGE, pgScope: 'x', sleep: async () => {}, log: () => {} });
+  }
+
+  it('lists what readEngineConfig reads, for the same Deployment, in one command', async () => {
+    const c = new FakeCluster();
+    const h = listingHost(c, (x) => listing(x));
+    await h.applyEngineConfig(cfgFor({ overrides: { maxPageSize: 50 }, partitions: [{ id: 1, name: 'north' }] }));
+    const before = c.commands.length;
+    const listed = await h.listEngineConfigs('dev01');
+    expect(c.commands.length - before).toBe(1); // one runCommand per stamp; N would be the per-tenant cost this exists to avoid
+    // Breaks if a field is mis-mapped (e.g. OVR read as PARTS): the two reads of the same Deployment would disagree.
+    expect(listed).toEqual([{ tenantId: SLUG, config: await h.readEngineConfig(SLUG) }]);
+    expect(listed[0]?.config?.overrides).toEqual({ maxPageSize: 50 });
+    expect(listed[0]?.config?.partitions).toEqual([{ id: 1, name: 'north' }]);
+  });
+
+  it('the jsonpath names exactly the annotations the manifest writes (lifted from the constants, not retyped)', () => {
+    const cmd = engineListCommand('loom-health');
+    const esc = (a: string) => a.replaceAll('.', '\\.');
+    // Breaks on a typo in any annotation key: kubectl prints an empty value for an unknown key, and the engine would read as unmanaged.
+    for (const ann of [ANN_REVISION, ANN_PARTITIONING, ANN_OVERRIDES, ANN_PARTITIONS]) expect(cmd).toContain(`{.metadata.annotations.${esc(ann)}}`);
+    expect(cmd).toContain('-l app.kubernetes.io/managed-by=loom-health-cp');
+    expect(cmd).toContain('{.metadata.labels.loom\\.health/tenant}');
+    expect(cmd.trimEnd().endsWith('echo LOOM_LIST_DONE=1')).toBe(true);
+  });
+
+  it('a listing without its completion marker is engine_list_unproven, never "no engines"', async () => {
+    // Breaks if the marker check is removed: an empty, unproven listing would read as a stamp with no engines.
+    await expect(listingHost(new FakeCluster(), () => '').listEngineConfigs('dev01')).rejects.toMatchObject({ code: 'engine_list_unproven' });
+    await expect(listingHost(new FakeCluster(), () => 'LOOM_LIST_DONE=1\n').listEngineConfigs('dev01')).resolves.toEqual([]);
+  });
+
+  it('an entry whose name is not its tenant workload, or that has no revision, comes back as a problem with no config', async () => {
+    const c = new FakeCluster();
+    const h = listingHost(c, (x) => listing(x, { name: 'fhir-other-co' }));
+    await h.applyEngineConfig(cfgFor());
+    // Breaks if NAME is not checked against the tenant label: a mislabelled Deployment would be re-rendered as acme-health.
+    expect(await h.listEngineConfigs('dev01')).toEqual([{ tenantId: SLUG, problem: 'engine_list_malformed' }]);
+    const noRev = [`LOOM_ENGINE=${SLUG}`, `NAME=fhir-${SLUG}`, 'REV=', 'PART=true', 'OVR={}', 'PARTS=[]'].join('\t');
+    expect(parseEngineList(noRev, 'loom-health')).toEqual([{ tenantId: SLUG, problem: 'engine_unmanaged' }]);
+  });
+
+  it('without a stamp target the host refuses to list (the reconciler then logs it), rather than answer empty', async () => {
+    await expect(hostOver(new FakeCluster()).listEngineConfigs('dev01')).rejects.toMatchObject({ code: 'engine_list_unavailable' });
   });
 });

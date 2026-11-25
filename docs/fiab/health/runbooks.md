@@ -179,3 +179,39 @@ subject inside a control-plane process; two replicas could still claim in the sa
 per-subject claim), which is a disclosed residual, not a closed gap. The CRUD probe no longer submits its own
 `fhir-tenant.create`: it waits on the job `tenant.create` chained (`engine.chained job=`) and then adds its
 partition with `fhir-tenant.configure`.
+
+## Engine drift reconciler (#5482 item 6)
+
+**Status: in code, not deployed, not verified live.** The live receipt is the dev01 tenant `demo-loom-hea-ab3844`:
+after the CP roll, the CP log shows `engine_reconcile.submitted tenant=demo-loom-hea-ab3844`, the
+`fhir-tenant.reconcile` job ends `succeeded` with `config.applied`, and
+`GET https://<stamp>/demo-loom-hea-ab3844/fhir/metadata` answers 200 instead of the router's 504.
+
+An engine's rendered revision can move with no job running: a CP release that changes what is rendered (the
+edge-router peer of #5481), a stamp `baseUrl` or tenant quota PATCH, a re-created tenant identity. The CP re-applies
+such an engine itself, at startup and every 30 minutes (`src/jobs/fhir-engine-reconcile.ts`):
+
+1. Per `healthy` stamp that has tenants, ONE runCommand lists every Deployment labelled
+   `app.kubernetes.io/managed-by=loom-health-cp` with its annotations (`listEngineConfigs`). The running revision is
+   read from the engine, not from a record in the job store: the annotations are also the only record of the
+   tenant's overrides and partitions, which the fresh render needs, and an engine applied before this change has no
+   job-store record at all.
+2. Per `active` tenant with an engine, the same resolve + render the jobs use (two ARM deployment reads). Tenants
+   that are `creating`, `draining`, `suspended` or `destroying` are skipped, and so is an engine whose annotations do
+   not parse or whose partition mode is off.
+3. A differing revision submits `fhir-tenant.reconcile` (`requestedBy=system:engine-reconciler`) with the key
+   `rev:<rendered 32 hex>:<running 32 hex>:<yyyymmdd UTC>`. The job id is a hash of kind, tenant and key, so every
+   replica and restart that sees the same drift on the same day gets the same job. The job re-reads the engine,
+   re-renders it, refuses with `revision_moved` (nothing changed) if it renders anything other than the
+   `expectedRevision` it was submitted for, then runs the same role ensure and `applyAndVerify` as
+   `fhir-tenant.configure`.
+
+Bounds: at most 2 reconcile jobs queued or running (counted in the job store, so across replicas; two replicas
+starting together can reach 4); the rest are `deferred` to a later pass. A failed reconcile is retried while its
+attempts are below 3; after that the pass logs `engine_reconcile.stuck` until the next UTC day gives a new key.
+Every pass logs `engine_reconcile.pass` with counts; a stamp that cannot be listed logs
+`engine_reconcile.list_failed` with the code and is skipped.
+
+Cost per pass, per replica: one runCommand per healthy stamp (a command pod on the stamp AKS) plus two ARM GETs per
+active tenant with an engine. A reconcile that applies costs what a `fhir-tenant.configure` costs (a PostgreSQL role
+Job and a rollout).

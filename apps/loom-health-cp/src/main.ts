@@ -14,6 +14,7 @@ import { loadIngressCertConfig, scheduleIngressCert } from './tls/ingress-cert.j
 import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
 import { fhirEngineHostFromConfig, loadFhirEngineConfig } from './jobs/fhir-engine-config.js';
 import { loadStampSelfRegistration, scheduleStampSelfRegistration } from './registry/self-register.js';
+import { scheduleEngineReconcile } from './jobs/fhir-engine-reconcile.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
 // tokens, no request bodies, no clinical data.
@@ -89,6 +90,14 @@ function main(): void {
     log('stamp.self_register_disabled', { reason: 'LOOM_HEALTH_CP_STAMP_ID unset' });
   }
 
+  // #5482 item 6: re-apply any engine whose running revision differs from what this control plane renders (startup + timer).
+  let stopReconcile = (): void => {};
+  if (app.reconcileEngines) {
+    stopReconcile = scheduleEngineReconcile(app.reconcileEngines, log);
+  } else {
+    log('engine_reconcile.disabled', { reason: 'the fhir-tenant job kinds are not registered (see fhir_engine.disabled)' });
+  }
+
   // Pick up queued jobs and fail leases left behind by a crashed replica.
   const sweep = setInterval(() => {
     app.jobs.tick().catch((e: unknown) => log('job.sweep_error', { error: e instanceof Error ? e.name : 'unknown' }));
@@ -98,6 +107,7 @@ function main(): void {
   const stop = (): void => {
     clearInterval(sweep);
     stopSelfRegister();
+    stopReconcile();
     server.close(() => {
       app.jobs.idle().finally(() => process.exit(0));
     });

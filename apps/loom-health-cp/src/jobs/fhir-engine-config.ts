@@ -7,7 +7,7 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import { ConfigError, type Cloud } from '../config.js';
 import { RestAksRunCommand } from './aks-run-command.js';
-import { armEngineTarget, assertEngineImagePinned, RunCommandFhirEngineHost } from './fhir-engine-host.js';
+import { armEngineTarget, armStampTarget, assertEngineImagePinned, RunCommandFhirEngineHost } from './fhir-engine-host.js';
 import type { TenantArmConfig } from './tenant-arm-config.js';
 import type { TenantArm } from './tenant-arm.js';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
@@ -62,6 +62,7 @@ export function fhirEngineHostFromConfig(
   return new RunCommandFhirEngineHost({
     run,
     target: armEngineTarget(d),
+    stampTarget: armStampTarget(d),
     fhirImage: c.fhirImage,
     pgClientImage: c.pgClientImage,
     pgScope: c.pgScope,
