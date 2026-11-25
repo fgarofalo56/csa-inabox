@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createAuthServer, type AuthServerInit } from './auth/server.js';
 import { tenantHandlers } from './jobs/tenant-jobs.js';
 import { fhirTenantHandlers, fhirTenantTeardownHandler, type FhirEngineHost } from './jobs/fhir-tenant-jobs.js';
+import { reconcileEnginesOnce } from './jobs/fhir-engine-reconcile.js';
 import type { TenantArm } from './jobs/tenant-arm.js';
 import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
@@ -81,6 +82,8 @@ export function compose(input: ComposeInput) {
     for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm, fhir })) jobs.register(h);
   }
   if (fhirDeps) for (const h of fhirTenantHandlers(fhirDeps)) jobs.register(h);
+  // #5482 item 6: the engine drift reconciler (main.ts runs it at startup and on a timer). Absent with the engine kinds.
+  const reconcileEngines = fhirDeps ? () => reconcileEnginesOnce({ ...fhirDeps, jobs, log, now }) : undefined;
   const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, bundleKey: input.bundleKey, log });
   // W1-4: the Authorization Server answers its own paths and hands everything else to the control-plane app.
   const authServer = input.authServer
@@ -91,5 +94,5 @@ export function compose(input: ComposeInput) {
         if (!(await authServer.handle(req, res))) await app(req, res);
       }
     : app;
-  return { handler, registry, jobs, routing, slo, scheduleRestarts };
+  return { handler, registry, jobs, routing, slo, scheduleRestarts, reconcileEngines };
 }

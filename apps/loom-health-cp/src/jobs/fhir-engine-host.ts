@@ -21,7 +21,7 @@ import {
   type PartitionSpec,
   type RenderedEngineConfig,
 } from './fhir-tenant-config.js';
-import type { AppliedEngineConfig, EngineProbe, FhirEngineHost, RoleReadback } from './fhir-tenant-jobs.js';
+import type { AppliedEngineConfig, EngineProbe, FhirEngineHost, ListedEngine, RoleReadback } from './fhir-tenant-jobs.js';
 import type { AksRunCommand, AksTarget, RunCommandResult } from './aks-run-command.js';
 import { classifyArm, stampResourceGroup, type TenantArm } from './tenant-arm.js';
 import type { StampDoc, TenantDoc } from '../registry/types.js';
@@ -66,6 +66,8 @@ export function assertEngineImagePinned(image: string): void {
 export interface RunCommandHostOptions {
   run: AksRunCommand;
   target: (tenantId: string) => Promise<EngineTarget>;
+  /** The stamp's AKS, for listEngineConfigs. Without it a stamp cannot be listed and the drift reconciler logs that and does nothing. */
+  stampTarget?: (stampId: string) => Promise<AksTarget>;
   /** Full image reference of the HAPI engine (lane B2b image), in the hub ACR. */
   fhirImage: string;
   /** Digest-pinned PG client image (psql + busybox wget), in the hub ACR. */
@@ -400,6 +402,86 @@ export function comparePartitions(desired: PartitionSpec[], found: PartitionSpec
   return { missing, conflicting };
 }
 
+/** The raw annotation values of one engine Deployment, as kubectl printed them ('' = absent). */
+export interface RawEngineAnnotations {
+  rev: string;
+  part: string;
+  ovr: string;
+  parts: string;
+}
+
+/** Annotations -> what the engine runs. Throws `engine_unmanaged` (nothing changed) when a value this control plane writes is absent or unreadable. */
+export function parseAppliedAnnotations(name: string, ns: string, a: RawEngineAnnotations): AppliedEngineConfig {
+  if (!a.rev) {
+    throw new JobFailure('engine_unmanaged', `deployment/${name} exists in ${ns} but carries no ${ANN_REVISION} annotation, so it was not applied by this control plane; nothing was changed`);
+  }
+  let overrides: EngineOverrides = {};
+  if (a.ovr) {
+    try {
+      overrides = JSON.parse(a.ovr) as EngineOverrides;
+    } catch {
+      throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_OVERRIDES} annotation; nothing was changed`);
+    }
+  }
+  // No annotation = a Deployment rendered before the list existed: it carries no partitions.
+  let partitions: PartitionSpec[] = [];
+  if (a.parts) {
+    try {
+      partitions = JSON.parse(a.parts) as PartitionSpec[];
+      assertPartitions(partitions);
+    } catch {
+      throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_PARTITIONS} annotation; nothing was changed, because re-rendering from it could drop a partition`);
+    }
+  }
+  return { revision: a.rev, overrides, partitioning: a.part === 'true', partitions };
+}
+
+/**
+ * One line per managed engine Deployment, fields tab-separated. JSON annotation values never contain a raw tab (JSON.stringify escapes it), so a
+ * tab in a field means a hand-edited annotation and that entry is reported as a problem by parseEngineList, never guessed at.
+ */
+export function engineListCommand(ns: string): string {
+  const jp =
+    `'{range .items[*]}LOOM_ENGINE={.metadata.labels.loom\\.health/tenant}{"\\t"}NAME={.metadata.name}{"\\t"}REV={.metadata.annotations.loom\\.health/engine-revision}` +
+    `{"\\t"}PART={.metadata.annotations.loom\\.health/partitioning}{"\\t"}OVR={.metadata.annotations.loom\\.health/engine-overrides}` +
+    `{"\\t"}PARTS={.metadata.annotations.loom\\.health/partitions}{"\\n"}{end}'`;
+  return `set -e\nkubectl get deployments -n ${ns} -l app.kubernetes.io/managed-by=loom-health-cp -o jsonpath=${jp}\necho LOOM_LIST_DONE=1`;
+}
+
+const LIST_FIELDS = ['NAME', 'REV', 'PART', 'OVR', 'PARTS'] as const;
+
+/** `LOOM_ENGINE=` lines -> entries. A line whose tenant label is not a slug, or whose name is not that tenant's workload, is reported as a problem. */
+export function parseEngineList(logs: string, ns: string): ListedEngine[] {
+  const out: ListedEngine[] = [];
+  const slugOrEmpty = (v: string): string => (SLUG.test(v) ? v : '');
+  for (const line of logs.split('\n')) {
+    if (!line.startsWith('LOOM_ENGINE=')) continue;
+    const cols = line.replace(/\r$/, '').split('\t');
+    const tenantId = (cols[0] ?? '').slice('LOOM_ENGINE='.length);
+    const field = new Map<string, string>();
+    for (const c of cols.slice(1)) {
+      const eq = c.indexOf('=');
+      if (eq > 0) field.set(c.slice(0, eq), c.slice(eq + 1));
+    }
+    if (!SLUG.test(tenantId) || cols.length !== LIST_FIELDS.length + 1 || LIST_FIELDS.some((f) => !field.has(f))) {
+      out.push({ tenantId: slugOrEmpty(tenantId), problem: 'engine_list_malformed' });
+      continue;
+    }
+    const name = field.get('NAME') as string;
+    if (name !== fhirNames(tenantId).workloadName) {
+      out.push({ tenantId, problem: 'engine_list_malformed' });
+      continue;
+    }
+    try {
+      out.push({ tenantId, config: parseAppliedAnnotations(name, ns, { rev: field.get('REV') ?? '', part: field.get('PART') ?? '', ovr: field.get('OVR') ?? '', parts: field.get('PARTS') ?? '' }) });
+    } catch (e) {
+      if (!(e instanceof JobFailure)) throw e;
+      out.push({ tenantId, problem: e.code });
+    }
+  }
+  return out;
+}
+
 // ── the host ─────────────────────────────────────────────────────────────────
 
 export class RunCommandFhirEngineHost implements FhirEngineHost {
@@ -525,31 +607,28 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     const r = await this.o.run.run(t, `kubectl get deployment/${name} -n ${this.ns} --ignore-not-found -o jsonpath=${jp}`);
     if (r.exitCode !== 0) throw this.failure('engine_read_failed', `reading deployment/${name} failed`, r);
     if (!/^FOUND=\S+$/m.test(r.logs)) return undefined;
-    const rev = /^REV=(\S*)$/m.exec(r.logs)?.[1] ?? '';
-    if (!rev) {
-      throw new JobFailure('engine_unmanaged', `deployment/${name} exists in ${this.ns} but carries no ${ANN_REVISION} annotation, so it was not applied by this control plane; nothing was changed`);
+    return parseAppliedAnnotations(name, this.ns, {
+      rev: /^REV=(\S*)$/m.exec(r.logs)?.[1] ?? '',
+      part: /^PART=(.*)$/m.exec(r.logs)?.[1] ?? '',
+      ovr: /^OVR=(.*)$/m.exec(r.logs)?.[1] ?? '',
+      parts: /^PARTS=(.*)$/m.exec(r.logs)?.[1] ?? '',
+    });
+  }
+
+  /**
+   * Every engine Deployment this control plane manages on one stamp, in ONE runCommand (the engine drift reconciler, #5482 item 6). A per-tenant
+   * readEngineConfig would cost one runCommand (a command pod on the stamp AKS, up to a 60 s scheduling wait) per tenant per pass; this costs one
+   * per stamp. An entry whose annotations cannot be parsed comes back with `problem` set and no config: it is skipped, never re-rendered.
+   */
+  async listEngineConfigs(stampId: string): Promise<ListedEngine[]> {
+    if (!this.o.stampTarget) throw new JobFailure('engine_list_unavailable', 'this engine host was built without a stamp target, so the engines of a stamp cannot be listed');
+    const t = await this.o.stampTarget(stampId);
+    const r = await this.o.run.run(t, engineListCommand(this.ns));
+    if (r.exitCode !== 0) throw this.failure('engine_list_failed', `listing the engine deployments of stamp ${stampId} failed`, r);
+    if (!/^LOOM_LIST_DONE=1$/m.test(r.logs)) {
+      throw new JobFailure('engine_list_unproven', `listing the engine deployments of stamp ${stampId} printed no completion marker, so which engines exist is NOT established`);
     }
-    let overrides: EngineOverrides = {};
-    const ovr = /^OVR=(.*)$/m.exec(r.logs)?.[1] ?? '';
-    if (ovr) {
-      try {
-        overrides = JSON.parse(ovr) as EngineOverrides;
-      } catch {
-        throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_OVERRIDES} annotation; nothing was changed`);
-      }
-    }
-    // No annotation = a Deployment rendered before the list existed: it carries no partitions.
-    let partitions: PartitionSpec[] = [];
-    const parts = /^PARTS=(.*)$/m.exec(r.logs)?.[1] ?? '';
-    if (parts) {
-      try {
-        partitions = JSON.parse(parts) as PartitionSpec[];
-        assertPartitions(partitions);
-      } catch {
-        throw new JobFailure('engine_unmanaged', `deployment/${name} carries an unreadable ${ANN_PARTITIONS} annotation; nothing was changed, because re-rendering from it could drop a partition`);
-      }
-    }
-    return { revision: rev, overrides, partitioning: /^PART=true$/m.test(r.logs), partitions };
+    return parseEngineList(r.logs, this.ns);
   }
 
   async probeEngine(tenantId: string, opts?: { partitions?: boolean }): Promise<EngineProbe> {
@@ -653,5 +732,24 @@ export function armEngineTarget(d: { stamps: Collection<StampDoc>; tenants: Coll
     if (!cluster) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no aksClusterName; the engine cannot be delivered');
     const pg = m.value.pgAdminIdentity as { name?: unknown } | undefined;
     return { resourceGroup: rg, cluster, postgresFqdn: String(m.value.postgresFqdn ?? ''), pgAdminName: typeof pg?.name === 'string' ? pg.name : '' };
+  };
+}
+
+/** A stamp's AKS from its manifest: what listEngineConfigs runs against. Same reads and failures as armEngineTarget, minus the tenant. */
+export function armStampTarget(d: { stamps: Collection<StampDoc>; arm: TenantArm }): (stampId: string) => Promise<AksTarget> {
+  return async (stampId) => {
+    const stamp = await d.stamps.get(stampId);
+    if (!stamp) throw new JobFailure('stamp_missing', `the stamp ${stampId} is not registered`);
+    const rg = stampResourceGroup(stamp.id, stamp.region);
+    let m;
+    try {
+      m = await d.arm.getStampManifest(rg, stamp.id);
+    } catch (e) {
+      throw classifyArm(e);
+    }
+    if (m.state !== 'found') throw new JobFailure('stamp_manifest_missing', `the stamp deployment lhds-stamp-${stamp.id} ${m.state === 'absent' ? 'was not found' : 'returned no outputs'} in ${rg}`);
+    const cluster = String(m.value.aksClusterName ?? '');
+    if (!cluster) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no aksClusterName; its engines cannot be listed');
+    return { resourceGroup: rg, cluster };
   };
 }

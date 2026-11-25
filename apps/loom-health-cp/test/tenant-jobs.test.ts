@@ -746,6 +746,9 @@ describe('FHIR engine chaining (#5442)', () => {
       await app.jobs.idle();
       const fhirJobs = (await app.jobs.list()).filter((j) => j.kind === 'fhir-tenant.create');
       expect(fhirJobs.map((j) => [j.subjectId, j.idempotencyKey])).toEqual([[SLUG, 'engine-create-1']]);
+      // #5482 item 6: the drift reconciler is wired with the engine kinds (undefined here = main.ts never schedules it).
+      expect(typeof app.reconcileEngines).toBe('function');
+      expect(app.jobs.kinds()).toContain('fhir-tenant.reconcile');
     });
 
     it('pdpUrl blank: the engine kinds are not registered, tenant.create still succeeds and says not chained', async () => {
@@ -756,6 +759,7 @@ describe('FHIR engine chaining (#5442)', () => {
       expect(done.state, JSON.stringify(done.error)).toBe('succeeded');
       expect(done.receipts.some((r) => r.step === 'engine.not_chained')).toBe(true);
       expect(app.jobs.kinds().filter((k) => k.startsWith('fhir-tenant.'))).toEqual([]);
+      expect(app.reconcileEngines).toBeUndefined(); // a function here would reconcile engines whose job kinds do not exist
     });
   });
 });
@@ -809,7 +813,7 @@ describe('tenant.destroy allowMissingEngine (#5442 review)', () => {
 });
 
 describe('engine-affecting kinds share one exclusive group (#5442)', () => {
-  it('tenant.create, tenant.destroy and all three fhir-tenant kinds are in group tenant-engine (a kind left out can race the others)', () => {
+  it('tenant.create, tenant.destroy and every fhir-tenant kind (reconcile included, #5482) are in group tenant-engine (a kind left out can race the others)', () => {
     const noop = {} as never;
     const kinds = [
       ...tenantHandlers({ stamps: noop, tenants: noop, registry: noop, arm: noop }),
@@ -817,7 +821,7 @@ describe('engine-affecting kinds share one exclusive group (#5442)', () => {
     ];
     expect(kinds.map((h) => [h.kind, h.exclusiveGroup])).toEqual([
       ['tenant.create', 'tenant-engine'], ['tenant.destroy', 'tenant-engine'],
-      ['fhir-tenant.create', 'tenant-engine'], ['fhir-tenant.configure', 'tenant-engine'], ['fhir-tenant.teardown', 'tenant-engine'],
+      ['fhir-tenant.create', 'tenant-engine'], ['fhir-tenant.configure', 'tenant-engine'], ['fhir-tenant.reconcile', 'tenant-engine'], ['fhir-tenant.teardown', 'tenant-engine'],
     ]);
   });
 });

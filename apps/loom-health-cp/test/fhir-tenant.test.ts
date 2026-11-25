@@ -286,6 +286,9 @@ class FakeHost implements FhirEngineHost {
   async readEngineConfig() {
     return this.config ? structuredClone(this.config) : undefined;
   }
+  async listEngineConfigs() {
+    return this.config ? [{ tenantId: SLUG, config: structuredClone(this.config) }] : [];
+  }
   async probeEngine(): Promise<EngineProbe> {
     return { ready: this.ready, ...(this.fhirVersion ? { fhirVersion: this.fhirVersion } : {}), partitions: [...this.partitionsHave] };
   }
