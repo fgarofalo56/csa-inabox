@@ -11,6 +11,7 @@ import { calculateJwkThumbprint, type JWK } from 'jose';
 import type { Cloud } from '../config.js';
 import { KEYVAULT_SUFFIX_BY_CLOUD, keyVaultScope } from './clouds.js';
 import { MIN_RSA_BITS, rsaModulusBits } from './jwks-guard.js';
+import { isSameOrigin } from './same-origin.js';
 
 /** What signJwt needs: an alg for the header, a kid, and a signature over the JWS signing input. */
 export interface JwsSigner {
@@ -282,8 +283,9 @@ export class KeyVaultRsaSigner implements IdTokenSigner {
   }
 
   private async req(method: 'GET' | 'POST', url: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
-    // nextLink and version URLs come from Key Vault's answers; never follow one off the vault.
-    if (!url.startsWith(`${this.origin}/`)) throw new Error('key vault link left the vault origin');
+    // nextLink and version URLs come from Key Vault's answers; never follow one off the vault. Checked BEFORE
+    // getToken, so no bearer token is fetched or sent for an off-vault URL. A parsed-origin comparison, not a prefix.
+    if (!isSameOrigin(url, this.origin)) throw new Error('key vault link left the vault origin');
     const token = await this.o.getToken(keyVaultScope(this.o.cloud));
     const full = url.includes('api-version=') ? url : `${url}${url.includes('?') ? '&' : '?'}api-version=7.4`;
     const res = await this.f(full, {
@@ -380,7 +382,12 @@ export class KeyVaultRsaSigner implements IdTokenSigner {
     const st = await this.current();
     const digest = createHash('sha256').update(signingInput).digest();
     const r = await this.req('POST', `${st.signUrl}/sign`, { alg: 'RS256', value: b64u(digest) });
-    if (!ok(r.status)) throw this.fail(r.status, r.json, 'signing with');
+    if (!ok(r.status)) {
+      // A 4xx (a disabled, deleted or expired version; a lost permission) must not wedge this replica on the old
+      // version until a restart: drop the resolved state so the next request re-reads the key and its versions.
+      if (r.status >= 400 && r.status < 500 && this.state) this.state = undefined;
+      throw this.fail(r.status, r.json, 'signing with');
+    }
     const sig = Buffer.from(String(r.json.value ?? ''), 'base64url');
     if (sig.length !== st.sigBytes) throw new Error('key vault returned a malformed RS256 signature');
     return sig;
