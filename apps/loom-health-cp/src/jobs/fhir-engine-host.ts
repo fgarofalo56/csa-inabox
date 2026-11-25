@@ -103,14 +103,27 @@ export interface IngressPeer {
  *  - `kube-system` konnectivity-agent: the CP's probeEngine reads /metadata through the API server service proxy, and AKS tunnels
  *    API-server-to-pod traffic through konnectivity-agent. NOT verified live against a policy yet: the live-verify plan is the probe
  *    (engine_probe ready=true) after the CP roll; a wrong label shows up as ready=false, never as an opened door.
- * No in-cluster ingress controller exists in the stamp bicep (only an ILB address is reserved, network.bicep:67; nothing deploys a
- * controller or an Ingress), so no edge peer is admitted today. The edge (#5410) is added through `edgePeers`, never by widening these.
+ * The FHIR edge (#5410, G1) is NOT one of these: it is the stamp edge router (platform/fiab/bicep/modules/health/edge-router.bicep),
+ * admitted through `edgePeers` (EDGE_ROUTER_PEER below), never by widening these.
  */
 export const COMMAND_NAMESPACE = 'aks-command';
 export const ENGINE_INGRESS_PEERS: readonly IngressPeer[] = [
   { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': COMMAND_NAMESPACE } } },
   { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
 ];
+
+/**
+ * The stamp FHIR edge router (G1): the nginx pods behind the App Gateway's internal-LB address, which forward
+ * `/{tenant}/fhir/*` to `fhir-{tenant}.loom-health.svc`. The namespace and pod label MUST equal what edge-router.bicep renders
+ * (edgeNamespace / edgeAppLabel); scripts/ci/__tests__/lhds-edge-router.test.mjs lifts both and compares. The router does no
+ * authorization: the engine's PDP interceptor is the tenant boundary, so admitting it opens no path the token check does not guard.
+ */
+export const EDGE_NAMESPACE = 'loom-health-edge';
+export const EDGE_APP_LABEL = 'loom-health-edge';
+export const EDGE_ROUTER_PEER: IngressPeer = {
+  namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': EDGE_NAMESPACE } },
+  podSelector: { matchLabels: { app: EDGE_APP_LABEL } },
+};
 
 /**
  * The NetworkPolicy of one engine: ingress only, from the peers above, to the engine container port only, selecting only THIS tenant's pods.
@@ -512,7 +525,9 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async applyEngineConfig(cfg: RenderedEngineConfig): Promise<void> {
     const t = await this.resolve(cfg.tenantId);
     const name = fhirNames(cfg.tenantId).workloadName;
-    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns });
+    // The edge router is admitted on every apply. An engine whose rendered revision is unchanged is NOT re-applied
+    // (applyAndVerify skips it), so an engine created before the edge existed keeps its old policy until its revision changes.
+    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns, edgePeers: [EDGE_ROUTER_PEER] });
     const secs = this.o.rolloutSeconds ?? DEFAULT_ROLLOUT_SECONDS;
     const r = await this.o.run.run(t, applyCommand(manifest, `kubectl rollout status deployment/${name} -n ${this.ns} --timeout=${secs}s`));
     if (r.exitCode === 0) return;

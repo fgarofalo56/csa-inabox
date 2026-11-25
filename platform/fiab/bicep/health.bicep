@@ -388,6 +388,30 @@ module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
   }
 }
 
+// ── FHIR edge router (G1, #5410): nginx on the App Gateway's internal-LB address ──
+// Deploys exactly when the PDP does: the tenant engines it routes to are delivered only with the PDP (main.ts registers the
+// fhir-tenant.* jobs only then), the applier's Cluster Admin role and the kubelet AcrPull are granted by engines.bicep, and the
+// image is imported by the same deploy-health step that imports the PDP image. Same branch on every boundary (no boundary term).
+var edgeDeploy = pdpDeploy
+// ONE place for the router image: tag (display) + digest (what is deployed and what deploy-health imports).
+var edgeImageSpec = loadJsonContent('modules/health/edge-router-image.json')
+
+module healthEdge 'modules/health/edge-router.bicep' = if (edgeDeploy) {
+  name: 'lhds-edge-${healthStampName}'
+  scope: healthRg
+  params: {
+    aksClusterName: healthStamp!.outputs.stamp.aksClusterName
+    // ingress.bicep gwName; the stamp manifest does not carry the gateway name. A wrong name fails the module (existing
+    // resource not found), it cannot bind the router to another gateway's address.
+    gatewayName: 'agw-lhds-${healthStampName}'
+    wafPolicyName: last(split(string(healthStamp!.outputs.stamp.wafPolicyId), '/'))
+    stampIngressFqdn: cpIngressFqdn
+    issuerUrl: cpAuthIssuerUrl
+    image: '${cpAcrLoginServer}/${edgeImageSpec.acrRepository}@${edgeImageSpec.digest}'
+    engineNamespace: pdpNamespace
+  }
+}
+
 // ── APIM tenant-routing fragment (W1-6) ───────────────────────────────────────
 // Published from here, not from the stamp ingress: the fragment needs the control plane's
 // base URL, and the control plane deploys AFTER the stamp (it consumes the stamp's cluster
@@ -466,6 +490,23 @@ output healthPdpState object = pdpDeploy ? {
 } : {
   deployed: false
   reason: !cpDeploy ? 'control plane not deployed' : (empty(pdpPublicKey) ? 'controlPlaneConfig.pdpBundleVerificationPublicKeyPem is empty' : 'no URL the stamp can pull bundles from: set controlPlaneConfig.frontDoor (default; serves /api/health/pdp/*) or controlPlaneConfig.pdpControlPlaneBaseUrl (https)')
+}
+
+@description('FHIR edge router state (G1). deployed:true with the manifest deploy-health applies, or deployed:false with the reason. deployed:true means RENDERED, not applied: the apply step reads it back.')
+output healthEdgeState object = edgeDeploy ? {
+  deployed: true
+  // Applied by deploy-health.yml through scripts/csa-loom/aks-apply-manifest.sh. No private material.
+  manifest: healthEdge!.outputs.manifest
+  namespace: healthEdge!.outputs.namespace
+  deploymentName: healthEdge!.outputs.deploymentName
+  ilbIp: healthEdge!.outputs.ilbIp
+  discoveryProxied: healthEdge!.outputs.discoveryProxied
+  issuerHost: healthEdge!.outputs.issuerHost
+  aksClusterName: healthStamp!.outputs.stamp.aksClusterName
+  resourceGroup: healthRg.name
+} : {
+  deployed: false
+  reason: 'the edge router deploys only with the PDP (the tenant engines it routes to are delivered only then): ${!cpDeploy ? 'control plane not deployed' : 'PDP not deployed'}'
 }
 
 @description('LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false.')

@@ -25,7 +25,8 @@ table below in the same PR. A PR that finds the slot held rebases its non-bicep 
 | fix/lhds-5345-kv-issued-tls | W01b-close-deploy-receipts | 2026-11-17 | 2026-11-17 (#5355 merged `99da651a9`; slot free) |
 | feat/lhds-w1b2-afd-issuer | W01b-close-deploy-receipts | 2026-11-21 | 2026-11-21 (#5413 merged `99e020124`) |
 | fix/lhds-issuer-dedicated-waf | W01b-close-deploy-receipts | 2026-11-21 | 2026-11-21 (#5419 merged `1a8940553`) |
-| feat/lhds-w2-2b-1-engine-delivery | W02a-fhir-core-build (W2-2b) | 2026-11-21 | (open) |
+| feat/lhds-w2-2b-1-engine-delivery | W02a-fhir-core-build (W2-2b) | 2026-11-21 | released (W2-2b B1-B3 merged and deployed by 2026-11-23; row left open in error) |
+| feat/lhds-fhir-edge-router | W01b-close-deploy-receipts | 2026-11-25 | |
 
 Rationale: `main.bicep`, `admin-plane/main.bicep`, `apim.bicep`, `health.bicep` (~279 KB) and the seven `params/*.bicepparam` files are
 co-edited by five programs, and `main.json` has an ARM size ceiling (measure it with `git cat-file -s` at the ref; never quote a number).

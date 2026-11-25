@@ -45,6 +45,9 @@ const SPEC_PATH = `${BICEP}/modules/health/pdp-image.json`;
 const spec = JSON.parse(read(SPEC_PATH));
 const PG_SPEC_PATH = `${BICEP}/modules/health/pg-client-image.json`;
 const pgSpec = JSON.parse(read(PG_SPEC_PATH));
+// G1: the FHIR edge router image rides the same step, third and last.
+const EDGE_SPEC_PATH = `${BICEP}/modules/health/edge-router-image.json`;
+const edgeSpec = JSON.parse(read(EDGE_SPEC_PATH));
 
 // ── bicep ─────────────────────────────────────────────────────────────────────
 
@@ -187,7 +190,8 @@ test('workflow: the import step discards nothing (no || true, no 2>/dev/null, no
 
 // Run the real step script under bash with stubs.
 // pgSeq: the resolve answers for the PG client image, which runs AFTER the PDP image in the same step (default: already present).
-function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgSpec.digest}`], importRc = 0, assertRc = 0, cpJson = null, specDigest = spec.digest, pgDigest = pgSpec.digest, deployed = true }) {
+// edgeSeq: the same for the edge router image, which runs after the PG image (default: already present).
+function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgSpec.digest}`], edgeSeq = [`0 ${edgeSpec.digest}`], edgeDigestOverride, importRc = 0, assertRc = 0, cpJson = null, specDigest = spec.digest, pgDigest = pgSpec.digest, deployed = true }) {
   const dir = mkdtempSync(join(tmp, 'run-'));
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
@@ -198,11 +202,12 @@ function runStep({ peState = 'Approved', peRc = 0, resolveSeq, pgSeq = [`0 ${pgS
   const pgObj = { ...pgSpec, digest: pgDigest };
   if (pgDigest === null) delete pgObj.digest; // null = the key is absent from the file
   writeFileSync(join(dir, PG_SPEC_PATH), JSON.stringify(pgObj));
+  writeFileSync(join(dir, EDGE_SPEC_PATH), JSON.stringify(edgeDigestOverride === undefined ? edgeSpec : { ...edgeSpec, digest: edgeDigestOverride }));
   writeFileSync(join(dir, 'temp/outputs.json'), JSON.stringify({
     healthPdpState: { value: { deployed } },
     healthStamp: { value: { acrPrivateEndpoint: { privateEndpointName: 'pe-lhds-dev01-acr', reason: 'r' } } },
   }));
-  writeFileSync(join(dir, 'seq.txt'), [...resolveSeq, ...pgSeq].join('\n') + '\n');
+  writeFileSync(join(dir, 'seq.txt'), [...resolveSeq, ...pgSeq, ...edgeSeq].join('\n') + '\n');
   writeFileSync(join(bin, 'az'), [
     '#!/usr/bin/env bash',
     'echo "az $*" >> "$STUB_LOG"',
@@ -336,8 +341,28 @@ test('B2d step script: PG client image absent -> imported exactly once BY DIGEST
   assert.equal(pgSpec.acrRepository, 'postgres');
   assert.match(pgSpec.digest, /^sha256:[0-9a-f]{64}$/);
   assert.equal(r.calls.filter((c) => c.startsWith('resolve') && c.includes(` ${pgSpec.acrRepository}@${pgSpec.digest}`)).length, 2, 'PG presence check AND read-back expected');
-  const lastResolve = r.calls.filter((c) => c.startsWith('resolve')).at(-1);
-  assert.ok(lastResolve.includes(pgSpec.acrRepository), `the last registry call must be the PG read-back: ${lastResolve}`);
+  // The edge image (G1) is checked last; among the PDP + PG calls the PG read-back is still last.
+  const lastResolve = r.calls.filter((c) => c.startsWith('resolve') && !c.includes(` ${edgeSpec.acrRepository}@`)).at(-1);
+  assert.ok(lastResolve.includes(pgSpec.acrRepository), `the last PDP/PG registry call must be the PG read-back: ${lastResolve}`);
+});
+
+test('G1 step script: edge router image absent -> imported exactly once BY DIGEST from edge-router-image.json, after PDP and PG, and read back', () => {
+  const r = runStep({ resolveSeq: [`0 ${D}`], edgeSeq: ['3 x', `0 ${OTHER}`] });
+  assert.equal(r.status, 0, r.out);
+  const imp = imports(r.calls);
+  // Breaks if the edge spec is dropped from SPECS (length 0), imported by :tag, or from another spec.
+  assert.equal(imp.length, 1, r.calls.join('\n'));
+  assert.equal(imp[0], `az acr import --name acrtest --resource-group rg-hub --source ${edgeSpec.source}@${edgeSpec.digest} --image ${edgeSpec.acrRepository}:${edgeSpec.tag} --force`);
+  assert.equal(r.calls.filter((c) => c.startsWith('resolve') && c.includes(` ${edgeSpec.acrRepository}@${edgeSpec.digest}`)).length, 2, 'edge presence check AND read-back expected');
+  assert.ok(r.calls.filter((c) => c.startsWith('resolve')).at(-1).includes(edgeSpec.acrRepository), 'the edge image is processed last');
+});
+
+test('G1 step script: a tag-only edge router digest fails the step before ANY Azure call', () => {
+  // Uses a sandbox spec override: breaks if the validation loop stops covering the third spec.
+  const r = runStep({ resolveSeq: [`0 ${D}`], edgeDigestOverride: '1.30.6-alpine-slim' });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(r.calls.length, 0, r.calls.join('\n'));
+  assert.match(r.out, /edge-router-image\.json is missing source\/acrRepository\/tag or its digest is not sha256/);
 });
 
 test('B2d step script: an EMPTY PG digest fails the step (exit 1) before ANY Azure call, naming the PG spec - it is not skipped', () => {

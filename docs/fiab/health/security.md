@@ -72,7 +72,8 @@ PRP yet; see open question Q4.
 **Implemented discovery and protocol details (W1b-3a A1/A2, #5454; merged, not
 deployed).** The control plane serves `smart-configuration` both under the
 issuer path and at `/{tenant}/fhir/.well-known/smart-configuration`, the path a
-future FHIR edge forwards unchanged (the edge itself does not exist yet).
+FHIR edge forwards to the issuer (the edge router, G1, is in code and not yet
+deployed; see "FHIR edge router").
 id_tokens use a per-tenant OpenID issuer, `{issuer}/{tenant}`, whose document
 is `{issuer}/{tenant}/.well-known/openid-configuration`; `smart-configuration`
 names the same issuer. Access tokens keep the tenant-independent issuer that
@@ -191,8 +192,9 @@ it. Patient ids made only of dots (`.`, `..`) are refused wherever an id builds
 a URL: the fhirUser mapping, the launch `patient` and the picked patient.
 
 **Honest limit: the live search needs the FHIR edge.** The picker calls the
-tenant FHIR base the token audience names, and that edge does not exist yet
-(W1b-3a spec, G1). Until it does, every search ends in the
+tenant FHIR base the token audience names, and that edge is not deployed yet
+(W1b-3a spec, G1: the router is in code, see "FHIR edge router"). Until it is
+deployed and verified, every search ends in the
 "Patient search is unavailable: the tenant FHIR endpoint did not respond"
 state (HTTP 503, Cancel only). The AS never fabricates a patient. The flow is
 tested only against a fake `PatientSearch` and a fake `fetch`; no live receipt
@@ -222,8 +224,8 @@ honest failure is **HTTP 200 with a flag**, never invented rows:
 `PatientSearchUnavailableError` or role membership cannot be established,
 and `{notPermitted: true, patients: []}` when no role carries
 `user/Patient.rs` (the FHIR search is then not called). A 400 means a bad
-request and a 5xx means a control-plane fault. While the FHIR edge does not
-exist, the console shows "Patient search is unavailable" and offers
+request and a 5xx means a control-plane fault. While the FHIR edge is not
+deployed, the console shows "Patient search is unavailable" and offers
 "Launch without a patient" as the primary action. Search terms travel only
 in POST bodies. Tests: `test/auth-server.test.ts` (EHR launch without a
 patient; admin patient search).
@@ -608,7 +610,7 @@ Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `ro
 
 **Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Added by #5454 (A3): `PATCH .../clients/{id}` takes `{status?, launchUri?: string|null}` (at least one; `null` clears the launch URI; `status` behaves as before), `POST .../clients` accepts an optional `launchUri` for app clients, and the fhirUser mapping family `PUT/GET/DELETE .../tenants/{t}/fhir-users/{oid}` (body `{"resource": "Practitioner/<id>"}`; also `Patient`, `RelatedPerson`, `Person`; the oid must be a GUID and the tenant must exist; DELETE answers 204 and is idempotent) plus `GET .../tenants/{t}/fhir-users` (that tenant's mappings, at most 500). GET needs control-plane read; PUT and DELETE need write. Added by #5454 (A6): `POST .../launch` accepts no `patient` and returns `iss` (the tenant FHIR base) beside `launch` and `expiresAt`. `POST .../tenants/{t}/patient-search` needs write (see A1, "EHR launcher and admin patient search"). Three Cosmos containers (Q6): `health-auth-config` (bindings, clients and fhirUser mappings), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
 
-**Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which does not exist yet, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). The AS routes, the picker included, are live on Commercial dev01 behind the Front Door `/auth/*` route (see the status note at the top). Gate-registry registration of the consent gate is a console change.
+**Not built, by design or dependency.** The standalone patient picker is built (#5454 A5, see A1), but its live search depends on the FHIR edge, which is in code (G1) and not yet deployed, so today it can only render the unavailable state. `fhirUser` is granted only when the fhirUser mapping resolves (wired in `wire.ts` since #5454; before that no resolver existed). The AS routes, the picker included, are live on Commercial dev01 behind the Front Door `/auth/*` route (see the status note at the top). Gate-registry registration of the consent gate is a console change.
 
 **UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
 
@@ -620,6 +622,30 @@ Each engine gets a `networking.k8s.io/v1` NetworkPolicy named like the engine (`
 
 - **Selects** only that tenant's pods (`app` and `loom.health/tenant`), so no other engine in `loom-health` is reachable through it.
 - **Ingress**, TCP 8080 only (the container port, not Service port 80), from: the `aks-command` namespace (runCommand pods, including the B3 CRUD probe) and `kube-system` pods labelled `app=konnectivity-agent` (the API server service proxy that `probeEngine` uses for `/metadata`). Every peer carries a non-empty selector; an unscoped peer is refused at render time.
-- **Edge**: no in-cluster ingress controller exists in the stamp bicep today (only an ILB address is reserved), so none is admitted. The APIM edge (#5410) is added through the `edgePeers` option of `renderEngineManifest`, not by widening the base peers.
+- **Edge** (G1; in the stamp bicep, not yet deployed or verified live): the stamp FHIR edge router (`platform/fiab/bicep/modules/health/edge-router.bicep`, a Loom-owned OSS nginx in namespace `loom-health-edge`, pods labelled `app=loom-health-edge`) is admitted through the `edgePeers` option of `renderEngineManifest` (`EDGE_ROUTER_PEER`), never by widening the base peers. `applyEngineConfig` passes it on every apply. An engine is re-applied only when its rendered revision changes, so an engine created before the edge keeps a policy WITHOUT the edge peer until its next revision change; the policy drops the router's connection, which the router reports after its 5 s connect timeout as a 504 OperationOutcome. See "FHIR edge router" below.
 - **Egress is NOT restricted.** PostgreSQL is reached by FQDN in a delegated subnet whose CIDR the control plane is not given, and workload identity needs `login.microsoftonline.com`; a Kubernetes NetworkPolicy cannot express an FQDN (Cilium FQDN policy needs paid ACNS). A guessed CIDR would break the live CRUD path. Requests remain gated by the PDP interceptor.
 - **Not verified live yet**: the konnectivity-agent label. After the CP roll, `probeEngine` must still report `ready=true` and `lhds-fhir-crud-probe.yml` must pass 7/7.
+
+## FHIR edge router (G1, #5410)
+
+**Status: in code, not deployed, not verified live.** No request through a stamp ingress has reached an engine yet; the receipt is a `GET https://<stamp ingress>/<tenant>/fhir/metadata` read back after deploy-health has applied the router.
+
+The stamp App Gateway forwards every request to one internal-LB address (`network.bicep` `ingressIlbIp`). Before G1 nothing listened there. `platform/fiab/bicep/modules/health/edge-router.bicep` renders the listener: a Loom-owned OSS nginx (`nginxinc/nginx-unprivileged`, pinned by digest in `edge-router-image.json`, imported into the hub registry by the same deploy-health step as the PDP image) behind an INTERNAL `LoadBalancer` Service that requests exactly the address the gateway's `ingress-ilb` pool holds (read from the deployed gateway, not re-derived). deploy-health applies the manifest with `aks-apply-manifest.sh` and then reads the Service's load-balancer address back; a Service still `<pending>` fails the run. The router deploys exactly when the PDP does, on every boundary (no boundary-specific branch).
+
+Routing (`edge-router-nginx.conf`):
+
+| Request | Goes to |
+|---|---|
+| `/{tenant}/fhir/.well-known/smart-configuration` | `{issuer}/{tenant}/.well-known/smart-configuration` over TLS (SNI on, certificate verified), no `Authorization` or `Cookie` forwarded. Not proxied when the issuer is the stamp ingress itself (it would loop): 404 OperationOutcome. |
+| `/{tenant}/fhir[/...]` | `http://fhir-{tenant}.loom-health.svc.cluster.local:80/fhir[/...]`, query string kept, `Authorization` unchanged, `X-Forwarded-Proto: https`, `X-Forwarded-Host` (the gateway's `X-Original-Host`), `X-Forwarded-For`, `X-Forwarded-Prefix: /{tenant}` |
+| unknown tenant (no Service: NXDOMAIN) | 404 OperationOutcome (`not-found`) |
+| engine did not answer (incl. a policy drop) | 504 OperationOutcome (`timeout`) |
+| anything else | 404 OperationOutcome |
+
+`{tenant}` is the control plane's SLUG shape (2 to 40 of `[a-z0-9-]`, no leading or trailing hyphen). Engine errors are NOT rewritten (no `proxy_intercept_errors`): an engine's own 401/403 OperationOutcome reaches the client. The body cap and timeouts are the gateway's (WAF file-upload limit, backend request timeout), read from the deployed resources; bodies stream. `server_tokens` is off.
+
+**The router does no authorization.** It maps a path to a Service. The tenant boundary is the engine's PDP interceptor, which checks the forwarded bearer token against the tenant the engine serves; a request routed to another tenant's engine is refused there.
+
+Pod posture: non-root (uid 101), read-only root filesystem with a `/tmp` emptyDir, all capabilities dropped, seccomp `RuntimeDefault`, no service-account token, 2 replicas with a PodDisruptionBudget, readiness and liveness on `/healthz`. Its NetworkPolicy admits ingress on TCP 8080 from any source (the gateway arrives through the internal LB, whose source address the node may SNAT, so a source CIDR would be a guess) and allows egress only to cluster DNS, tenant engine pods (TCP 8080) and TCP 443 (the issuer; a NetworkPolicy cannot name an FQDN, so in firewall egress mode the stamp firewall allow-list is the FQDN control).
+
+Known limits: nginx forwards the DECODED path, so a percent-encoded character in a FHIR path (rare: resource ids are `[A-Za-z0-9.-]`) reaches the engine decoded. Discovery through Front Door needs the issuer host on the firewall allow-list, which health.bicep adds only when it deployed the Front Door issuer (an `authIssuerUrl` override in firewall mode is not added).

@@ -23,6 +23,7 @@ import {
   renderEngineNetworkPolicy,
   ENGINE_INGRESS_PEERS,
   ENGINE_PORT,
+  EDGE_ROUTER_PEER,
   renderPgJobManifest,
   type EngineTarget,
 } from '../src/jobs/fhir-engine-host.js';
@@ -580,6 +581,25 @@ describe('RunCommandFhirEngineHost', () => {
     expect(sent).toContain('"azure.workload.identity/use":"true"');
     expect(sent).toContain('kubectl rollout status deployment/fhir-acme-health -n loom-health');
     expect(sent).not.toMatch(/PASSWORD/);
+  });
+
+  it('the engine the host APPLIES admits the stamp edge router (G1) by scoped selectors, after the base peers', async () => {
+    const c = new FakeCluster();
+    await hostOver(c).applyEngineConfig(cfgFor());
+    const sent = c.commands.find((x) => x.includes('"kind":"List"')) ?? '';
+    const json = sent.split('\n').find((l) => l.startsWith('{"apiVersion":"v1","kind":"List"')) ?? '';
+    const np = (JSON.parse(json) as { items: Array<Record<string, any>> }).items.find((i) => i.kind === 'NetworkPolicy')!;
+    const from = np.spec.ingress[0].from as unknown[];
+    // Breaks when applyEngineConfig stops passing edgePeers (length 2, edge missing): the router then gets a dropped SYN, never a 200.
+    expect(from).toHaveLength(ENGINE_INGRESS_PEERS.length + 1);
+    // Breaks on a label that differs from edge-router.bicep's namespace/pod label (e.g. 'lhds-edge'), or on an unscoped peer.
+    expect(from[from.length - 1]).toEqual({
+      namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'loom-health-edge' } },
+      podSelector: { matchLabels: { app: 'loom-health-edge' } },
+    });
+    expect(EDGE_ROUTER_PEER).toEqual(from[from.length - 1]);
+    // Positive control on the base peers: they are still first and unchanged (breaks if the edge REPLACED them).
+    expect(from.slice(0, ENGINE_INGRESS_PEERS.length)).toEqual([...ENGINE_INGRESS_PEERS]);
   });
 
   it('a failed apply and a failed rollout are different errors (the LOOM_APPLIED marker decides, not a guess)', async () => {
