@@ -14,7 +14,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runWatchdog, EXIT, validateConfig, DEFAULTS } from '../loom-aca-queue-watchdog.mjs';
+import { runWatchdog, EXIT, validateConfig, DEFAULTS, FILTERED_STATUSES, planIssueAction, buildIssueBody, ISSUE_LABEL } from '../loom-aca-queue-watchdog.mjs';
 import { decide as decidePause } from '../estate-pause-declared.mjs';
 
 const NOW = Date.parse('2026-11-25T12:00:00Z');
@@ -92,11 +92,11 @@ test('a stale loom-aca job kicks EXACTLY once per tick, even with two stale jobs
   const { deps, calls } = world({ runs: [queuedRun(1, [acaJob(11, 12)]), queuedRun(2, [acaJob(21, 14)])] });
   const r = await runWatchdog(cfg(), deps);
   assert.equal(calls.starts, 1, `expected exactly one start, got ${calls.starts}`);
-  assert.equal(r.outcome, 'kicked');
-  assert.equal(r.exitCode, EXIT.ok);
+  assert.equal(r.outcome, 'kicked-scaler-miss');
+  assert.equal(r.exitCode, EXIT.kickedScalerMiss);
   assert.equal(r.kick.name, 'gh-aca-runner-kick1');
   // The OLDEST stale job (21, 14 min) is the one named.
-  assert.ok(r.lines.some((l) => l.startsWith('::warning::KICKED') && l.includes("execution 'gh-aca-runner-kick1'") && l.includes('(id 21)')), r.lines.join('\n'));
+  assert.ok(r.lines.some((l) => l.startsWith('::warning::KICKED (scaler miss)') && l.includes("execution 'gh-aca-runner-kick1'") && l.includes('(id 21)')), r.lines.join('\n'));
 });
 
 test('a fresh job does NOT kick, and age comes from the JOB created_at, not the run', async () => {
@@ -136,7 +136,7 @@ test('a queued loom-aca job inside an IN_PROGRESS run is detected and kicked', a
   const { deps, calls } = world({ runs: [run] });
   const r = await runWatchdog(cfg(), deps);
   assert.equal(calls.starts, 1, r.lines.join('\n'));
-  assert.equal(r.outcome, 'kicked');
+  assert.equal(r.outcome, 'kicked-scaler-miss');
 });
 
 test('a queued run MISSING from the filtered index is still found via the recent page', async () => {
@@ -155,8 +155,8 @@ test('a queued job with OTHER labels is ignored, while a loom-aca job beside it 
     acaJob(11, 12),
   ])] });
   const r = await runWatchdog(cfg(), deps);
-  assert.equal(r.exitCode, EXIT.ok, r.lines.join('\n'));
-  assert.equal(r.outcome, 'kicked');
+  assert.equal(r.exitCode, EXIT.kickedScalerMiss, r.lines.join('\n'));
+  assert.equal(r.outcome, 'kicked-scaler-miss');
   assert.equal(calls.starts, 1);
   assert.ok(!r.lines.some((l) => l.includes('(id 10)')), 'the hosted job must never be named');
 });
@@ -180,7 +180,7 @@ test('a YOUNGER Running execution suppresses the kick; an OLDER one does not', a
   });
   const b = await runWatchdog(cfg(), older.deps);
   assert.equal(older.calls.starts, 1, b.lines.join('\n'));
-  assert.equal(b.outcome, 'kicked');
+  assert.equal(b.outcome, 'kicked-scaler-miss');
 });
 
 test('the two halves of "younger" are each load-bearing', async () => {
@@ -236,8 +236,8 @@ test('a job between the kick and red thresholds is NOT red (24 min)', async () =
   // Breaks if: redAfter is lowered to <= 24, or red keys on kickAfter.
   const { deps } = world({ runs: [queuedRun(1, [acaJob(11, 24)])] });
   const r = await runWatchdog(cfg(), deps);
-  assert.equal(r.exitCode, EXIT.ok);
-  assert.equal(r.outcome, 'kicked');
+  assert.equal(r.exitCode, EXIT.kickedScalerMiss);
+  assert.equal(r.outcome, 'kicked-scaler-miss');
 });
 
 test('a GitHub API failure FAILS CLOSED after bounded retries, with no kick', async () => {
@@ -257,7 +257,7 @@ test('a TRANSIENT GitHub failure that recovers within the bound proceeds normall
   // Positive control for the retry: breaks if a single failure is fatal.
   const { deps, calls } = world({ ghFail: 1, runs: [queuedRun(1, [acaJob(11, 12)])] });
   const r = await runWatchdog(cfg(), deps);
-  assert.equal(r.outcome, 'kicked', r.lines.join('\n'));
+  assert.equal(r.outcome, 'kicked-scaler-miss', r.lines.join('\n'));
   assert.equal(calls.sleeps.length, 1);
 });
 
@@ -346,4 +346,116 @@ test('config: red must exceed kick, and a missing subscription is a usage error'
   const r = await runWatchdog({ repo: REPO, subscription: '' }, deps);
   assert.equal(r.exitCode, EXIT.usage);
   assert.equal(calls.gh.length, 0);
+});
+
+// ── Round 2 (review of #5491) ───────────────────────────────────────────────
+
+/**
+ * A gh stub whose `?status=queued` list is served in pages of the given sizes
+ * (filler runs are `completed`, so they cost no /jobs calls); a final page may
+ * carry one queued run holding a stale loom-aca job. Every other list is empty.
+ */
+function pagedWorld(pageSizes, { tailRun = null } = {}) {
+  const base = world();
+  const calls = { ...base.calls, queuedPages: [] };
+  base.deps.gh = async (p) => {
+    calls.gh.push(p);
+    const jobsM = /\/runs\/(\d+)\/jobs/.exec(p);
+    if (jobsM) {
+      const jobs = tailRun && Number(jobsM[1]) === tailRun.id ? tailRun.jobs : [];
+      return { ok: true, code: 0, stdout: JSON.stringify({ jobs }), stderr: '' };
+    }
+    if (!/status=queued/.test(p)) return { ok: true, code: 0, stdout: JSON.stringify({ workflow_runs: [] }), stderr: '' };
+    const page = Number(/[?&]page=(\d+)/.exec(p)[1]);
+    calls.queuedPages.push(page);
+    const size = typeof pageSizes === 'function' ? pageSizes(page) : (pageSizes[page - 1] ?? 0);
+    const runs = Array.from({ length: size }, (_, i) => ({ id: page * 1000 + i, status: 'completed', created_at: minsAgo(60) }));
+    if (tailRun && size > 0 && size < 100) {
+      const { jobs, ...r } = tailRun;
+      runs[runs.length - 1] = r;
+    }
+    return { ok: true, code: 0, stdout: JSON.stringify({ workflow_runs: runs }), stderr: '' };
+  };
+  return { deps: base.deps, calls: Object.assign(base.calls, calls) };
+}
+
+test('pagination: a full page of 100 is followed by page 2, where the stale job is', async () => {
+  // Breaks if: pagination stops after page 1 (reviewer mutant M1) — the only
+  // stale loom-aca job is on page 2, so nothing would be kicked (exit 0).
+  const { deps, calls } = pagedWorld([100, 1], { tailRun: queuedRun(55, [acaJob(551, 12)]) });
+  const r = await runWatchdog(cfg(), deps);
+  assert.deepEqual(calls.queuedPages, [1, 2]);
+  assert.equal(calls.starts, 1, r.lines.join('\n'));
+  assert.equal(r.exitCode, EXIT.kickedScalerMiss);
+});
+
+test('pagination: a list that is ALWAYS full fails closed at the maxPages ceiling', async () => {
+  // Breaks if: the ceiling is removed (unbounded loop) or reaching it is read
+  // as "nothing queued" (exit 0) instead of exit 3.
+  const { deps, calls } = pagedWorld(() => 100);
+  const r = await runWatchdog(cfg(), deps);
+  assert.equal(calls.queuedPages.length, DEFAULTS.maxPages);
+  assert.equal(r.exitCode, EXIT.parseFailure);
+  assert.ok(r.lines.some((l) => l.includes(`after ${DEFAULTS.maxPages} pages`)), r.lines.join('\n'));
+  assert.equal(calls.starts, 0);
+});
+
+for (const status of ['waiting', 'pending', 'requested']) {
+  test(`a stale loom-aca job in a '${status}' run (absent from every other list) is detected`, async () => {
+    // Breaks if: '${status}' is dropped from FILTERED_STATUSES — the run is
+    // outside the recent page, so it is reachable only through that filter.
+    assert.ok(FILTERED_STATUSES.includes(status));
+    const run = { id: 66, status, name: 'wf-66', created_at: minsAgo(30 * 60), inRecent: false, jobs: [acaJob(661, 12)] };
+    const { deps, calls } = world({ runs: [run] });
+    const r = await runWatchdog(cfg(), deps);
+    assert.equal(calls.starts, 1, r.lines.join('\n'));
+    assert.ok(calls.gh.some((p) => p.includes(`status=${status}&`)));
+  });
+}
+
+test('a kick exits 6 (kicked-scaler-miss), not 0', async () => {
+  // Breaks if: a successful kick maps back to exit 0 — the #5483 invisibility.
+  const { deps } = world({ runs: [queuedRun(1, [acaJob(11, 12)])] });
+  const r = await runWatchdog(cfg(), deps);
+  assert.equal(r.exitCode, 6);
+  assert.equal(r.outcome, 'kicked-scaler-miss');
+  assert.ok(r.lines.some((l) => l.startsWith('::warning::KICKED (scaler miss)') && l.includes('MISSED')));
+});
+
+test('suppressed AND red on the same tick: exits 1 and says why no kick was made', async () => {
+  // Breaks if: suppression short-circuits the red check (exit 0, outcome
+  // 'suppressed'), or the red message hides the suppressing execution.
+  const { deps, calls } = world({
+    runs: [queuedRun(1, [acaJob(11, 30)])],
+    executions: [{ name: 'gh-aca-runner-boot', properties: { status: 'Processing', startTime: minsAgo(2) } }],
+  });
+  const r = await runWatchdog(cfg(), deps);
+  assert.equal(calls.starts, 0);
+  assert.equal(r.exitCode, EXIT.stale);
+  assert.equal(r.outcome, 'stale-red');
+  assert.ok(r.lines.some((l) => l.startsWith('::error::loom-aca job') && l.includes('suppressed by in-flight execution gh-aca-runner-boot')), r.lines.join('\n'));
+});
+
+test('issue plan: comment on the open labelled issue, else create', () => {
+  // Breaks if: an open labelled issue is ignored (duplicate issue every 10 min),
+  // or an unlabelled / closed issue is commented on.
+  assert.deepEqual(planIssueAction([{ number: 9, state: 'open', labels: [{ name: ISSUE_LABEL }] }, { number: 4, state: 'open', labels: [ISSUE_LABEL] }]), { action: 'comment', number: 4 });
+  assert.deepEqual(planIssueAction([{ number: 7, state: 'open', labels: [{ name: 'other' }] }]), { action: 'create' });
+  assert.deepEqual(planIssueAction([{ number: 8, state: 'closed', labels: [{ name: ISSUE_LABEL }] }]), { action: 'create' });
+  assert.deepEqual(planIssueAction([]), { action: 'create' });
+});
+
+test('issue body: carries the outcome and annotations, and says so when there is no verdict', () => {
+  // Breaks if: the body drops the outcome/annotations, or a job that died
+  // before its verdict is described as having an outcome.
+  const withVerdict = buildIssueBody({
+    outcome: 'stale-red', exitCode: '1', jobResult: 'failure', runUrl: 'https://x/run/1',
+    linesJson: JSON.stringify(['[watchdog] plain', '::error::loom-aca job x QUEUED 30.0 min']),
+  });
+  assert.match(withVerdict, /outcome: \*\*stale-red\*\* \(exit 1\)/);
+  assert.match(withVerdict, /- \[error\] loom-aca job x QUEUED 30\.0 min/);
+  assert.ok(!withVerdict.includes('[watchdog] plain'), 'non-annotation lines are not copied');
+  const noVerdict = buildIssueBody({ outcome: '', exitCode: '', jobResult: 'failure', runUrl: 'https://x/run/2', linesJson: '' });
+  assert.match(noVerdict, /WITHOUT emitting a verdict/);
+  assert.match(noVerdict, /https:\/\/x\/run\/2/);
 });

@@ -283,8 +283,9 @@ logic is `scripts/ci/loom-aca-queue-watchdog.mjs`, which is tested by
 - **Detection.** GitHub's `?status=queued` index is not trusted on its own. On
   the same day it returned a zombie (run 43097708136, `queued` since
   2026-11-11, zero jobs, refusing cancel and force-cancel). The watchdog
-  therefore takes the union of the `queued` list, the `in_progress` list, and
-  one unfiltered page of runs created in the last 24 h, then lists the jobs of
+  therefore takes the union of the `queued`, `in_progress`, `waiting`,
+  `pending` and `requested` lists (each paginated, failing closed after 10 full
+  pages) and one unfiltered page of runs created in the last 24 h, then lists the jobs of
   every run that is not completed. A job counts when its `status` is `queued`
   and its `labels` include `loom-aca`. It is aged from **its own**
   `created_at`. A run with zero jobs is counted and logged (`::notice::`) but
@@ -293,9 +294,11 @@ logic is `scripts/ci/loom-aca-queue-watchdog.mjs`, which is tested by
   2–3 min of `NotTriggerScaleUp: Maximum Allowed Cores exceeded` while the D8
   node scales up). The watchdog starts **at most one** execution per tick, and
   none when a younger execution is already Running or Processing. Younger means
-  it started after the job was queued and within the last 6 minutes. A kick is
-  reported as a `::warning::` because it is a workaround, not health: it means
-  the scale rule did not fire.
+  it started after the job was queued and within the last 6 minutes. A kick
+  **exits 6** (`kicked-scaler-miss`), not 0: a job queued 9 minutes is 6+
+  minutes past the cold start, so the scale rule missed it. The kick is a
+  workaround, not health, and a lane that stayed green while kicks covered for
+  a dead scaler would recreate the #5483 outage.
 - **Red (age ≥ 25 min).** The run fails with `::error::`, naming the job, its
   age, and whether a kick was made this tick, with the execution name `az`
   returned. At a 10-minute cadence, at least one kick has already been tried by
@@ -310,6 +313,24 @@ logic is `scripts/ci/loom-aca-queue-watchdog.mjs`, which is tested by
   `scripts/ci/estate-pause-declaration.json` for `Commercial`, and it says so
   with a `::warning::` (UNMEASURED, not clean). It does not read the console's
   estate-power record, which is known to be stale (#5484).
+- **Tracking issue.** Any non-zero outcome, or a watchdog job that died before
+  its verdict (for example at Azure login), opens **one** issue labelled
+  `loom-aca-queue-watchdog`, or comments on the open one. This is the
+  open-issue-else-comment convention of `loom-synthetic-monitor.yml`. A
+  separate `alert` job holds `issues: write`; the job holding the Azure token
+  does not. Close the issue by hand once the scaler is healthy again.
+
+| Exit | Outcome | Meaning |
+|---|---|---|
+| 0 | `clean` / `suppressed` / `paused` | Nothing stale; a younger execution may still take the job; or a declared pause (UNMEASURED) |
+| 1 | `stale-red` | A `loom-aca` job queued ≥ 25 min |
+| 2 | `api-unreadable` | A GitHub or Azure read failed after 3 tries; nothing established |
+| 3 | `parse-failure` | A read succeeded but could not be interpreted, or a list hit the 10-page ceiling |
+| 4 | `kick-failed` | The start failed, or `az` exited 0 without naming an execution |
+| 5 | `usage` | Configuration missing or inconsistent |
+| 6 | `kicked-scaler-miss` | A kick was made because the scaler missed a job queued ≥ 9 min |
+
+When several apply on one tick, the precedence is 4 > 1 > 6 > 0.
 
 **Identity.** The watchdog uses OIDC `azure/login` with the deploy SP
 (`AZURE_CLIENT_ID`), the same login `csa-loom-exercise-services.yml` uses. That
@@ -350,16 +371,25 @@ a literal. Do not stage it in a file, including one under `temp/`.
 ### Reading the KEDA scaler events
 
 The scaler's decisions (`MetricValue`, `Active`, `NotTriggerScaleUp`) are in
-`ContainerAppSystemLogs` in the environment's Log Analytics workspace. Query
-them through the **ARM** endpoint (`management.azure.com`).
+**`ContainerAppSystemLogs_CL`** in the environment's Log Analytics workspace,
+with suffixed columns `JobName_s`, `Reason_s`, `Log_s` (plus `TimeGenerated`).
+Query them through the **ARM** endpoint (`management.azure.com`).
 `az monitor log-analytics query` calls `api.loganalytics.io`, which the
 workstation's LAN DNS sinkholes.
+
+> **Do not "correct" this to `ContainerAppSystemLogs`.** That non-`_CL` table
+> also exists in this workspace but is **empty** on this estate (measured
+> 2026-11-25), so a query against it returns zero rows and reads like "the
+> scaler logged nothing".
 
 ```bash
 MSYS_NO_PATHCONV=1 az rest --method post \
   --url "https://management.azure.com/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<WORKSPACE_RG>/providers/Microsoft.OperationalInsights/workspaces/<WORKSPACE_NAME>/api/query?api-version=2020-08-01" \
-  --body '{"query":"ContainerAppSystemLogs | where TimeGenerated > ago(6h) | where JobName == \"gh-aca-runner\" | project TimeGenerated, Reason, Log | order by TimeGenerated desc | take 50"}'
+  --body '{"query":"ContainerAppSystemLogs_CL | where TimeGenerated > ago(6h) | where JobName_s == \"gh-aca-runner\" | project TimeGenerated, Reason_s, Log_s | order by TimeGenerated desc | take 50"}'
 ```
+
+The legacy path `…/workspaces/<WORKSPACE_NAME>/query?api-version=2017-10-01`
+with the same body also works.
 
 `MetricValue: 0.00, Active: false` while `gh api repos/<owner>/<repo>/actions/runs/<id>/jobs`
 shows a `loom-aca` job `queued` is the #5483 signature.

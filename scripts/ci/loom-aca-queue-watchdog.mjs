@@ -16,15 +16,16 @@
  * watchdog does not try to fix the scaler. It does the one thing that was
  * measured to work, bounded, and it says so loudly when that does not help.
  *
- * ── WHAT IT READS, AND WHY THREE LISTS ──────────────────────────────────────
+ * ── WHAT IT READS, AND WHY SEVERAL LISTS ────────────────────────────────────
  * GitHub's `GET /actions/runs?status=queued` index is NOT trusted alone. On
  * the same day it returned a ZOMBIE (run 43097708136, `queued` since
  * 2026-11-11, zero jobs, refusing cancel and force-cancel). And a `loom-aca`
  * job can be queued inside a run whose own status is `in_progress` (another
- * job of the same run already started). So the population is the UNION of:
- *   1. `?status=queued`        (paginated)
- *   2. `?status=in_progress`   (paginated)
- *   3. one unfiltered page of runs created in the last RECENT_HOURS
+ * job of the same run already started), or `waiting` / `pending` /
+ * `requested`. So the population is the UNION of:
+ *   1. `?status=<s>` for each of FILTERED_STATUSES (each paginated, failing
+ *      closed at MAX_PAGES full pages)
+ *   2. one unfiltered page of runs created in the last RECENT_HOURS
  * minus every run whose status is `completed` (a completed run cannot hold a
  * queued job). For each remaining run the JOBS are listed, and a job counts
  * only when `status == "queued"` AND its `labels` include LABEL. It is aged
@@ -61,12 +62,18 @@
  * exiting 0 is a claim, an unreadable state is not a clean one, and a PARSE
  * failure is its own outcome, distinct from an API failure and from "nothing
  * queued".
- *   0  clean / kicked under the red threshold / kick suppressed / declared pause
+ *   0  clean / kick suppressed / declared pause
  *   1  RED: a loom-aca job queued past RED_AFTER_MINUTES
  *   2  FAIL CLOSED: a GitHub or Azure read failed after bounded retries
  *   3  FAIL CLOSED: a read SUCCEEDED but its payload could not be interpreted
  *   4  the kick itself failed, or `az` exited 0 without naming an execution
  *   5  usage: required configuration missing or thresholds inconsistent
+ *   6  KICKED (scaler miss): the job was rescued by a kick, but the KEDA scale
+ *      rule had not served it. NON-ZERO ON PURPOSE (#5483): a job queued
+ *      >= 9 min is 6+ min past the measured 2-3 min cold start, so the scaler
+ *      missed it, and a lane that stays green while kicks paper over a dead
+ *      scaler recreates the invisible outage this file exists to end.
+ * Precedence when several hold on one tick: 4 > 1 > 6 > 0.
  *
  * READS are retried (API_ATTEMPTS, bounded backoff) because re-issuing a GET is
  * harmless. The START is NEVER retried: a transient-looking failure may still
@@ -112,7 +119,11 @@ export const EXIT = Object.freeze({
   parseFailure: 3,
   kickFailed: 4,
   usage: 5,
+  kickedScalerMiss: 6,
 });
+
+/** Run statuses read through the FILTERED index, each paginated. */
+export const FILTERED_STATUSES = Object.freeze(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
 
 export const DEFAULTS = Object.freeze({
   resourceGroup: 'rg-csa-loom-admin-centralus',
@@ -225,10 +236,10 @@ export async function detect(cfg, deps) {
   const base = `repos/${cfg.repo}/actions/runs`;
   const since = new Date(nowMs - cfg.recentHours * 60 * MIN).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-  const lists = [
-    await ghList(cfg, deps, `${base}?status=queued`, 'workflow_runs'),
-    await ghList(cfg, deps, `${base}?status=in_progress`, 'workflow_runs'),
-  ];
+  const lists = [];
+  for (const s of FILTERED_STATUSES) {
+    lists.push(await ghList(cfg, deps, `${base}?status=${s}`, 'workflow_runs'));
+  }
   // ONE unfiltered recent page, deliberately not paginated: it is the backstop
   // for the filtered index, and lists 1-2 are already exhaustive for what they
   // cover.
@@ -244,6 +255,11 @@ export async function detect(cfg, deps) {
       if (!run || typeof run !== 'object' || !Number.isInteger(run.id)) {
         throw new Abort(EXIT.parseFailure, 'parse-failure', `a workflow run entry had no integer id (${JSON.stringify(run)?.slice(0, 120)}). FAILING CLOSED.`);
       }
+      // EQUIVALENT MUTANT, DISCLOSED (assertion-design.md "done" #5): deleting
+      // this line changes no verdict. A completed run's jobs are all
+      // `completed`, so none passes the `status == "queued"` filter below; the
+      // only effect is extra /jobs calls. It is kept as a cost bound, and no
+      // test counts it as coverage.
       if (run.status === 'completed') continue;
       runs.set(run.id, run);
     }
@@ -396,7 +412,7 @@ export async function runWatchdog(cfgIn, depsIn) {
         if (r.ok) {
           kick = { ...kick, made: true, name: r.name };
           deps.log(
-            `::warning::KICKED: started ${cfg.jobName} execution '${r.name}' because ${describeJob(oldest)} was queued ${minutes(oldest.ageMs)} min (>= ${cfg.kickAfterMinutes}) and the KEDA scaler had not served it. A kick working is a WORKAROUND, not health: the scale rule did not fire. See docs/fiab/github-actions-runner.md "Queue watchdog".`,
+            `::warning::KICKED (scaler miss): started ${cfg.jobName} execution '${r.name}' to rescue ${describeJob(oldest)}, queued ${minutes(oldest.ageMs)} min (>= ${cfg.kickAfterMinutes}, 6+ min past the measured 2-3 min cold start). The KEDA scale rule MISSED this job; the kick is a workaround, not health. Whether the execution took THIS job is shown by the job leaving the queue, which this tick does not observe. See docs/fiab/github-actions-runner.md "Queue watchdog".`,
           );
         } else {
           kick = { ...kick, failure: r.message };
@@ -424,7 +440,7 @@ export async function runWatchdog(cfgIn, depsIn) {
 
     if (kick.failure) return done(EXIT.kickFailed, 'kick-failed', { kick, red });
     if (red.length > 0) return done(EXIT.stale, 'stale-red', { kick, red });
-    if (kick.made) return done(EXIT.ok, 'kicked', { kick, red });
+    if (kick.made) return done(EXIT.kickedScalerMiss, 'kicked-scaler-miss', { kick, red });
     if (kick.suppressedBy) return done(EXIT.ok, 'suppressed', { kick, red });
     deps.log(`[watchdog] no ${cfg.label} job queued >= ${cfg.kickAfterMinutes} min.`);
     return done(EXIT.ok, 'clean', { kick, red });
@@ -436,6 +452,59 @@ export async function runWatchdog(cfgIn, depsIn) {
     deps.log(`::error::loom-aca queue watchdog hit an unexpected error (${err?.stack ?? err}); it has established nothing and FAILS CLOSED.`);
     return done(EXIT.parseFailure, 'unexpected');
   }
+}
+
+// ── Tracking issue (consumed by the workflow's `alert` job) ────────────────
+// The open-or-update convention of loom-synthetic-monitor.yml: ONE open issue
+// per LABEL; a new failure COMMENTS on it, otherwise one is created. The
+// decision and the text live here so they are tested; the workflow only does
+// the REST calls.
+
+export const ISSUE_LABEL = 'loom-aca-queue-watchdog';
+export const ISSUE_TITLE = 'loom-aca queue watchdog: the in-VNet runner is not serving queued jobs';
+
+/**
+ * PURE. Comment on the existing open issue, or create one.
+ * WHAT MAKES IT FAIL: creating when an open labelled issue exists (duplicates),
+ * or commenting on an issue that is closed / lacks the label.
+ * @param {Array<{number:number,state?:string,labels?:Array<string|{name:string}>}>} openIssues
+ */
+export function planIssueAction(openIssues) {
+  const hasLabel = (i) => (i.labels ?? []).some((l) => (typeof l === 'string' ? l : l?.name) === ISSUE_LABEL);
+  const match = (openIssues ?? [])
+    .filter((i) => i && Number.isInteger(i.number) && (i.state ?? 'open') === 'open' && hasLabel(i))
+    .sort((a, b) => a.number - b.number)[0];
+  return match ? { action: 'comment', number: match.number } : { action: 'create' };
+}
+
+/**
+ * PURE. The issue/comment text. States only what the watchdog job reported;
+ * when it reported nothing (it died before emitting outputs) it says THAT.
+ */
+export function buildIssueBody({ outcome, exitCode, linesJson, jobResult, runUrl }) {
+  let lines = null;
+  try {
+    const parsed = JSON.parse(linesJson ?? '');
+    if (Array.isArray(parsed)) lines = parsed.map(String);
+  } catch {
+    lines = null;
+  }
+  const head = [
+    `Run: ${runUrl}`,
+    '',
+    outcome
+      ? `Watchdog outcome: **${outcome}** (exit ${exitCode}); job result: ${jobResult}.`
+      : `The watchdog job concluded **${jobResult}** WITHOUT emitting a verdict (it failed before the decision step finished, e.g. at Azure login). Nothing about the queue was established on this run.`,
+  ];
+  const annotations = (lines ?? []).filter((l) => /^::(error|warning|notice)::/.test(l)).slice(0, 30);
+  const detail = annotations.length
+    ? ['', 'Annotations:', ...annotations.map((l) => `- ${l.replace(/^::(\w+)::/, '[$1] ')}`)]
+    : [];
+  const tail = [
+    '',
+    'Runbook: docs/fiab/github-actions-runner.md "Queue watchdog" (exit codes, manual `az containerapp job start`, PAT rotation, KEDA events query).',
+  ];
+  return [...head, ...detail, ...tail].join('\n');
 }
 
 // ── Production dependencies ────────────────────────────────────────────────
@@ -480,6 +549,14 @@ async function main() {
   const result = await runWatchdog(cfg, deps);
   const summary = `## loom-aca queue watchdog\n\noutcome: **${result.outcome}** (exit ${result.exitCode})\n\n${result.lines.map((l) => `- ${l.replace(/^::\w+::/, '')}`).join('\n')}\n`;
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+  if (process.env.GITHUB_OUTPUT) {
+    // JSON.stringify keeps alert_lines on ONE line, so no multiline delimiter
+    // (and no log text that could forge one) is involved.
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `outcome=${result.outcome}\nexit_code=${result.exitCode}\nalert_lines=${JSON.stringify(result.lines)}\n`,
+    );
+  }
   console.log(`[watchdog] outcome=${result.outcome} exit=${result.exitCode}`);
   process.exitCode = result.exitCode;
 }

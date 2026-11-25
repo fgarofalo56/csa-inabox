@@ -38,10 +38,11 @@ on:
         required: false
         default: true
 
+# Workflow default is read-only; each job widens only what it needs. The job
+# holding the Azure token never holds `issues: write`, and the job that files
+# the issue never holds an Azure token.
 permissions:
   contents: read
-  actions: read
-  id-token: write
 
 # One tick at a time. cancel-in-progress:false lets a second tick QUEUE (GitHub
 # keeps one pending and cancels older pending ones) instead of killing a tick
@@ -55,6 +56,14 @@ jobs:
     name: loom-aca queue watchdog
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      outcome: ${{ steps.watch.outputs.outcome }}
+      exit_code: ${{ steps.watch.outputs.exit_code }}
+      alert_lines: ${{ steps.watch.outputs.alert_lines }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -70,6 +79,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Detect stale loom-aca jobs, kick, signal
+        id: watch
         env:
           GH_TOKEN: ${{ github.token }}
           # Commercial ADMIN_SUB is this secret in csa-loom-post-deploy-bootstrap.yml
@@ -84,3 +94,60 @@ jobs:
           set -uo pipefail
           az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
           node scripts/ci/loom-aca-queue-watchdog.mjs
+
+  # ANY non-zero outcome (red, kicked-scaler-miss, fail-closed, or a job that
+  # died before its verdict) opens or comments on ONE tracking issue, deduped
+  # by the `loom-aca-queue-watchdog` label: the open-issue-else-comment
+  # convention of loom-synthetic-monitor.yml. #5483 was an outage nobody saw; a
+  # red run on a 10-minute cron that nobody opens would be the same outage.
+  alert:
+    name: File / update tracking issue on a non-zero outcome
+    needs: watchdog
+    if: always() && needs.watchdog.result != 'success' && needs.watchdog.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Open or update the tracking issue
+        uses: actions/github-script@v9
+        env:
+          # Through the ENVIRONMENT, never `${{ }}` inside the JS source: these
+          # carry log text (see loom-synthetic-monitor.yml for why).
+          WD_OUTCOME: ${{ needs.watchdog.outputs.outcome }}
+          WD_EXIT: ${{ needs.watchdog.outputs.exit_code }}
+          WD_LINES: ${{ needs.watchdog.outputs.alert_lines }}
+          WD_RESULT: ${{ needs.watchdog.result }}
+        with:
+          script: |
+            const mod = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/loom-aca-queue-watchdog.mjs`);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = mod.buildIssueBody({
+              outcome: process.env.WD_OUTCOME,
+              exitCode: process.env.WD_EXIT,
+              linesJson: process.env.WD_LINES,
+              jobResult: process.env.WD_RESULT,
+              runUrl,
+            });
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: mod.ISSUE_LABEL, per_page: 20,
+            });
+            const plan = mod.planIssueAction(open.data);
+            if (plan.action === 'comment') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: plan.number, body,
+              });
+              core.notice(`commented on #${plan.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: mod.ISSUE_TITLE, body,
+                labels: ['csa-loom', mod.ISSUE_LABEL],
+              });
+              core.notice(`opened #${created.data.number}`);
+            }
