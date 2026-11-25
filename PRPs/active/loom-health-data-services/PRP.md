@@ -13,7 +13,16 @@ started: 2026-10-24
 ---
 # PRP: Loom Health Data Services (LHDS) — program hub
 
-**Status (2026-11-25): ACTIVE.** **Update 2026-11-25 later: A7, the RS256 id_token key (#5478, `3dcd21f0f`), is DEPLOYED on Commercial dev01. Its id_token receipt waits for the headed sign-in.**
+**Status (2026-11-25): ACTIVE.** **Update 2026-11-25 evening: the FHIR edge (G1) is DEPLOYED on Commercial dev01 (#5481 `261d3f3cd`, deploy-health 45567856388). Its engine positive control is still owed.**
+- The edge is a Loom-owned nginx router behind the stamp App Gateway (operator decision 2026-11-25). Through the public stamp ingress, which answered 502 on every path before the deploy:
+  - per-tenant FHIR-base discovery returns 200, byte-identical to the issuer copy;
+  - an unknown tenant or a non-FHIR path returns a 404 OperationOutcome;
+  - the demo tenant's engine returns 504 (its pre-#5481 NetworkPolicy; no re-apply trigger exists yet, #5482 item 6, PR in flight).
+- A fresh-engine 200 through the edge is NOT measured yet: the CRUD probe is queued behind the in-VNet runner outage (#5483, P0).
+- A default deploy-health dispatch is a green no-op while the console record says PAUSED (#5484).
+- Inferno still needs: that control, the demo-engine re-apply, a TLS certificate it trusts (the stamp certificate is self-signed), and the headed sign-in. Detail in W01b (W1b-3 row). The bicep slot is released.
+
+**Update 2026-11-25 later: A7, the RS256 id_token key (#5478, `3dcd21f0f`), is DEPLOYED on Commercial dev01. Its id_token receipt waits for the headed sign-in.**
 - Live (05:40Z, after an ACR build and a restart of revision `loom-health-cp--0000030`): on 3 of 3 reads, the public JWKS serves the unchanged EC/ES384 key plus an RSA/RS256 key (3072 bits, no private members), and the tenant openid-configuration lists `RS256`. The baseline before the roll was `ES384` with the EC key only.
 - ARM read-back: `lhds-as-idtoken-rs256` is `RSA-HSM`, non-exportable and sign/verify only. The CP created it itself at 05:40:13Z (runtime get-or-create, no bicep).
 - NOT yet verified: a real id_token checked against the JWKS. id_tokens come only from user grants, so that receipt is the headed sign-in item.
