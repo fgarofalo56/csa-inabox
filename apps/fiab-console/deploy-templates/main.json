@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6596491019449810717"
+      "templateHash": "9099456760369360250"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "18364120777104506400"
+              "templateHash": "284613496781325818"
             }
           },
           "definitions": {
@@ -27579,7 +27579,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "11367635884187235843"
+                      "templateHash": "14934247053631384501"
                     }
                   },
                   "parameters": {
@@ -27648,9 +27648,9 @@
                     },
                     "trackedKvSecrets": {
                       "type": "string",
-                      "defaultValue": "loom-msal-client-secret,synthetic-login-secret",
+                      "defaultValue": "loom-msal-client-secret,synthetic-login-secret,gh-actions-pat",
                       "metadata": {
-                        "description": "Comma-separated tracked KV secret NAMES (attributes-only reads). Not secret material — a list of identifiers, hence the lint suppression."
+                        "description": "Comma-separated tracked KV secret NAMES (attributes-only reads). Not secret material — a list of identifiers, hence the lint suppression. gh-actions-pat is the in-VNet runner PAT mirror, written with its expiry by ops-kv-secret-sync.yml (#5483); until that runs the monitor reports it as not found."
                       }
                     },
                     "warnDays": {

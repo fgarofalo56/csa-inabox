@@ -93,9 +93,9 @@ param keyVaultName string
 @description('Hub Key Vault data-plane URI (https://<vault>.vault.<suffix>/).')
 param keyVaultUri string
 
-@description('Comma-separated tracked KV secret NAMES (attributes-only reads). Not secret material — a list of identifiers, hence the lint suppression.')
+@description('Comma-separated tracked KV secret NAMES (attributes-only reads). Not secret material — a list of identifiers, hence the lint suppression. gh-actions-pat is the in-VNet runner PAT mirror, written with its expiry by ops-kv-secret-sync.yml (#5483); until that runs the monitor reports it as not found.')
 #disable-next-line secure-secrets-in-params
-param trackedKvSecrets string = 'loom-msal-client-secret,synthetic-login-secret'
+param trackedKvSecrets string = 'loom-msal-client-secret,synthetic-login-secret,gh-actions-pat'
 
 @description('Days-to-expiry OUTER warning threshold (LOOM_SECRET_EXPIRY_WARN_DAYS). Inner 30/7-day bands are fixed.')
 param warnDays int = 60

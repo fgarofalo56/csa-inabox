@@ -40408,6 +40408,79 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/kv-secret-sync-plan.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/kv-secret-sync-plan.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/kv-secret-sync-plan.mjs",
+            "declaredSinkCount": 6,
+            "sinks": [
+              {
+                "id": "stdout:member:110",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:123",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:128",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:113",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:120",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:134",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/loom-aca-queue-watchdog.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -53172,6 +53245,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/kv-secret-sync-plan.mjs#module",
+          "codeModuleId": "code:scripts/ci/kv-secret-sync-plan.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/loom-aca-queue-watchdog.mjs#module",
           "codeModuleId": "code:scripts/ci/loom-aca-queue-watchdog.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -54518,6 +54596,10 @@
         },
         {
           "subject": "scripts/ci/internal-token-drift-verdict.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/kv-secret-sync-plan.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
