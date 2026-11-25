@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { sourceGroup, validateExpiresOn, expiryMatches } from '../kv-secret-sync-plan.mjs';
+import { sourceGroup, validateExpiresOn, expiryMatches, effectiveExpiry } from '../kv-secret-sync-plan.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(here, '..', 'kv-secret-sync-plan.mjs');
@@ -68,6 +68,20 @@ test('read-back compares instants, not strings (az prints +00:00; breaks on a st
   assert.equal(expiryMatches('2027-01-31T00:00:00Z', ''), false, 'a missing expiry (no exp attribute) must fail');
 });
 
+test('blank input with an existing expiry => carried forward (breaks if a blank input returns null and erases the stamp)', () => {
+  assert.deepEqual(effectiveExpiry('', '2027-01-31T00:00:00+00:00'), { iso: '2027-01-31T00:00:00Z', source: 'carried' });
+  assert.deepEqual(effectiveExpiry(null, '2027-01-31T00:00:00+00:00'), { iso: '2027-01-31T00:00:00Z', source: 'carried' });
+});
+
+test('a requested expiry wins over the current one (breaks if carry-forward overrides an explicit input)', () => {
+  assert.deepEqual(effectiveExpiry('2027-06-01T00:00:00Z', '2027-01-31T00:00:00+00:00'), { iso: '2027-06-01T00:00:00Z', source: 'input' });
+});
+
+test('blank input and no current expiry => none (breaks if an absent/garbage expiry is invented)', () => {
+  assert.deepEqual(effectiveExpiry('', ''), { iso: null, source: 'none' });
+  assert.deepEqual(effectiveExpiry('', 'None'), { iso: null, source: 'none' });
+});
+
 test('CLI exit codes: refusal is 2, mismatch is 1 (breaks if the workflow could read a refusal as success)', () => {
   const run = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
   assert.equal(run('expiry', '2000-01-01').status, 2);
@@ -97,8 +111,40 @@ test('the workflow reads the source through the selected command group and verif
   assert.match(wf, /kv-secret-sync-plan\.mjs check-exp/);
 });
 
-test('existing containerapp defaults are unchanged (breaks if a default input moved)', () => {
-  assert.match(wf, /source_kind:[\s\S]*?default: 'containerapp'/);
-  assert.match(wf, /containerapp:\n[\s\S]*?default: 'loom-console'/);
-  assert.match(wf, /aca_secret:[\s\S]*?default: 'loom-msal-client-secret'/);
+// The body of ONE workflow_dispatch input: the lines after `      <name>:` that
+// are indented deeper than the key, stopping at the next input key. CRLF-safe.
+function inputBlock(name) {
+  const lines = wf.split(/\r?\n/);
+  const start = lines.findIndex((l) => l === `      ${name}:`);
+  assert.ok(start >= 0, `input '${name}' not found in the workflow`);
+  const body = [];
+  for (const l of lines.slice(start + 1)) {
+    if (!/^ {8,}\S/.test(l)) break;
+    body.push(l);
+  }
+  return body.join('\n');
+}
+
+test('existing containerapp defaults are unchanged (breaks if a default moved; each match is bounded to its own input block)', () => {
+  assert.match(inputBlock('source_kind'), /default: 'containerapp'/);
+  assert.match(inputBlock('containerapp'), /default: 'loom-console'/);
+  assert.match(inputBlock('aca_secret'), /default: 'loom-msal-client-secret'/);
+  assert.match(inputBlock('kv_secret'), /default: 'loom-msal-client-secret'/);
+  // Bounding control: the aca_secret block must not run on into kv_secret.
+  assert.doesNotMatch(inputBlock('aca_secret'), /Key Vault secret name/);
+  assert.match(inputBlock('kv_secret'), /Key Vault secret name/);
+});
+
+test('the vault write passes the expiry argument through (breaks if "${EXP_ARGS[@]}" is dropped from `secret set`)', () => {
+  const setLine = wf.split(/\r?\n/).find((l) => /az keyvault secret set /.test(l));
+  assert.ok(setLine, 'no `az keyvault secret set` line in the workflow');
+  assert.ok(setLine.includes('"${EXP_ARGS[@]}"'), `secret set does not pass the expiry: ${setLine.trim()}`);
+  assert.match(wf, /EXP_ARGS=\(--expires "\$EXP_ISO"\)/, 'EXP_ARGS no longer carries --expires "$EXP_ISO"');
+});
+
+test('a blank expires_on carries the current expiry forward in the workflow (breaks if the carry-forward call is removed)', () => {
+  const carry = wf.indexOf('kv-secret-sync-plan.mjs effective-exp');
+  const write = wf.indexOf('az keyvault secret set');
+  assert.ok(carry > 0 && carry < write, 'effective-exp must run before the vault write');
+  assert.match(wf, /az keyvault secret list --vault-name "\$KV" \\\r?\n\s+--query "\[\?name=='\$KV_SECRET'\]\.attributes\.expires \| \[0\]"/);
 });

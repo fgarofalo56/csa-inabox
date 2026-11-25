@@ -318,8 +318,11 @@ gh workflow run ops-kv-secret-sync.yml -f source_kind=job \
 Run step 2 on the **first** rotation too. Until `gh-actions-pat` exists, the
 monitor lists it as "not found in the vault" with no expiry band. That is
 reported, but it does not raise an alert. If you run the sync without
-`expires_on`, the new secret version has no expiry, and the monitor reports it
-as no-expiry rather than counting down.
+`expires_on`, the current version's expiry is carried forward onto the new
+version. Only when the vault holds no expiry at all is the new version written
+without one; the run warns, and the monitor reports it as no-expiry rather than
+counting down. After a rotation, always pass the NEW PAT's `expires_on`, since
+a carried-forward date belongs to the old PAT.
 
 Coverage needs the monitor job to carry `gh-actions-pat` in
 `LOOM_SECRET_EXPIRY_KV_SECRETS`. The bicep default includes it, so it lands on

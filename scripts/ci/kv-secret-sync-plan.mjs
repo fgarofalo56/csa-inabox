@@ -24,6 +24,9 @@
  *   node scripts/ci/kv-secret-sync-plan.mjs expiry <YYYY-MM-DD|"">
  *       -> prints the ISO instant to stamp (empty line when unset); exit 2 when
  *          the value is malformed or not after today's UTC date
+ *   node scripts/ci/kv-secret-sync-plan.mjs effective-exp <validated-iso|""> <current-expires|"">
+ *       -> prints "<input|carried|none> <iso>"; a blank input carries the
+ *          current version's expiry forward instead of erasing it
  *   node scripts/ci/kv-secret-sync-plan.mjs check-exp <expected-iso> <read-back>
  *       -> exit 0 when the two denote the same instant, exit 1 otherwise
  */
@@ -79,6 +82,27 @@ export function expiryMatches(expectedIso, readBack) {
   return Number.isFinite(a) && Number.isFinite(b) && a === b;
 }
 
+/**
+ * Which expiry to stamp on the new KV secret version.
+ *
+ * A blank `expires_on` must NOT erase an expiry stamped by an earlier run:
+ * `az keyvault secret set` without `--expires` creates a version with no
+ * expiry, and the monitor would silently stop counting down. So a blank input
+ * carries the CURRENT version's `attributes.expires` forward.
+ *
+ * @param {string|null} requestedIso  validated `expires_on` instant, or null/'' when blank
+ * @param {string|null} currentExpires  current version's attributes.expires as az prints it ('' = none)
+ * @returns {{ iso: string | null, source: 'input' | 'carried' | 'none' }}
+ */
+export function effectiveExpiry(requestedIso, currentExpires) {
+  if (requestedIso) return { iso: requestedIso, source: 'input' };
+  const ms = Date.parse((currentExpires ?? '').trim());
+  if (Number.isFinite(ms)) {
+    return { iso: new Date(ms).toISOString().replace('.000Z', 'Z'), source: 'carried' };
+  }
+  return { iso: null, source: 'none' };
+}
+
 function main(argv) {
   const [cmd, ...rest] = argv;
   if (cmd === 'source-group') {
@@ -97,6 +121,11 @@ function main(argv) {
       return 2;
     }
     process.stdout.write(`${r.iso ?? ''}\n`);
+    return 0;
+  }
+  if (cmd === 'effective-exp') {
+    const r = effectiveExpiry(rest[0] ?? '', rest[1] ?? '');
+    process.stdout.write(`${r.source} ${r.iso ?? ''}\n`);
     return 0;
   }
   if (cmd === 'check-exp') {
