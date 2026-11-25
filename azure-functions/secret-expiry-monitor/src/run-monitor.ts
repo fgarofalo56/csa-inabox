@@ -81,7 +81,7 @@ export async function runSecretExpiryMonitor(log: RunLogger): Promise<MonitorSum
 
   const warnDays = parseWarnDays(env.LOOM_SECRET_EXPIRY_WARN_DAYS);
   const trackedSecrets = parseTrackedSecrets(
-    env.LOOM_SECRET_EXPIRY_KV_SECRETS || 'loom-msal-client-secret,synthetic-login-secret',
+    env.LOOM_SECRET_EXPIRY_KV_SECRETS || 'loom-msal-client-secret,synthetic-login-secret,gh-actions-pat',
   );
   const graphBase = env.LOOM_GRAPH_BASE || 'https://graph.microsoft.com';
   const armEndpoint = env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
