@@ -29,6 +29,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import * as armClient from '@/lib/azure/arm-client';
 const armGetMock = vi.spyOn(armClient, 'armGet');
+import * as sqlClient from '@/lib/azure/azure-sql-client';
 
 import {
   runExtraProbes,
@@ -278,16 +279,31 @@ describe('classifyProbeFailure — the shared probe classifier (#3793)', () => {
  */
 describe('converted probes no longer manufacture a denial from a subscription id (#3793)', () => {
   it('the Azure SQL probe reports a 500 as warn with no role-grant script', async () => {
+    // probeAzureSql reads ARM through azure-sql-client's OWN armRequest (a real
+    // credential chain + fetch), not arm-client.armGet. This test used to set
+    // armGetMock and never reach the probe: the verdict came from whatever the
+    // runner's credential chain returned, and on main CI 2026-11-24 (run
+    // 45495650368) that read as a denial -> 'fail', which blocked the console
+    // roll. Stub the call the probe really makes.
+    const failure = `ARM GET /subscriptions/${SUB_WITH_403}/providers/Microsoft.Sql/servers failed 500: InternalServerError`;
+    const listServersMock = vi.spyOn(sqlClient, 'listServers').mockRejectedValue(new Error(failure));
     process.env.LOOM_AZURE_SQL_DEFAULT_SERVER = 'sql-loom';
-    armGetMock.mockRejectedValue(
-      new Error(`ARM GET /subscriptions/${SUB_WITH_403}/providers/Microsoft.Sql/servers failed 500: InternalServerError`),
-    );
-    const all = await runExtraProbes(h);
-    const r = all.find((c) => c.id === 'probe-azure-sql');
-    expect(r, 'probe-azure-sql did not run').toBeTruthy();
-    expect(r!.status).toBe('warn');
-    expect(r!.fixScript, 'a role-grant script was offered for a 500').toBeUndefined();
-    expect(r!.remediation || '').not.toMatch(/Grant the Console UAMI/i);
-    delete process.env.LOOM_AZURE_SQL_DEFAULT_SERVER;
+    try {
+      const all = await runExtraProbes(h);
+      const r = all.find((c) => c.id === 'probe-azure-sql');
+      expect(r, 'probe-azure-sql did not run').toBeTruthy();
+      // Positive control: the stubbed 500 is what the probe classified. Breaks
+      // if the probe stops calling listServers (the stub is bypassed again).
+      expect(listServersMock).toHaveBeenCalled();
+      expect(r!.detail).toContain('failed 500: InternalServerError');
+      // Breaks if a 5xx whose message carries the '403'-bearing subscription id
+      // is classified as denied (status 'fail' + a Reader grant script).
+      expect(r!.status).toBe('warn');
+      expect(r!.fixScript, 'a role-grant script was offered for a 500').toBeUndefined();
+      expect(r!.remediation || '').not.toMatch(/Grant the Console UAMI/i);
+    } finally {
+      listServersMock.mockRestore();
+      delete process.env.LOOM_AZURE_SQL_DEFAULT_SERVER;
+    }
   });
 });
