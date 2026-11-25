@@ -80,13 +80,15 @@ test('the engine host name is the control plane fhirNames(): prefix "fhir-" + sl
 });
 
 test('the router namespace and pod label equal the edge peer the control plane admits on every engine', () => {
-  const host = read(CP_HOST);
-  const ns = host.match(/^export const EDGE_NAMESPACE = '([^']+)';$/m)[1];
-  const app = host.match(/^export const EDGE_APP_LABEL = '([^']+)';$/m)[1];
+  const cfg = read(CP_CONFIG);
+  const ns = cfg.match(/^export const EDGE_NAMESPACE = '([^']+)';$/m)[1];
+  const app = cfg.match(/^export const EDGE_APP_LABEL = '([^']+)';$/m)[1];
   // Breaks when either side renames (e.g. bicep 'lhds-edge'): the engine policy would drop every routed request.
   assert.equal(src.match(/^var edgeNamespace = '([^']+)'$/m)[1], ns);
   assert.equal(src.match(/^var edgeAppLabel = '([^']+)'$/m)[1], app);
-  assert.match(host, /edgePeers: \[EDGE_ROUTER_PEER\]/);
+  // The host passes the edge peer list to every applied engine, and that list holds the router peer.
+  assert.match(read(CP_HOST), /edgePeers: ENGINE_EDGE_PEERS \}\);/);
+  assert.match(cfg, /^export const ENGINE_EDGE_PEERS: readonly IngressPeer\[\] = \[EDGE_ROUTER_PEER\];$/m);
 });
 
 // ── routing regexes against real paths ─────────────────────────────────────────

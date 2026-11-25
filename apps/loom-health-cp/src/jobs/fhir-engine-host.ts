@@ -10,7 +10,17 @@
 // established; output is excerpted, masked and bounded before it reaches a job message.
 
 import { randomBytes } from 'node:crypto';
-import { assertPartitions, fhirNames, IDENTITY_NAME, type EngineOverrides, type PartitionSpec, type RenderedEngineConfig } from './fhir-tenant-config.js';
+import {
+  assertPartitions,
+  ENGINE_EDGE_PEERS,
+  ENGINE_INGRESS_PEERS,
+  fhirNames,
+  IDENTITY_NAME,
+  type EngineOverrides,
+  type IngressPeer,
+  type PartitionSpec,
+  type RenderedEngineConfig,
+} from './fhir-tenant-config.js';
 import type { AppliedEngineConfig, EngineProbe, FhirEngineHost, RoleReadback } from './fhir-tenant-jobs.js';
 import type { AksRunCommand, AksTarget, RunCommandResult } from './aks-run-command.js';
 import { classifyArm, stampResourceGroup, type TenantArm } from './tenant-arm.js';
@@ -90,40 +100,9 @@ function envList(env: Record<string, string>): Array<{ name: string; value: stri
     .map((name) => ({ name, value: env[name] as string }));
 }
 
-/** One admitted ingress peer: a `from` entry of the engine NetworkPolicy. Selectors are required so no peer can widen to "every pod". */
-export interface IngressPeer {
-  namespaceSelector: { matchLabels: Record<string, string> };
-  podSelector?: { matchLabels: Record<string, string> };
-}
-
-/**
- * Peers admitted to an engine today (#5441). Measured 2026-11-23:
- *  - `aks-command`: the pod `az aks command invoke` / ARM runCommand starts, where the B3 CRUD probe curls the engine Service
- *    (.github/workflows/lhds-fhir-crud-probe.yml:21,268).
- *  - `kube-system` konnectivity-agent: the CP's probeEngine reads /metadata through the API server service proxy, and AKS tunnels
- *    API-server-to-pod traffic through konnectivity-agent. NOT verified live against a policy yet: the live-verify plan is the probe
- *    (engine_probe ready=true) after the CP roll; a wrong label shows up as ready=false, never as an opened door.
- * The FHIR edge (#5410, G1) is NOT one of these: it is the stamp edge router (platform/fiab/bicep/modules/health/edge-router.bicep),
- * admitted through `edgePeers` (EDGE_ROUTER_PEER below), never by widening these.
- */
-export const COMMAND_NAMESPACE = 'aks-command';
-export const ENGINE_INGRESS_PEERS: readonly IngressPeer[] = [
-  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': COMMAND_NAMESPACE } } },
-  { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { app: 'konnectivity-agent' } } },
-];
-
-/**
- * The stamp FHIR edge router (G1): the nginx pods behind the App Gateway's internal-LB address, which forward
- * `/{tenant}/fhir/*` to `fhir-{tenant}.loom-health.svc`. The namespace and pod label MUST equal what edge-router.bicep renders
- * (edgeNamespace / edgeAppLabel); scripts/ci/__tests__/lhds-edge-router.test.mjs lifts both and compares. The router does no
- * authorization: the engine's PDP interceptor is the tenant boundary, so admitting it opens no path the token check does not guard.
- */
-export const EDGE_NAMESPACE = 'loom-health-edge';
-export const EDGE_APP_LABEL = 'loom-health-edge';
-export const EDGE_ROUTER_PEER: IngressPeer = {
-  namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': EDGE_NAMESPACE } },
-  podSelector: { matchLabels: { app: EDGE_APP_LABEL } },
-};
+// The ingress peer set lives in fhir-tenant-config.ts: it is part of the rendered revision there (so a peer change re-applies
+// every engine), and this file imports from that one, never the reverse. Re-exported here for existing importers.
+export { COMMAND_NAMESPACE, EDGE_APP_LABEL, EDGE_NAMESPACE, EDGE_ROUTER_PEER, ENGINE_EDGE_PEERS, ENGINE_INGRESS_PEERS, type IngressPeer } from './fhir-tenant-config.js';
 
 /**
  * The NetworkPolicy of one engine: ingress only, from the peers above, to the engine container port only, selecting only THIS tenant's pods.
@@ -525,9 +504,9 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
   async applyEngineConfig(cfg: RenderedEngineConfig): Promise<void> {
     const t = await this.resolve(cfg.tenantId);
     const name = fhirNames(cfg.tenantId).workloadName;
-    // The edge router is admitted on every apply. An engine whose rendered revision is unchanged is NOT re-applied
-    // (applyAndVerify skips it), so an engine created before the edge existed keeps its old policy until its revision changes.
-    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns, edgePeers: [EDGE_ROUTER_PEER] });
+    // The edge router is admitted on every apply. The same peer list is hashed into cfg.revision (fhir-tenant-config.ts
+    // ingressPeersTerm), so an engine rendered before a peer change differs in revision and is re-applied on its next ensure.
+    const manifest = renderEngineManifest(cfg, { image: this.o.fhirImage, namespace: this.ns, edgePeers: ENGINE_EDGE_PEERS });
     const secs = this.o.rolloutSeconds ?? DEFAULT_ROLLOUT_SECONDS;
     const r = await this.o.run.run(t, applyCommand(manifest, `kubectl rollout status deployment/${name} -n ${this.ns} --timeout=${secs}s`));
     if (r.exitCode === 0) return;

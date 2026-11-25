@@ -2,6 +2,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   AUDIT_INTERCEPTOR,
+  EDGE_ROUTER_PEER,
+  ENGINE_EDGE_PEERS,
+  ENGINE_INGRESS_PEERS,
+  ingressPeersTerm,
   JDBC_AUTH_PLUGIN,
   PDP_INTERCEPTOR,
   fhirNames,
@@ -147,6 +151,25 @@ describe('renderEngineConfig', () => {
     // A revision that ignored overrides would make fhir-tenant.configure a no-op.
     expect(renderEngineConfig({ ...baseInput, overrides: { maxPageSize: 50 } }).revision).not.toBe(a.revision);
     expect(renderEngineConfig({ ...baseInput, pdpUrl: 'http://pdp2.lhds.svc:8181' }).revision).not.toBe(a.revision);
+  });
+
+  it('the NetworkPolicy peer list is in the revision: a peer change re-applies every engine (#5481), an identical list does not', () => {
+    const now = renderEngineConfig(baseInput);
+    // The pre-#5481 list (base peers only, no edge router). Input that breaks it: a revision that leaves the peer term out
+    // renders the SAME revision for both lists, so an engine created before the edge is never re-applied and drops the router.
+    const preEdge = renderEngineConfig({ ...baseInput, ingressPeers: [...ENGINE_INGRESS_PEERS] });
+    expect(preEdge.revision).not.toBe(now.revision);
+    // Identical list, passed explicitly in a fresh array: same revision (breaks on a term that hashes identity or order noise).
+    expect(renderEngineConfig({ ...baseInput, ingressPeers: [...ENGINE_INGRESS_PEERS, ...ENGINE_EDGE_PEERS] }).revision).toBe(now.revision);
+    // The default IS the list the host renders: base peers then the edge router (breaks if the default drifts from the policy).
+    expect(ENGINE_EDGE_PEERS).toEqual([EDGE_ROUTER_PEER]);
+    expect(ingressPeersTerm()).toBe(ingressPeersTerm([...ENGINE_INGRESS_PEERS, EDGE_ROUTER_PEER]));
+    // A changed label inside a peer is a different term (breaks on a term built from the list LENGTH or names only).
+    const relabelled = [...ENGINE_INGRESS_PEERS, { ...EDGE_ROUTER_PEER, podSelector: { matchLabels: { app: 'other-edge' } } }];
+    expect(ingressPeersTerm(relabelled)).not.toBe(ingressPeersTerm());
+    // The term is not leaked into the engine config body (it is not engine config).
+    expect(now).not.toHaveProperty('ingressPeers');
+    expect(now.env).toEqual(preEdge.env);
   });
 
   it('caps may only LOWER the file ceiling: 201 is refused, a default above the max is refused', () => {
