@@ -55,26 +55,34 @@ const MEASURED = [
   { group: 'RFI', ruleId: '931130', arg: 'redirect_uri' },
   { group: 'RFI', ruleId: '931100', arg: 'redirect_uri' },
   { group: 'MS-ThreatIntel-SQLI', ruleId: '99031002', arg: 'scope' },
+  // Entra's &clientdata on the /auth/{tenant}/callback redirect (#5279): 29 hits 2026-11-09..11, all on this rule.
+  { group: 'SQLI', ruleId: '942120', arg: 'clientdata' },
 ];
 
 // The complete allowed exclusion map, rule id -> query arg names. Anything wider fails test 1.
 const EXPECTED = {
   RFI: { '931100': ['redirect_uri'], '931130': ['aud', 'redirect_uri'] },
-  'MS-ThreatIntel-SQLI': { '99031002': ['code', 'code_challenge', 'launch', 'scope', 'state'] },
+  'MS-ThreatIntel-SQLI': { '99031002': ['code', 'code_challenge', 'launch', 'req', 'scope', 'state'] },
+  SQLI: { '942120': ['clientdata'] },
 };
 
-function drs() {
+function allSets() {
   assert.equal(wafs.length, 1, `expected exactly one WAF policy in ${REL}, found ${wafs.length}`);
-  const sets = deref(wafs[0].properties.managedRules.managedRuleSets);
-  const set = sets.find((s) => s.ruleSetType === 'Microsoft_DefaultRuleSet');
+  return deref(wafs[0].properties.managedRules.managedRuleSets) ?? [];
+}
+
+function drs() {
+  const set = allSets().find((s) => s.ruleSetType === 'Microsoft_DefaultRuleSet');
   assert.ok(set, 'Microsoft_DefaultRuleSet missing from the issuer policy');
   return set;
 }
 
-// Flatten to { group, ruleId, rule, exclusions } for every rule override.
+// Flatten to { group, ruleId, rule, exclusions } for every rule override in EVERY managed rule set, so an override
+// added to a second set (e.g. a re-added Bot Manager set) is still seen by the exact-map check.
 function ruleOverrides() {
-  const groups = deref(drs().ruleGroupOverrides) ?? [];
-  return groups.flatMap((g) => (g.rules ?? []).map((r) => ({ group: g.ruleGroupName, ruleId: r.ruleId, rule: r, exclusions: r.exclusions ?? [] })));
+  return allSets().flatMap((s) =>
+    (deref(s.ruleGroupOverrides) ?? []).flatMap((g) => (g.rules ?? []).map((r) => ({ set: s.ruleSetType, group: g.ruleGroupName, ruleId: r.ruleId, rule: r, exclusions: r.exclusions ?? [] }))),
+  );
 }
 
 // Would Front Door skip this (rule, arg) detection? Mirrors the exclusion semantics used here: Equals on the arg name.
@@ -91,6 +99,8 @@ test('(a) exclusions sit at RULE scope, by exact query-arg NAME, and are exactly
       assert.equal(e.matchVariable, 'QueryStringArgNames', `rule ${o.ruleId}: matchVariable ${e.matchVariable}`);
       assert.equal(e.selectorMatchOperator, 'Equals', `rule ${o.ruleId}: operator ${e.selectorMatchOperator}`);
     }
+    // Breaks if an exclusion sits on an override in any set other than the DRS (the map below is keyed by group only).
+    if (o.exclusions.length) assert.equal(o.set, 'Microsoft_DefaultRuleSet', `exclusion on rule ${o.ruleId} in set ${o.set}`);
     if (o.exclusions.length) ((got[o.group] ??= {})[o.ruleId] = o.exclusions.map((e) => e.selector).sort());
   }
   // Breaks if: the scope exclusion is dropped ('scope' missing under 99031002); a new rule id gets an exclusion
@@ -102,7 +112,7 @@ test('(a) exclusions sit at RULE scope, by exact query-arg NAME, and are exactly
 test('(a) every override keeps its rule ON: enabledState Enabled + AnomalyScoring (an omitted enabledState DISABLES the rule)', () => {
   const overrides = ruleOverrides();
   // Positive control: the three measured rules are overridden at all (an empty list would pass the loop below).
-  assert.deepEqual(overrides.map((o) => o.ruleId).sort(), ['931100', '931130', '99031002']);
+  assert.deepEqual(overrides.map((o) => o.ruleId).sort(), ['931100', '931130', '942120', '99031002']);
   for (const o of overrides) {
     // Breaks on a deleted enabledState (ARM defaults a rule override to Disabled, which turns the rule off for ALL
     // args) or enabledState 'Disabled', and on action 'Log' / 'Allow'.
@@ -126,18 +136,24 @@ test('(a)+(d) the measured rows are excluded; the same rules still inspect other
   // aud stays on the RFI rules only (an off-domain https URL; no SQL-comment reason). Breaks if aud lands on 99031002.
   assert.equal(isExcluded('931130', 'aud'), true);
   assert.equal(isExcluded('99031002', 'aud'), false);
+  // clientdata is excluded from 942120 only. Breaks if it lands on 99031002 or on another CRS SQLi rule (942100).
+  assert.equal(isExcluded('99031002', 'clientdata'), false);
+  assert.equal(isExcluded('942100', 'clientdata'), false);
+  // The picker hop: req is covered on 99031002 (predicted). Breaks if req is dropped.
+  assert.equal(isExcluded('99031002', 'req'), true);
 });
 
 test('(b) NO policy-wide, rule-set-wide or rule-group-wide exclusion', () => {
   const managed = wafs[0].properties.managedRules;
   // Breaks on managedRules.exclusions (rejected by the schema today, but checked so a future API cannot slip it in).
   assert.equal(Object.hasOwn(managed, 'exclusions'), false, 'managedRules.exclusions present');
-  const set = drs();
-  // Breaks on managedRuleSets[].exclusions: every DRS rule would skip redirect_uri/scope.
-  assert.equal((deref(set.exclusions) ?? []).length, 0, `rule-set-wide exclusions: ${JSON.stringify(set.exclusions)}`);
-  for (const g of deref(set.ruleGroupOverrides)) {
-    // Breaks on ruleGroupOverrides[].exclusions: every RFI or MS-ThreatIntel-SQLI rule would skip the arg.
-    assert.equal((g.exclusions ?? []).length, 0, `group-wide exclusions on ${g.ruleGroupName}`);
+  for (const set of allSets()) {
+    // Breaks on managedRuleSets[].exclusions on ANY set: every rule in that set would skip the arg.
+    assert.equal((deref(set.exclusions) ?? []).length, 0, `rule-set-wide exclusions on ${set.ruleSetType}: ${JSON.stringify(set.exclusions)}`);
+    for (const g of deref(set.ruleGroupOverrides) ?? []) {
+      // Breaks on ruleGroupOverrides[].exclusions: every rule in that group would skip the arg.
+      assert.equal((g.exclusions ?? []).length, 0, `group-wide exclusions on ${set.ruleSetType}/${g.ruleGroupName}`);
+    }
   }
   // Positive pair: rule-scope exclusions DO exist (a deleted override list would pass the absence checks above).
   assert.ok(ruleOverrides().some((o) => o.exclusions.length > 0), 'no rule-scope exclusions found');
@@ -148,6 +164,9 @@ test('(c) still Prevention, DRS 2.1, ruleSetAction Block, body inspection off (s
   // Breaks on Detection (logs and blocks nothing) and on enabledState Disabled.
   assert.equal(p.mode, 'Prevention');
   assert.equal(p.enabledState, 'Enabled');
+  // Breaks if a second managed rule set is added: its overrides and exclusions would sit outside the DRS-only reasoning
+  // in afd-issuer.bicep (and Bot Manager, the likeliest addition, would block the issuer's machine clients).
+  assert.deepEqual(allSets().map((s) => s.ruleSetType), ['Microsoft_DefaultRuleSet']);
   const set = drs();
   // Breaks on 2.0 / 2.2 (rule ids and group names differ per version; these exclusions are 2.1-specific) and on
   // ruleSetAction Log.

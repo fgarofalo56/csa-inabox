@@ -156,9 +156,13 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = if (rou
 // arguments, and these rules still inspect every other argument, header and cookie. No rule set or
 // rule group exclusion, no disabled rule, Prevention mode unchanged. Group names are the DRS 2.1
 // ruleGroupName values from https://learn.microsoft.com/azure/web-application-firewall/afds/waf-front-door-drs
-// ('RFI', 'MS-ThreatIntel-SQLI'). A rule override defaults enabledState to Disabled when it is omitted,
+// ('RFI', 'SQLI', 'MS-ThreatIntel-SQLI'). A rule override defaults enabledState to Disabled when it is omitted,
 // so each override restates Enabled + AnomalyScoring: the override must add exclusions, not switch the
 // rule off.
+//
+// The policy covers the whole endpoint, so these exclusions also apply on /api/health/pdp/*; those
+// routes (apps/loom-health-cp/src/http/app.ts, the /api/health/pdp/stamps/... handlers) read none of
+// these argument names.
 //
 // Token endpoint (POST /auth/{tenant}/token: client_assertion, code, code_verifier, refresh_token,
 // redirect_uri, scope): NO RequestBodyPostArgNames exclusions, because requestBodyCheck is Disabled and
@@ -200,8 +204,9 @@ var issuerRuleGroupOverrides = [
         // base64url string contains '--' followed later by '-' often enough to refuse real sign-ins
         // at random. state and code_challenge (client-generated, authorize GET), launch (EHR launch
         // handle, authorize GET), code (Entra's authorization code on the GET /auth/.../callback
-        // redirect, the longest of them). The MSTIC pattern is not published, so this is reasoned from
-        // the rule it replaced.
+        // redirect, the longest of them), req (rand(24) base64url pick id on the standalone picker
+        // redirect GET /auth/{tenant}/pick?req=..., server.ts). The MSTIC pattern is not published, so
+        // this is reasoned from the rule it replaced.
         ruleId: '99031002'
         enabledState: 'Enabled'
         action: 'AnomalyScoring'
@@ -211,6 +216,26 @@ var issuerRuleGroupOverrides = [
           { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'code_challenge' }
           { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'launch' }
           { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'code' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'req' }
+        ]
+      }
+    ]
+  }
+  {
+    ruleGroupName: 'SQLI'
+    rules: [
+      {
+        // Measured: clientdata. Entra appends &clientdata=e|||microsoftonline.com|none to the redirect
+        // back to GET /auth/{tenant}/callback (#5279; the console excludes the same name in
+        // admin-plane/front-door.bicep). WAF log, law-csa-loom-centralus, last 30 days as of 2026-11-26:
+        // every hit whose matches include clientdata is Microsoft_DefaultRuleSet-2.1-SQLI-942120,
+        // AnomalyScoring, 29 hits 2026-11-09..11, QueryParamValue:clientdata = e|||microsoftonline.com|none.
+        // The callback never reads clientdata (server.ts reads only state, code and error there).
+        ruleId: '942120'
+        enabledState: 'Enabled'
+        action: 'AnomalyScoring'
+        exclusions: [
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'clientdata' }
         ]
       }
     ]
