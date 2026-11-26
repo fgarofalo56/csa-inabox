@@ -303,6 +303,26 @@ test('step script: registry unreadable (resolve exit 4) -> exit 1, NO import, an
   assert.match(r.out, /NOT a claim that the image is missing/);
 });
 
+// #5439 review: resolve-acr-digest.sh --lease now exits 5 when the digest resolved but the firewall re-lock is unproven (before, a
+// failed re-lock exited 0). Both lease-taking calls in ensure_image must name that, not fall into a wrong-message arm.
+test('step script: pre-import check exits 5 (present, re-lock unproven) -> exit 1, NO import, says possibly PUBLICLY REACHABLE, not "could not establish"', () => {
+  const r = runStep({ resolveSeq: [`5 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(imports(r.calls).length, 0, r.calls.join('\n'));
+  // Breaks if 5 falls into the `*` arm (the old "Could not establish whether ... is in" message, which is false: it IS in).
+  assert.match(r.out, /opa@sha256:[0-9a-f]{64} IS in acrtest, but .*resolve-acr-digest\.sh exit 5\): acrtest may be PUBLICLY REACHABLE/);
+  assert.doesNotMatch(r.out, /Could not establish whether/);
+});
+
+test('step script: read-back exits 5 after an import -> exit 1 with the re-lock message, not "did not resolve"', () => {
+  const r = runStep({ resolveSeq: ['3 x', `5 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(imports(r.calls).length, 1);
+  // Breaks if 5 falls into the generic non-zero arm ("did not resolve ... afterwards", false: it did resolve).
+  assert.match(r.out, /Imported, and acrtest resolves opa@sha256:[0-9a-f]{64}, but .*exit 5\): acrtest may be PUBLICLY REACHABLE/);
+  assert.doesNotMatch(r.out, /did not resolve/);
+});
+
 test('step script: private endpoint connection not Approved -> exit 1 before any registry call', () => {
   const r = runStep({ peState: 'Pending', resolveSeq: [`0 ${D}`] });
   assert.equal(r.status, 1, r.out);

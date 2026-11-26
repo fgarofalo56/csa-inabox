@@ -11,13 +11,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
+const posixPath = (p) => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
 import { mintTenantToken } from '../../measure/health/mint-tenant-token.mjs';
 import {
   EXPECT, ENGINE_NAMESPACE, SERVICE_PORT, engineBase, judge, parseProbeLogs, phaseCleanup, phaseCreate, phaseProbe,
   renderProbeScript, validate, parseArgs, workloadName, RESULT_MAX_POLLS, RESULT_POLL_MS,
+  judgeEngineImage, IMAGE_UNREADABLE, ENGINE_CONTAINER, enginePodSelector, IMAGE_REF_RE,
 } from '../../measure/health/lhds-fhir-crud-probe-run.mjs';
 
 const ISSUER = 'https://issuer-front-door.example.test/auth';
@@ -132,7 +134,11 @@ const ALL_OK = [
   'PROBE step=c status=201 id=77', 'PROBE step=d status=200 id_match=yes', 'PROBE step=e status=403',
   'PROBE step=f_ctrl status=200', 'PROBE step=f status=403',
   'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=h status=200 id_match=yes', 'PROBE step=i status=404',
+  // #5439: what each probed engine pod runs (the in-cluster script prints these before step a; judge() ignores them).
+  `PROBE engine_image tenant=fc-a-1 digest=sha256:${'1'.repeat(64)}`, `PROBE engine_image tenant=fc-b-1 digest=sha256:${'1'.repeat(64)}`,
 ].join('\n');
+const RUN_D = `sha256:${'1'.repeat(64)}`;
+const OTHER_D = `sha256:${'2'.repeat(64)}`;
 const verdictOf = (logs) => Object.fromEntries(judge(parseProbeLogs(logs)).results.map((r) => [r.step, r.verdict]));
 const swap = (logs, from, to) => { assert.ok(logs.includes(from), `fixture drift: ${from} is not in the fixture`); return logs.replace(from, to); };
 
@@ -332,15 +338,19 @@ async function runScript(opts) {
     writeFileSync(join(dir, 'probe.sh'), s);
     writeFileSync(join(dir, 'hdrA'), 'Authorization: Bearer A|w\n');
     writeFileSync(join(dir, 'hdrB'), 'Authorization: Bearer B|r\n');
+    // A STUB kubectl first on PATH (a workstation may have a real one pointed at a real cluster). Default: each engine runs RUN_D.
+    mkdirSync(join(dir, 'bin'));
+    writeFileSync(join(dir, 'bin', 'kubectl'), `#!/bin/sh\necho "$*" >> "${posixPath(dir)}/kubectl.log"\n${opts.kubectl ?? `printf 'acrx.azurecr.io/loom-health-fhir@${RUN_D}\\n'`}\n`);
+    chmodSync(join(dir, 'bin', 'kubectl'), 0o755);
     const r = await new Promise((resolve) => {
       import('node:child_process').then(({ spawn }) => {
-        const p = spawn('sh', ['probe.sh'], { cwd: dir });
+        const p = spawn('sh', ['probe.sh'], { cwd: dir, env: { ...process.env, PATH: `${join(dir, 'bin')}${delimiter}${process.env.PATH}` } });
         let out = '';
         p.stdout.on('data', (d) => { out += d; });
         p.on('close', (code) => resolve({ code, out }));
       });
     });
-    return r;
+    return { ...r, kubectl: existsSync(join(dir, 'kubectl.log')) ? readFileSync(join(dir, 'kubectl.log'), 'utf8') : '' };
   } finally { a.close(); b.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -643,5 +653,149 @@ test('mint: a hyphenated clientPrefix (accepted by the CLI before) still mints, 
   assert.ok(m.clientId.length <= 64);
   for (const bad of ['-x', 'x-', 'a'.repeat(21), 'Up', 'a b']) {
     await assert.rejects(() => mintTenantToken({ ...cpFake().deps, cpUrl: 'https://cp.example.test', cpToken: CP_TOKEN, tenant: 'ten-a', clientPrefix: bad }), /clientPrefix/, bad);
+  }
+});
+
+// ── #5439: the image each probed engine RUNS, against the control plane's pin ─────────────────────────────────────────
+
+const PIN_OF = (d) => `acrx.azurecr.io/loom-health-fhir@${d}`;
+const engineLines = (a, b) => [`PROBE engine_image tenant=fc-a-1 ${a}`, `PROBE engine_image tenant=fc-b-1 ${b}`].join('\n');
+const withEngines = (a, b) => ALL_OK.split('\n').filter((l) => !l.startsWith('PROBE engine_image')).join('\n') + '\n' + engineLines(a, b);
+const img = (logs, pin) => judgeEngineImage(parseProbeLogs(logs), { tenants: ['fc-a-1', 'fc-b-1'], pin });
+
+test('engine image: every engine on the pinned digest PASSES; one engine on another digest FAILS naming "engine <t> runs <x>, pinned <y>"', () => {
+  assert.equal(img(ALL_OK, PIN_OF(RUN_D)).verdict, 'pass');
+  const stale = img(withEngines(`digest=${OTHER_D}`, `digest=${RUN_D}`), PIN_OF(RUN_D));
+  // Breaks if the comparison is dropped (pass) or compares the repository/tag instead of the digest.
+  assert.equal(stale.verdict, 'fail');
+  assert.equal(stale.note.split('. ')[0], `engine fc-a-1 runs ${OTHER_D}, pinned ${RUN_D}`);
+  // A pod mid-roll (old AND new digest on one engine) is still stale: breaks if only the first imageID per tenant is judged.
+  const roll = img(`${withEngines(`digest=${RUN_D}`, `digest=${RUN_D}`)}\nPROBE engine_image tenant=fc-b-1 digest=${OTHER_D}`, PIN_OF(RUN_D));
+  assert.equal(roll.verdict, 'fail');
+  assert.match(roll.note, /^engine fc-b-1 runs sha256:2{64}, pinned sha256:1{64}/);
+});
+
+test('engine image: an unreadable imageID is UNMEASURED with the true reason, never PASS (and a missing line is unmeasured too)', () => {
+  for (const [why, text] of Object.entries(IMAGE_UNREADABLE)) {
+    const r = img(withEngines(`unreadable=${why}`, `digest=${RUN_D}`), PIN_OF(RUN_D));
+    // Breaks if an engine whose image could not be read is credited with the pin (pass).
+    assert.equal(r.verdict, 'unmeasured', why);
+    assert.ok(r.note.includes(`engine fc-a-1: ${text}`), r.note);
+  }
+  const none = img(ALL_OK.split('\n').filter((l) => !l.includes('tenant=fc-b-1')).join('\n'), PIN_OF(RUN_D));
+  assert.equal(none.verdict, 'unmeasured');
+  assert.match(none.note, /engine fc-b-1: no engine_image line for this tenant/);
+  // A stale engine is a FAIL even when the OTHER engine is unreadable (the established mismatch is the stronger fact).
+  assert.equal(img(withEngines(`digest=${OTHER_D}`, 'unreadable=forbidden'), PIN_OF(RUN_D)).verdict, 'fail');
+});
+
+test('engine image: a TAG pin or no pin is REPORTED (digests printed, nothing judged); readable imageIDs are required even then', () => {
+  const tag = img(ALL_OK, 'acrx.azurecr.io/loom-health-fhir:v0.1');
+  assert.equal(tag.verdict, 'reported');
+  assert.match(tag.note, /engines run fc-a-1=sha256:1{64} fc-b-1=sha256:1{64}; the control plane pin is acrx\.azurecr\.io\/loom-health-fhir:v0\.1, a tag, so whether that is the current build is NOT judged/);
+  assert.equal(img(ALL_OK, '').verdict, 'reported');
+  assert.equal(img(withEngines('unreadable=no_pod', `digest=${RUN_D}`), '').verdict, 'unmeasured');
+});
+
+test('engine image lines: only the exact shape is read (a free-text or short digest line is ignored, so it cannot satisfy the check)', () => {
+  const p = parseProbeLogs([`PROBE engine_image tenant=fc-a-1 digest=sha256:${'1'.repeat(63)}`, 'PROBE engine_image tenant=fc-a-1 unreadable=because I said so',
+    `PROBE engine_image tenant=fc-a-1 digest=${RUN_D} extra`, `PROBE engine_image tenant=fc-b-1 digest=${RUN_D}`].join('\n'));
+  assert.equal(p.engines['fc-a-1'], undefined);
+  assert.deepEqual(p.engines['fc-b-1'], { digests: [RUN_D], unreadable: [] });
+});
+
+// phaseProbe wiring: the engine image line comes first, a stale engine makes g's failure attributable, and the exit code follows it.
+async function probeWith(logs, pin) {
+  const cp = cpFake();
+  const root = mkdtempSync(join(tmpdir(), 'fcp-img-'));
+  const exec = async () => ({ code: 0, stdout: JSON.stringify({ exitCode: 0, logs, provisioningState: 'Succeeded' }), stderr: '' });
+  try { return await capture(() => phaseProbe(probeCfg({ enginePin: pin }), { ...cp.deps, exec, tmpRoot: root, out: undefined })); } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+test('phaseProbe: a stale engine (run 45744072036 shape: g 400) is a named engine_image FAIL, and g carries the attribution, exit 1', async () => {
+  const g400 = withEngines(`digest=${OTHER_D}`, `digest=${OTHER_D}`).replace('PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=400 bare=no');
+  const r = await probeWith(g400, PIN_OF(RUN_D));
+  assert.equal(r.code, 1, r.text);
+  const lines = r.text.split('\n');
+  const iImg = lines.findIndex((l) => l.includes('step engine_image FAIL'));
+  const iG = lines.findIndex((l) => /step g FAIL/.test(l));
+  // Breaks if the image verdict is missing, printed after the steps, or g reads as a bare failure (no attribution).
+  assert.ok(iImg >= 0 && iImg < iG, r.text);
+  assert.match(lines[iImg], new RegExp(`engine fc-a-1 runs ${OTHER_D}, pinned ${RUN_D}`));
+  assert.match(lines[iG], /NOT attributable to the pinned build: engine fc-a-1 runs sha256:2{64}, pinned sha256:1{64}/);
+  // a..f still print their own verdicts unchanged (they passed): no attribution suffix on a pass.
+  assert.match(r.text, /step a PASS expect=200 got=200 \[GET \/fhir\/metadata, no token\]$/m);
+});
+
+test('phaseProbe: a stale engine FAILS the run (exit 1) even when every step a..i passes (breaks if the exit code ignores the engine image)', async () => {
+  // All ten steps pass here, so the step verdicts alone give exit 0: only the engine_image verdict can make this 1.
+  const r = await probeWith(withEngines(`digest=${RUN_D}`, `digest=${OTHER_D}`), PIN_OF(RUN_D));
+  assert.equal(judge(parseProbeLogs(ALL_OK)).code, 0, 'fixture: steps a..i alone must be a pass');
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /step engine_image FAIL .*engine fc-b-1 runs sha256:2{64}, pinned sha256:1{64}/);
+  assert.match(r.text, /VERDICT FAIL/);
+});
+
+test('phaseProbe: the pinned digest running everywhere is PASS exit 0; an unreadable imageID turns an all-pass run into UNMEASURED exit 2', async () => {
+  const ok = await probeWith(ALL_OK, PIN_OF(RUN_D));
+  assert.equal(ok.code, 0, ok.text);
+  assert.match(ok.text, /step engine_image PASS pin=sha256:1{64}/);
+  assert.match(ok.text, /VERDICT PASS/);
+  const unread = await probeWith(withEngines('unreadable=forbidden', `digest=${RUN_D}`), PIN_OF(RUN_D));
+  // Breaks if an unreadable image is ignored (exit 0, VERDICT PASS).
+  assert.equal(unread.code, 2, unread.text);
+  assert.match(unread.text, /step engine_image UNMEASURED .*kubectl answered Forbidden/);
+  assert.match(unread.text, /VERDICT UNMEASURED/);
+});
+
+test('validate: an engine-image pin that is not an image reference is refused; a digest or tag reference is accepted', () => {
+  const base = { phase: 'probe', cpToken: 't', a: 'fc-a-1', b: 'fc-b-1', stamp: 'dev01', partition: 'probe-site', timeoutS: 60, aksRg: 'rg-x', aksName: 'aks-lhds-dev01', aksSub: '', retryS: 0 };
+  assert.equal(validate({ ...base, enginePin: PIN_OF(RUN_D) }), null);
+  assert.equal(validate({ ...base, enginePin: 'acrx.azurecr.io/loom-health-fhir:v0.1' }), null);
+  assert.equal(validate({ ...base, enginePin: '' }), null);
+  assert.match(validate({ ...base, enginePin: "x'; rm -rf /" }), /engine-image-pin/);
+  assert.match(validate({ ...base, enginePin: `acrx.azurecr.io/x@sha256:${'1'.repeat(63)}` }), /engine-image-pin/);
+  assert.equal(parseArgs(['--engine-image-pin', PIN_OF(RUN_D)], {}).enginePin, PIN_OF(RUN_D));
+  // The pattern is the control plane's own (fhir-engine-config.ts IMAGE), lifted, not retyped.
+  const cfg = src('apps/loom-health-cp/src/jobs/fhir-engine-config.ts');
+  assert.equal(/const IMAGE = (\/.*\/);/.exec(cfg)?.[1], IMAGE_REF_RE.toString());
+});
+
+test('the engine pod selector and container are the ones the control plane renders (lifted from fhir-engine-host.ts)', () => {
+  const host = src('apps/loom-health-cp/src/jobs/fhir-engine-host.ts');
+  assert.ok(host.includes("labels: { app: name, 'azure.workload.identity/use': 'true', 'loom.health/tenant': cfg.tenantId }"), 'the engine pod template labels changed; update enginePodSelector');
+  assert.equal(/name: '([a-z]+)',\r?\n\s+image: o\.image,/.exec(host)?.[1], ENGINE_CONTAINER);
+  assert.equal(enginePodSelector('fc-a-1'), 'app=fhir-fc-a-1,loom.health/tenant=fc-a-1');
+  const s = renderProbeScript({ tenantA: 'fc-a-1', tenantB: 'fc-b-1', partition: 'probe-site' });
+  // The script's own selector is the same shape (breaks if the rendered kubectl line drifts from enginePodSelector).
+  assert.equal(s.includes(`-l "${enginePodSelector('$1')}"`), true);
+  assert.ok(s.includes(`containerStatuses[?(@.name=="${ENGINE_CONTAINER}")]`));
+});
+
+test('under sh+curl with a stub kubectl: each engine prints its running digest, read from the hapi container of the tenant\'s pods', { skip: !SH && 'sh or curl is not available' }, async () => {
+  const r = await runScript({});
+  assert.equal(r.code, 0);
+  assert.ok(r.out.split('\n').filter(Boolean).every((l) => l.startsWith('PROBE ')), r.out);
+  const p = parseProbeLogs(r.out);
+  assert.deepEqual(p.engines, { 'fc-a-1': { digests: [RUN_D], unreadable: [] }, 'fc-b-1': { digests: [RUN_D], unreadable: [] } });
+  assert.match(r.kubectl, /get pods -n loom-health -l app=fhir-fc-a-1,loom\.health\/tenant=fc-a-1 -o jsonpath=/);
+  // The steps a..i are unchanged by the new lines.
+  assert.equal(judge(p).code, 0);
+});
+
+test('under sh+curl: kubectl Forbidden -> unreadable=forbidden; kubectl failing otherwise -> kubectl_failed; no imageID -> no_pod; a tag imageID -> no_digest; none of kubectl\'s text is printed', { skip: !SH && 'sh or curl is not available' }, async () => {
+  const cases = {
+    forbidden: 'echo \'Error from server (Forbidden): pods is forbidden: User "x" cannot list resource "pods"\' >&2; exit 1',
+    kubectl_failed: "echo 'error: You must be logged in to the server (Unauthorized)' >&2; exit 1",
+    no_pod: 'exit 0',
+    no_digest: "printf 'acrx.azurecr.io/loom-health-fhir:v0.1\\n'",
+  };
+  for (const [why, body] of Object.entries(cases)) {
+    const r = await runScript({ kubectl: body });
+    const p = parseProbeLogs(r.out);
+    // Breaks if any of these is reported as a digest, or if kubectl's own words reach the output.
+    assert.deepEqual(p.engines['fc-a-1'], { digests: [], unreadable: [why] }, `${why}: ${r.out}`);
+    assert.ok(!/Forbidden|Unauthorized|cannot list/.test(r.out), r.out);
+    assert.ok(r.out.split('\n').filter(Boolean).every((l) => l.startsWith('PROBE ')), r.out);
   }
 });
