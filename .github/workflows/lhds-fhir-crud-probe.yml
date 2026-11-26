@@ -268,6 +268,33 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "stamp RG $RG found (subscription id withheld from output)"
 
+      # #5439: the digest the control plane pins for the FHIR engine (LOOM_HEALTH_CP_FHIR_IMAGE on loom-health-cp, read through ARM). The
+      # probe compares it with the imageID each probed engine pod RUNS, so a stale cached image is a named FAIL ("engine runs <x>, pinned
+      # <y>"), not a bare g/h/i failure. Not readable (az error, no such app, the aks control-plane path) = no pin: the probe still prints
+      # the running digests but judges nothing against them, and says so. Core `az resource show`: no containerapp extension on this runner.
+      - name: Read the FHIR engine image the control plane pins (ARM)
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p temp
+          # unset-var-ok: STAMP_RG
+          # unset-var-ok: STAMP_SUB
+          az resource show -g "$STAMP_RG" -n loom-health-cp --resource-type Microsoft.App/containerApps --subscription "$STAMP_SUB" -o json > temp/cp-app.json 2> temp/cp-app.err
+          RC=$?
+          PIN=""
+          if [ "$RC" = "0" ]; then
+            PIN=$(jq -r '[.properties.template.containers[]?.env[]? | select(.name == "LOOM_HEALTH_CP_FHIR_IMAGE") | .value] | first // ""' temp/cp-app.json 2> temp/cp-app.jqerr)
+            [ -n "$PIN" ] || echo "::warning::loom-health-cp in $STAMP_RG has no LOOM_HEALTH_CP_FHIR_IMAGE (or it could not be parsed: $(head -c 200 temp/cp-app.jqerr)). The probe reports the engine image without judging it."
+          else
+            echo "::warning::Could not read loom-health-cp in $STAMP_RG (az exit $RC: $(head -c 300 temp/cp-app.err)). This is not a claim about the engine image; the probe reports it without judging it."
+          fi
+          if [ -n "$PIN" ] && ! [[ "$PIN" =~ ^[a-z0-9][a-z0-9./:_-]{0,200}(@sha256:[0-9a-f]{64})?$ ]]; then
+            echo "::warning::LOOM_HEALTH_CP_FHIR_IMAGE has an unexpected shape; not passed to the probe."
+            PIN=""
+          fi
+          echo "FHIR_PIN=$PIN" >> "$GITHUB_ENV"
+          echo "control plane FHIR engine pin: ${PIN:-none readable}"
+
       - name: Mint tokens and probe the engines from the aks-command pod
         run: |
           set -euo pipefail
@@ -281,10 +308,11 @@ jobs:
           set +e
           # unset-var-ok: STAMP_RG
           # unset-var-ok: STAMP_SUB
+          # unset-var-ok: FHIR_PIN
           LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhir-crud-probe-run.mjs --phase probe \
             --cp-url "$CP_URL" --stamp "$STAMP_ID" --tenant-a "$TENANT_A" --tenant-b "$TENANT_B" \
             --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
-            --retry-s "$RETRY_S" | tee -a "$GITHUB_STEP_SUMMARY"
+            --retry-s "$RETRY_S" --engine-image-pin "${FHIR_PIN:-}" | tee -a "$GITHUB_STEP_SUMMARY"
           rc="${PIPESTATUS[0]}"
           set -e
           echo '```' >> "$GITHUB_STEP_SUMMARY"

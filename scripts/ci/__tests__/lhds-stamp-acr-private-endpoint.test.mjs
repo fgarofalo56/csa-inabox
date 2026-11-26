@@ -303,6 +303,26 @@ test('step script: registry unreadable (resolve exit 4) -> exit 1, NO import, an
   assert.match(r.out, /NOT a claim that the image is missing/);
 });
 
+// #5439 review: resolve-acr-digest.sh --lease now exits 5 when the digest resolved but the firewall re-lock is unproven (before, a
+// failed re-lock exited 0). Both lease-taking calls in ensure_image must name that, not fall into a wrong-message arm.
+test('step script: pre-import check exits 5 (present, re-lock unproven) -> exit 1, NO import, says possibly PUBLICLY REACHABLE, not "could not establish"', () => {
+  const r = runStep({ resolveSeq: [`5 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(imports(r.calls).length, 0, r.calls.join('\n'));
+  // Breaks if 5 falls into the `*` arm (the old "Could not establish whether ... is in" message, which is false: it IS in).
+  assert.match(r.out, /opa@sha256:[0-9a-f]{64} IS in acrtest, but .*resolve-acr-digest\.sh exit 5\): acrtest may be PUBLICLY REACHABLE/);
+  assert.doesNotMatch(r.out, /Could not establish whether/);
+});
+
+test('step script: read-back exits 5 after an import -> exit 1 with the re-lock message, not "did not resolve"', () => {
+  const r = runStep({ resolveSeq: ['3 x', `5 ${D}`] });
+  assert.equal(r.status, 1, r.out);
+  assert.equal(imports(r.calls).length, 1);
+  // Breaks if 5 falls into the generic non-zero arm ("did not resolve ... afterwards", false: it did resolve).
+  assert.match(r.out, /Imported, and acrtest resolves opa@sha256:[0-9a-f]{64}, but .*exit 5\): acrtest may be PUBLICLY REACHABLE/);
+  assert.doesNotMatch(r.out, /did not resolve/);
+});
+
 test('step script: private endpoint connection not Approved -> exit 1 before any registry call', () => {
   const r = runStep({ peState: 'Pending', resolveSeq: [`0 ${D}`] });
   assert.equal(r.status, 1, r.out);
@@ -389,12 +409,14 @@ test('B2d step script: a PG import that fails after a good PDP import is NOT swa
   assert.ok(r.out.includes(want), `expected "${want}" in:\n${r.out}`);
 });
 
-test('B2d health: the control plane gets the FHIR image TAG-pinned to the CP tag and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
+test('B2d health: the control plane gets the FHIR image from cpFhirImage (tag fallback on the CP tag, digest pin per #5439) and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
   const cp = resourcesOf(health).find((r) => r.type === 'Microsoft.Resources/deployments' && /lhds-control-plane/.test(JSON.stringify(r.name)));
   assert.ok(cp, 'control plane module missing');
   const p = cp.properties.parameters;
-  // Breaks if the FHIR image drops to :latest / another repo / another tag variable, or is emitted without the PDP.
-  assert.equal(p.fhirImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/loom-health-fhir:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))), createObject('value', ''))]");
+  // Breaks if the FHIR image is inlined again (the #5439 digest pin would be bypassed). The full cpFhirImage expression, including
+  // the tag fallback on cpImageTag and the PDP gate, is pinned in lhds-fhir-image-digest-pin.test.mjs.
+  assert.deepEqual(p.fhirImage, { value: "[variables('cpFhirImage')]" });
+  assert.match(health.variables.cpFhirImage, /^\[if\(not\(variables\('pdpDeploy'\)\), '', if\(empty\(parameters\('fhirImageDigest'\)\), format\('\{0\}\/loom-health-fhir:\{1\}', variables\('cpAcrLoginServer'\), variables\('cpImageTag'\)\)/);
   assert.equal(p.image.value, "[format('{0}/loom-health-cp:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))]", 'the CP image must share the tag variable with the FHIR image');
   // Breaks if the PG image goes by tag (no @digest) or reads a different spec.
   assert.equal(p.pgClientImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/{1}@{2}', variables('cpAcrLoginServer'), variables('pgClientImageSpec').acrRepository, variables('pgClientImageSpec').digest)), createObject('value', ''))]");

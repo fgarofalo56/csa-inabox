@@ -77,6 +77,13 @@
 #   0  digest resolved; the digest (sha256:…) is on stdout
 #   3  ABSENT   — the registry ANSWERED config.image-tag-absent on every attempt
 #   4  UNKNOWN  — the registry could not be READ within the budget
+#   5  RESOLVED, RE-LOCK UNPROVEN — only with --lease: the digest IS on stdout,
+#      but the firewall lease could not be verified re-locked afterwards, so the
+#      registry may be publicly reachable (#5439 review). Before this code a
+#      failed re-lock still exited 0: `_release_lease` ran from the EXIT trap,
+#      and a trap function's `return 1` does not change the exit status.
+#      A failed re-lock on an exit-3/4 path keeps that code (the lookup verdict
+#      is the primary fact; the re-lock error is printed either way).
 #   2  usage error
 #
 # Tunables (also the test seams):
@@ -86,6 +93,9 @@
 #   LOOM_DIGEST_ABSENT_ATTEMPTS   attempts before ABSENT is believed (default 3)
 #   LOOM_DIGEST_BACKOFF_SECONDS   backoff unit; sleep is unit*attempt (default 10)
 #   LOOM_ACR_LEASE_TTL_MINUTES    lease TTL when --lease is passed (default 15)
+#   LOOM_ACR_LEASE_SCRIPT         lease script (default scripts/csa-loom/acr-firewall-lease.sh;
+#                                 same seam name as assert-acr-image-tags.sh, so the
+#                                 failed-re-lock exit 5 can be driven by a test)
 #
 # Usage:
 #   scripts/ci/resolve-acr-digest.sh --acr <acrName> --image <repo:tag> [--lease]
@@ -100,7 +110,7 @@ BACKOFF="${LOOM_DIGEST_BACKOFF_SECONDS:-10}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 CLASSIFIER="$HERE/deploy-classify.mjs"
-LEASE_SCRIPT="$REPO_ROOT/scripts/csa-loom/acr-firewall-lease.sh"
+LEASE_SCRIPT="${LOOM_ACR_LEASE_SCRIPT:-$REPO_ROOT/scripts/csa-loom/acr-firewall-lease.sh}"
 
 # Absence is established ONLY when the canonical taxonomy positively returns
 # `config.image-tag-absent`. Anything else — a different signal, `unknown`, a
@@ -156,7 +166,10 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
     echo "::error::resolve-acr-digest: could NOT acquire the ACR firewall lease on '$ACR', so the data plane is unreachable from this hosted runner and the existence of ${IMAGE} is UNPROVEN. Not probing anyway — a lookup that is guaranteed to fail would produce exactly the false verdict this script exists to prevent (#3090). See the acr-lease output above for the reason." >&2
     exit 4
   fi
-  trap '_release_lease' EXIT
+  # The EXIT trap's own status is discarded unless it calls exit, so a failed re-lock after a resolved digest
+  # MUST exit 5 here (#5439 review: measured, a trap function returning 1 after `exit 0` left rc=0). A failed
+  # re-lock on an exit-3/4 path keeps that code; the ::error:: above is printed either way.
+  trap '_rl_rc=$?; if ! _release_lease && [ "$_rl_rc" = "0" ]; then exit 5; fi' EXIT
 fi
 
 attempt=0

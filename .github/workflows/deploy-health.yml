@@ -508,6 +508,120 @@ jobs:
             *) echo "::error::assert-acr-image-tags.sh exited $RC (usage or unclassified)."; exit 1 ;;
           esac
 
+      # #5439: the FHIR engine image is pinned BY DIGEST. loom-health-fhir:<tag> MOVES on every build, and the engine Deployment
+      # pulls IfNotPresent, so a tag reference left a node with the tag cached on the old jar and never rolled a running engine
+      # (the rendered revision did not change). The digest is resolved HERE, before either health.bicep deployment renders the
+      # control plane, and passed to BOTH as fhirImageDigest: LOOM_HEALTH_CP_FHIR_IMAGE becomes <acr>/loom-health-fhir@<digest>, a
+      # new build is a new reference, every engine's revision moves, and the control plane's drift reconciler (#5486) re-applies
+      # every engine. The tag is read from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed.
+      # WHEN it runs is WHEN the image is rendered: health.bicep emits LOOM_HEALTH_CP_FHIR_IMAGE only with the PDP, and the PDP
+      # key is fetched only through Front Door (pdpkey: fd_profile != ''). So the gate is the loom-health-cp preflight's PLUS
+      # fd_profile: a hub with no Front Door deploys no PDP, and must not be failed for a FHIR image it will never render
+      # (the stamp-image step's contract, "a stamp without the PDP is not failed"). Phase 2 still refuses a PDP with no digest.
+      - name: Install cosign (FHIR engine image signature check)
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.audiences.outputs.resolved == 'true' && steps.hub.outputs.fd_profile != '' }}
+        # Pinned v2.6.1 through the retrying, checksum-verifying installer, as at every other cosign site
+        # (scripts/ci/check-cosign-install-retry-adoption.mjs).
+        run: bash scripts/ci/cosign-install-retry.sh --version v2.6.1
+
+      - name: Resolve the FHIR engine image digest (loom-health-fhir) for the digest pin
+        id: fhirdigest
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.audiences.outputs.resolved == 'true' && steps.hub.outputs.fd_profile != '' }}
+        env:
+          ACR: ${{ steps.hub.outputs.acr }}
+          # The documented 90 s firewall propagation (docs/fiab/acr-firewall-lease.md), as on the stamp image step below.
+          LOOM_ACR_LEASE_OPEN_SECONDS: '90'
+          # The ONE producer of loom-health-fhir in both clouds (build-fiab-images-acr-tasks.yml, boundary input) signs it
+          # keylessly after its Trivy CRITICAL gate. Same issuer and identity form as the SC1 roll gates, narrowed to that producer.
+          SIGNER_RE: '^https://github\.com/${{ github.repository }}/\.github/workflows/build-fiab-images-acr-tasks\.yml@'
+        run: |
+          set -uo pipefail
+          set +e
+          FHIR_TAG=v0.1
+          if [ -f temp/cp.json ]; then
+            FHIR_TAG=$(jq -r '.imageTag // "v0.1"' temp/cp.json) || { echo "::error::could not read imageTag from temp/cp.json, so the FHIR engine tag to pin is unknown. Nothing was deployed."; exit 1; }
+          fi
+          REF="loom-health-fhir:$FHIR_TAG"
+          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REF" --lease > temp/fhir-digest.out 2> temp/fhir-digest.err
+          RC=$?
+          cat temp/fhir-digest.err
+          case "$RC" in
+            0) ;;
+            3) echo "::error::MISSING: the registry answered and $REF is not in $ACR (the Trivy gate untags refused images). Every engine would get an image it cannot pull. Build it: build-fiab-images-acr-tasks.yml with boundary set to this estate (the only producer of loom-health-fhir in both clouds). Nothing was deployed."; exit 1 ;;
+            4) echo "::error::UNPROVEN: $ACR could not be read, so the digest of $REF is unknown. This is NOT a claim that the image is missing. Nothing was deployed; re-run."; exit 1 ;;
+            5) echo "::error::$REF was resolved, but the registry firewall lease could not be verified re-locked afterwards (resolve-acr-digest.sh exit 5): $ACR may be PUBLICLY REACHABLE. Check its network rules (publicNetworkAccess, defaultAction). Nothing was deployed."; exit 1 ;;
+            *) echo "::error::resolve-acr-digest.sh exited $RC (usage or unclassified) resolving $REF. Nothing was deployed."; exit 1 ;;
+          esac
+          # A digest is ONLY a whole line of exactly sha256:<64 lowercase hex>. The lease prints ::notice:: lines on stdout too, and a
+          # registry that is still locked can answer with a credential prompt (Username:) instead of JSON: neither may become a pin.
+          DIGESTS=$(tr -d '\r' < temp/fhir-digest.out | grep -E '^sha256:[0-9a-f]{64}$' | sort -u)
+          N=$(printf '%s' "$DIGESTS" | grep -c '^sha256:')
+          if [ "$N" != "1" ]; then
+            echo "::error::resolve-acr-digest.sh exited 0 for $REF, but its output has $N distinct lines of the form sha256:<64 lowercase hex> (exactly 1 is required): $(tr '\r\n' '  ' < temp/fhir-digest.out | head -c 300). The digest could NOT be read; this is not a claim that the image is missing. Nothing was deployed."
+            exit 1
+          fi
+          # SIGNATURE BEFORE PIN (#5439 review). build-fiab-images-acr-tasks pushes the tag BEFORE its Trivy CRITICAL gate and only
+          # untags a refused image afterwards, and untagging does not delete the manifest. Signing runs only after Trivy passes. A
+          # digest resolved inside that window would be pinned durably while CRITICAL-flagged, so the digest must carry a valid
+          # keyless signature from the producer. Three outcomes, never two (the SC1 roll gates' lesson, deploy-integrity R7):
+          # signed / signature absent or invalid / could not check. Every outcome but "signed" fails closed in BOTH clouds: the
+          # producer signs GCC-High images too (same workflow, boundary input), so there is no Gov exemption and no override.
+          LOGIN=$(jq -r '.acrLoginServer // ""' temp/cp.json 2> temp/fhir-login.err)
+          if [ -z "$LOGIN" ]; then
+            echo "::error::COULD NOT CHECK the signature of $ACR/loom-health-fhir@$DIGESTS: temp/cp.json has no acrLoginServer ($(head -c 200 temp/fhir-login.err)). This is not a claim that the image is unsigned. Nothing was deployed."
+            exit 1
+          fi
+          PIN="$LOGIN/loom-health-fhir@$DIGESTS"
+          LEASE_HELD=0
+          relock() { # idempotent; a re-lock that cannot be verified is reported, never assumed
+            [ "$LEASE_HELD" = "1" ] || return 0
+            LEASE_HELD=0
+            if ! bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
+              echo "::error::The registry firewall lease on $ACR could NOT be verified re-locked after the signature check: $ACR may be PUBLICLY REACHABLE. Check its network rules. Nothing was deployed."
+              return 1
+            fi
+            return 0
+          }
+          trap 'relock' EXIT
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=15 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::COULD NOT CHECK the signature of $PIN: the registry firewall lease could not be acquired (see the acr-lease output above). This is not a claim that the image is unsigned. Nothing was deployed."
+            exit 1
+          fi
+          LEASE_HELD=1
+          if ! bash scripts/ci/acr-login-retry.sh --acr "$ACR"; then
+            relock
+            echo "::error::COULD NOT CHECK the signature of $PIN: no registry token could be minted (acr-login-retry.sh, output above). This is not a claim that the image is unsigned. Nothing was deployed."
+            exit 1
+          fi
+          VERDICT=""
+          for attempt in 1 2 3; do
+            if cosign verify "$PIN" --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                --certificate-identity-regexp "$SIGNER_RE" --output text > temp/fhir-cosign.log 2>&1; then
+              VERDICT=signed; break
+            fi
+            if grep -qiE 'no matching signatures|no signatures found|none of the expected identities matched|invalid signature|signature verification failed' temp/fhir-cosign.log; then
+              VERDICT=unsigned; break
+            fi
+            if grep -qiE 'DENIED|is not allowed access|no route to host|TLS handshake|connection refused|i/o timeout|502 Bad Gateway|503 Service' temp/fhir-cosign.log; then
+              VERDICT=unreachable
+              echo "::warning::cosign attempt $attempt/3 could not REACH the registry (not a signature verdict): $(head -c 300 temp/fhir-cosign.log | tr -d '\r\n')"
+              sleep "${LOOM_COSIGN_RETRY_SECONDS:-30}"
+              continue
+            fi
+            VERDICT=unclassified; break
+          done
+          sed -n '1,60p' temp/fhir-cosign.log
+          relock || exit 1
+          case "$VERDICT" in
+            signed) echo "::notice::$PIN carries a valid keyless signature from build-fiab-images-acr-tasks.yml (signed only after its Trivy CRITICAL gate passed)." ;;
+            unsigned) echo "::error::SIGNATURE ABSENT OR INVALID: the registry answered, and $PIN ($REF) has no valid cosign signature from build-fiab-images-acr-tasks.yml (cosign output above). It may be an image the Trivy CRITICAL gate refused (pushed before the gate, untagged after; untagging does not delete the manifest), or one built with skip_supply_chain. Refusing to pin it. Rebuild with build-fiab-images-acr-tasks.yml for this boundary, then re-run. Nothing was deployed."; exit 1 ;;
+            unreachable) echo "::error::COULD NOT CHECK the signature of $PIN: cosign could not reach $ACR on 3 attempts (last: $(head -c 300 temp/fhir-cosign.log | tr -d '\r\n')). This says NOTHING about whether the image is signed. Nothing was deployed; re-run."; exit 1 ;;
+            *) echo "::error::COULD NOT CHECK the signature of $PIN: cosign failed with output this step does not classify (above). This is not a claim that the image is unsigned. Nothing was deployed."; exit 1 ;;
+          esac
+          echo "digest=$DIGESTS" >> "$GITHUB_OUTPUT"
+          echo "::notice::FHIR engine image pinned: $PIN (the content of $REF now, signature verified)."
+          echo "FHIR engine image pinned: loom-health-fhir@$DIGESTS (resolved from $REF in $ACR, signature verified)." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Bicep what-if
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode != 'full' }}
         env:
@@ -533,6 +647,7 @@ jobs:
         env:
           PF: ${{ steps.params.outputs.pf }}
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+          FHIR_DIGEST: ${{ steps.fhirdigest.outputs.digest }}
         run: |
           set -uo pipefail
           # The runner shell is `bash -e`, and `set -uo pipefail` does not clear -e. Without
@@ -541,9 +656,13 @@ jobs:
           set +e
           CP_ARG=()
           if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
+          # #5439: the FHIR engine digest pin rides EVERY health.bicep deployment, so no deployment renders the moving tag back.
+          FHIR_ARG=()
+          FHIR_DIGEST="${FHIR_DIGEST:-}"
+          if [ -n "$FHIR_DIGEST" ]; then FHIR_ARG=(--parameters fhirImageDigest="$FHIR_DIGEST"); fi
           az deployment sub create --name "lhds-${GITHUB_RUN_ID}" --location "$HUB_LOCATION" \
             --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
-            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" "${FHIR_ARG[@]}" \
             --query properties.outputs -o json > temp/outputs.json 2> temp/apply.err
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -817,6 +936,7 @@ jobs:
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
           TLS_URI: ${{ steps.tlswait.outputs.uri }}
           PDP_FETCHED: ${{ steps.pdpkey.outputs.fetched }}
+          FHIR_DIGEST: ${{ steps.fhirdigest.outputs.digest }}
         run: |
           set -uo pipefail
           set +e
@@ -824,9 +944,18 @@ jobs:
           if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
           TLS_ARG=()
           if [ -n "$TLS_URI" ]; then TLS_ARG=(--parameters issuedTlsSecretUri="$TLS_URI"); fi
+          # #5439: this is the deployment that renders LOOM_HEALTH_CP_FHIR_IMAGE (with the PDP). Without the digest it would render
+          # the moving tag, so a fetched PDP key with no resolved digest stops HERE, before anything changes.
+          FHIR_DIGEST="${FHIR_DIGEST:-}"
+          if [ "$PDP_FETCHED" = "true" ] && [ -z "$FHIR_DIGEST" ]; then
+            echo "::error::Phase 2 would deploy the PDP, which renders the FHIR engine image into the control plane, but no loom-health-fhir digest was resolved by this run (step fhirdigest). Refusing to render the tag reference (#5439). Nothing was changed by phase 2."
+            exit 1
+          fi
+          FHIR_ARG=()
+          if [ -n "$FHIR_DIGEST" ]; then FHIR_ARG=(--parameters fhirImageDigest="$FHIR_DIGEST"); fi
           az deployment sub create --name "lhds-${GITHUB_RUN_ID}-tls" --location "$HUB_LOCATION" \
             --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
-            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${TLS_ARG[@]}" "${CP_ARG[@]}" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${TLS_ARG[@]}" "${CP_ARG[@]}" "${FHIR_ARG[@]}" \
             --query properties.outputs -o json > temp/outputs-phase2.json 2> temp/apply2.err
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -844,6 +973,14 @@ jobs:
           if [ "$PDP_FETCHED" = "true" ] && [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs-phase2.json)" != "true" ]; then
             echo "::error::The PDP verification key was fetched but the deployment reports the PDP is NOT deployed: $(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs-phase2.json)"
             exit 1
+          fi
+          # #5439: read the pin back from what was deployed: the control plane must have been given the digest reference, not the tag.
+          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs-phase2.json)" = "true" ]; then
+            GOT_IMG=$(jq -r '.healthControlPlaneState.value.fhirImage // ""' temp/outputs-phase2.json)
+            case "$GOT_IMG" in
+              */loom-health-fhir@"$FHIR_DIGEST") echo "::notice::The control plane renders engines from $GOT_IMG (digest-pinned)." ;;
+              *) echo "::error::Phase 2 deployed, but the control plane was given FHIR engine image '${GOT_IMG}', not <acr>/loom-health-fhir@${FHIR_DIGEST}. Engines would not roll to the resolved build (#5439)."; exit 1 ;;
+            esac
           fi
           mv temp/outputs-phase2.json temp/outputs.json
 
@@ -1045,7 +1182,8 @@ jobs:
           # 1b. The FHIR engine image (loom-health-fhir:<tag>) is built by the build lane, not imported, and the Trivy gate
           #     UNTAGS refused images, so its absence is realistic. This step only runs when the PDP deployed, which is exactly
           #     when health.bicep emits LOOM_HEALTH_CP_FHIR_IMAGE, so a stamp without the PDP is not failed. The tag is read
-          #     from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed.
+          #     from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed. The control plane
+          #     is given the tag's DIGEST, resolved before the deploy (step fhirdigest, #5439); this re-check of the tag is kept.
           FHIR_TAG=v0.1
           if [ -f temp/cp.json ]; then
             FHIR_TAG=$(jq -r '.imageTag // "v0.1"' temp/cp.json) || { echo "::error::could not read imageTag from temp/cp.json."; exit 1; }
@@ -1071,6 +1209,7 @@ jobs:
             case "$RC" in
               0) echo "::notice::$REPO@$DIGEST is already in $ACR; import skipped."; echo "Stamp image $N: $REPO@$DIGEST already in $ACR." >> "$GITHUB_STEP_SUMMARY"; return 0 ;;
               3) echo "$REPO@$DIGEST is absent from $ACR; importing from $SRC." ;;
+              5) echo "::error::$REPO@$DIGEST IS in $ACR, but the registry firewall lease could not be verified re-locked after the lookup (resolve-acr-digest.sh exit 5): $ACR may be PUBLICLY REACHABLE. Check its network rules (publicNetworkAccess, defaultAction) before continuing."; exit 1 ;;
               *) echo "::error::Could not establish whether $REPO@$DIGEST is in $ACR (resolve-acr-digest.sh exit $RC; 4 = the registry could not be read, which is NOT a claim that the image is missing). See the output above."; exit 1 ;;
             esac
             az acr import --name "$ACR" --resource-group "$HUB_RG" --source "$SRC@$DIGEST" --image "$REPO:$TAG" --force > "temp/$N-import.out" 2> "temp/$N-import.err"
@@ -1088,6 +1227,10 @@ jobs:
             RC=$?
             cat "temp/$N-after.err"
             GOT=$(grep -Eo 'sha256:[0-9a-f]{64}' "temp/$N-after.out" | tail -n 1)
+            if [ "$RC" = "5" ]; then
+              echo "::error::Imported, and $ACR resolves $REPO@$DIGEST, but the registry firewall lease could not be verified re-locked after the read-back (resolve-acr-digest.sh exit 5): $ACR may be PUBLICLY REACHABLE. Check its network rules before continuing."
+              exit 1
+            fi
             if [ "$RC" != "0" ]; then
               echo "::error::az acr import exited 0 but $ACR did not resolve $REPO@$DIGEST afterwards (resolve-acr-digest.sh exit $RC; 3 = the registry answered not found, 4 = it could not be read). The image is NOT confirmed present."
               exit 1

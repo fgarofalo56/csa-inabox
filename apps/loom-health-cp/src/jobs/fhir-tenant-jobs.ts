@@ -65,6 +65,8 @@ export interface EngineProbe {
 }
 
 export interface FhirEngineHost {
+  /** The engine image reference this host renders into every engine Deployment. Hashed into the rendered revision (#5439). */
+  readonly engineImage: string;
   /**
    * Idempotent: ensure the Entra PostgreSQL principal `roleName` (the tenant FHIR identity's name) exists, grant CONNECT
    * on `databaseName` only, and the schema privileges the engine needs to create its tables. No credential is involved.
@@ -282,6 +284,8 @@ function render(deps: FhirTenantJobDeps, r: Resolved, overrides: EngineOverrides
     maxRequestsPerMinute: r.tenant.quotas.maxRequestsPerMinute,
     pdpUrl: deps.pdpUrl,
     overrides,
+    // The image the host renders is part of the revision (#5439): a re-pinned digest makes every engine stale, so the reconciler rolls it.
+    engineImage: deps.engine.engineImage,
   });
 }
 

@@ -138,7 +138,7 @@ param stampBaseUrl string = ''
 @description('In-cluster BASE url of the stamp PDP (no path: the engine appends /v1/data/lhds/authz/decision), emitted as LOOM_HEALTH_CP_PDP_URL for the tenant engine config. Empty = PDP not deployed, no env emitted.')
 param pdpUrl string = ''
 
-@description('Tag-pinned hub-ACR reference of the HAPI FHIR engine image (loom-health-fhir), emitted as LOOM_HEALTH_CP_FHIR_IMAGE. The control plane refuses :latest. Empty = no env emitted.')
+@description('Hub-ACR reference of the HAPI FHIR engine image (loom-health-fhir), emitted as LOOM_HEALTH_CP_FHIR_IMAGE. Digest-pinned (<acr>/loom-health-fhir@sha256:<hex>) when deploy-health passes health.bicep fhirImageDigest (#5439), else tag-pinned. The control plane refuses :latest and a malformed digest. Empty = no env emitted.')
 param fhirImage string = ''
 
 @description('Digest-pinned hub-ACR reference (repo@sha256:...) of the PG client image the engine role job runs, emitted as LOOM_HEALTH_CP_PG_CLIENT_IMAGE. Empty = no env emitted.')

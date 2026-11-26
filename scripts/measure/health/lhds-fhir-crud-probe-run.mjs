@@ -20,7 +20,7 @@
  * (deploy-integrity R7: an outcome that was not established is never reported as a defect or as a pass).
  *
  * Args: --phase --cp-url --stamp --tenant-a --tenant-b [--partition] [--owned-file] [--outputs-file] [--timeout-s]
- *       [--issuer-path] [--aks-rg --aks-name --aks-subscription] [--retry-s]
+ *       [--issuer-path] [--aks-rg --aks-name --aks-subscription] [--retry-s] [--engine-image-pin]
  * Bearer: env LHDS_CP_TOKEN only.
  */
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -50,6 +50,22 @@ export const ENGINE_NAMESPACE = 'loom-health';
 export const SERVICE_PORT = 80;
 export const workloadName = (slug) => `fhir-${slug}`;
 export const engineBase = (slug) => `http://${workloadName(slug)}.${ENGINE_NAMESPACE}.svc.cluster.local:${SERVICE_PORT}/fhir`;
+
+// The engine pod's labels, mirrored from fhir-engine-host.ts renderEngineManifest (pod template: app=<workload>, loom.health/tenant=<slug>)
+// and its container name `hapi`. A unit test lifts them from the TS source.
+export const ENGINE_CONTAINER = 'hapi';
+export const enginePodSelector = (slug) => `app=${workloadName(slug)},loom.health/tenant=${slug}`;
+/** LOOM_HEALTH_CP_FHIR_IMAGE as the control plane accepts it (fhir-engine-config.ts IMAGE): a tag reference, or a digest reference. */
+export const IMAGE_REF_RE = /^[a-z0-9][a-z0-9.\-/:_]{0,200}(@sha256:[0-9a-f]{64})?$/;
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+/** Why an engine's imageID could not be read; the in-cluster script prints only these words, never kubectl's text. */
+export const IMAGE_UNREADABLE = Object.freeze({
+  no_kubectl: 'kubectl is not in the aks-command pod',
+  forbidden: 'kubectl answered Forbidden: the probe identity cannot read pods in the engine namespace',
+  kubectl_failed: 'kubectl get pods failed (not Forbidden)',
+  no_pod: 'no running engine container reported an imageID (no pod, or the container has not started)',
+  no_digest: 'the imageID carries no sha256:<64 hex> digest',
+});
 
 export const WRITER = Object.freeze({ scope: 'system/*.cruds', allowedScopes: ['system/*.cruds'], roleIds: ['fhir-data-writer'], clientPrefix: 'fc' });
 export const READER = Object.freeze({ scope: 'system/*.rs', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-reader'], clientPrefix: 'fc' });
@@ -87,6 +103,7 @@ export function parseArgs(argv, env) {
     partition: pick('partition', 'probe-site'), ownedFile: pick('owned-file'), outputsFile: pick('outputs-file'),
     timeoutS: Number.parseInt(pick('timeout-s', '1500'), 10), issuerPath: pick('issuer-path', '/auth'),
     aksRg: pick('aks-rg'), aksName: pick('aks-name'), aksSub: pick('aks-subscription'), retryS: Number.parseInt(pick('retry-s', '300'), 10),
+    enginePin: pick('engine-image-pin'),
     cpToken: String(env.LHDS_CP_TOKEN ?? '').replace(/[\r\n]/g, ''),
   };
 }
@@ -104,6 +121,7 @@ export function validate(c) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(c.aksName)) return 'aks-name is required (the stamp AKS cluster)';
     if (c.aksSub && !GUID_RE.test(c.aksSub)) return 'aks-subscription must be a GUID when given';
     if (!Number.isInteger(c.retryS) || c.retryS < 0 || c.retryS > 420) return 'retry-s must be 0-420';
+    if (c.enginePin && !IMAGE_REF_RE.test(c.enginePin)) return 'engine-image-pin must be an image reference (repo:tag or repo@sha256:<64 hex>) when given';
   }
   return null;
 }
@@ -254,7 +272,8 @@ RETRY_S=${retrySeconds}
 TMP="\${TMPDIR:-/tmp}/lhds-probe.$$"
 HF="$TMP.h"
 BF="$TMP.b"
-trap 'rm -f "$HF" "$BF" hdrA hdrB 2>/dev/null' EXIT
+KF="$TMP.k"
+trap 'rm -f "$HF" "$BF" "$KF" hdrA hdrB 2>/dev/null' EXIT
 PAT='{"resourceType":"Patient","name":[{"family":"Probe","given":["Synthetic"]}]}'
 CR=$(printf '\\r')
 CODE=000
@@ -311,6 +330,28 @@ body_has_id() { # $1 = id ; 0 when the response body is a Patient whose id is $1
 
 if command -v sleep >/dev/null 2>&1; then echo 'PROBE tool sleep=yes'; HAVE_SLEEP=1; else echo 'PROBE tool sleep=no'; HAVE_SLEEP=0; fi
 
+# (#5439) The image each probed engine RUNS: status.containerStatuses[].imageID of container ${ENGINE_CONTAINER}, per pod. Prints a digest or a
+# fixed reason word, never kubectl's own text. Builtins only (no grep): the pod is not assumed to have more than sh, curl and kubectl.
+engine_image() { # $1 = tenant slug
+  if ! command -v kubectl >/dev/null 2>&1; then echo "PROBE engine_image tenant=$1 unreadable=no_kubectl"; return 0; fi
+  if ! ids=$(kubectl get pods -n '${ENGINE_NAMESPACE}' -l "app=fhir-$1,loom.health/tenant=$1" -o jsonpath='{range .items[*]}{range .status.containerStatuses[?(@.name=="${ENGINE_CONTAINER}")]}{.imageID}{"\\n"}{end}{end}' 2>"$KF"); then
+    why=kubectl_failed
+    while IFS= read -r line || [ -n "$line" ]; do case "$line" in *[Ff]orbidden*) why=forbidden ;; esac; done < "$KF"
+    echo "PROBE engine_image tenant=$1 unreadable=$why"; return 0
+  fi
+  n=0
+  for id in $ids; do
+    n=$((n + 1)); d=\${id##*@}; hex=\${d#sha256:}
+    case "$d" in sha256:*) ;; *) echo "PROBE engine_image tenant=$1 unreadable=no_digest"; continue ;; esac
+    case "$hex" in *[!0-9a-f]*) echo "PROBE engine_image tenant=$1 unreadable=no_digest"; continue ;; esac
+    if [ "\${#hex}" -ne 64 ]; then echo "PROBE engine_image tenant=$1 unreadable=no_digest"; continue; fi
+    echo "PROBE engine_image tenant=$1 digest=$d"
+  done
+  [ "$n" -gt 0 ] || echo "PROBE engine_image tenant=$1 unreadable=no_pod"
+}
+engine_image '${tenantA}'
+engine_image '${tenantB}'
+
 req - GET "$BASE_A/metadata";                   echo "PROBE step=a status=$CODE"
 req - POST "$BASE_A/$PART/Patient" "$PAT";      echo "PROBE step=b status=$CODE"
 
@@ -362,7 +403,47 @@ export function parseProbeLogs(text) {
     out[m[1]] = { status: Number(m[2]), ...(m[3] ? { id: m[3] } : {}), ...(m[4] ? { idMatch: m[4] === 'yes' } : {}), ...(m[5] ? { bare: m[5] === 'yes' } : {}) };
   }
   const tries = [...String(text ?? '').matchAll(/^PROBE step=c_try n=(\d+) status=(\d{3})$/gm)].map((m) => ({ n: Number(m[1]), status: Number(m[2]) }));
-  return { steps: out, tries };
+  const engines = {};
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const m = ENGINE_LINE.exec(raw.trim());
+    if (!m) continue;
+    const e = (engines[m[1]] ??= { digests: [], unreadable: [] });
+    if (m[2]) { if (!e.digests.includes(m[2])) e.digests.push(m[2]); } else if (!e.unreadable.includes(m[3])) e.unreadable.push(m[3]);
+  }
+  return { steps: out, tries, engines };
+}
+
+const ENGINE_LINE = new RegExp(`^PROBE engine_image tenant=([a-z0-9-]{1,20}) (?:digest=(sha256:[0-9a-f]{64})|unreadable=(${Object.keys(IMAGE_UNREADABLE).join('|')}))$`);
+
+/**
+ * #5439: which image each probed engine RUNS, against the digest the control plane pins (LOOM_HEALTH_CP_FHIR_IMAGE, read by the workflow
+ * through ARM). Without it a g/h/i failure on an engine still running a cached old jar reads exactly like a code defect (CRUD probe run
+ * 45744072036: g got 400 at a main that contains the #5489 fix). Verdicts, each naming what breaks it:
+ *   fail        the pin is a digest and some probed engine pod runs a DIFFERENT digest ("engine runs <x>, pinned <y>");
+ *   unmeasured  an engine's imageID could not be read (no line, kubectl absent or Forbidden, no pod, no digest): never a pass;
+ *   pass        the pin is a digest and every probed engine pod runs exactly it;
+ *   reported    every imageID was read but the pin is a TAG or was not supplied, so there is nothing to compare against: the
+ *               digests are printed and the run's exit code is NOT changed (this is not a claim the image is current).
+ */
+export function judgeEngineImage(parsed, { tenants, pin = '' }) {
+  const pinDigest = /@(sha256:[0-9a-f]{64})$/.exec(pin)?.[1] ?? '';
+  const seen = tenants.map((t) => ({ t, e: parsed.engines?.[t] ?? { digests: [], unreadable: [] } }));
+  const runs = seen.map(({ t, e }) => `${t}=${e.digests.length ? e.digests.join('+') : 'unread'}`).join(' ');
+  const res = (verdict, note) => ({ step: 'engine_image', verdict, note, pin: pinDigest || pin });
+  if (pinDigest) {
+    const stale = seen.filter(({ e }) => e.digests.some((d) => d !== pinDigest));
+    if (stale.length) {
+      return res('fail', stale.map(({ t, e }) => `engine ${t} runs ${e.digests.filter((d) => d !== pinDigest).join('+')}, pinned ${pinDigest}`).join('; ')
+        + '. A result below on this engine is about that image, not the pinned build');
+    }
+  }
+  const unread = seen.filter(({ e }) => e.digests.length === 0 || e.unreadable.length > 0);
+  if (unread.length) {
+    return res('unmeasured', unread.map(({ t, e }) => `engine ${t}: ${e.unreadable.length ? e.unreadable.map((u) => IMAGE_UNREADABLE[u]).join('; ') : 'no engine_image line for this tenant'}`).join('; ')
+      + '. Which image the engines run is NOT established');
+  }
+  if (pinDigest) return res('pass', `every probed engine pod runs the pinned ${pinDigest}`);
+  return res('reported', `engines run ${runs}; the control plane pin is ${pin ? `${pin}, a tag` : 'not supplied'}, so whether that is the current build is NOT judged`);
 }
 
 const UNAVAILABLE = (s) => s === 0 || s === 503; // curl could not get an answer (000), or the engine/PDP said it could not decide
@@ -551,11 +632,15 @@ export async function phaseProbe(c, deps = {}) {
       const parsed = parseProbeLogs(scrub(logs, secrets));
       say(`pod exit code ${podExit === undefined ? 'unreported' : redact(podExit, 10)}; step lines parsed: ${Object.keys(parsed.steps).length}`);
       const v = judge(parsed);
+      // #5439: the image the engines run comes FIRST, so a stale engine is never read as a bare g/h/i failure.
+      const img = judgeEngineImage(parsed, { tenants: [c.a, c.b], pin: c.enginePin });
+      say(`step engine_image ${img.verdict.toUpperCase()} pin=${redact(img.pin || 'none', 220)} [image each probed engine pod runs] ${redact(img.note, 600)}`);
+      const stale = img.verdict === 'fail' ? ` (NOT attributable to the pinned build: ${redact(img.note.split('. ')[0], 400)})` : '';
       for (const x of v.results) {
-        say(`step ${x.step} ${x.verdict.toUpperCase()} expect=${x.expect} got=${x.got === undefined ? 'none' : x.got} [${STEP_TITLES[x.step]}]${x.note ? ` ${redact(x.note, 300)}` : ''}`);
+        say(`step ${x.step} ${x.verdict.toUpperCase()} expect=${x.expect} got=${x.got === undefined ? 'none' : x.got} [${STEP_TITLES[x.step]}]${x.note ? ` ${redact(x.note, 300)}` : ''}${x.verdict === 'pass' ? '' : stale}`);
       }
       if (parsed.steps.c?.id) say(`created Patient id=${parsed.steps.c.id} (synthetic, in tenant ${c.a}'s partition ${c.partition}; it is deleted with the tenant database)`);
-      code = v.code;
+      code = img.verdict === 'fail' ? 1 : img.verdict === 'unmeasured' && v.code === 0 ? 2 : v.code;
     }
   } catch (e) {
     if (e instanceof MintError) { say(`mint failed class=${e.cls}: ${redact(scrub(e.message, secrets), 500)}`); code = e.exit; }

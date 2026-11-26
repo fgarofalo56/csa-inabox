@@ -21,10 +21,15 @@ const PDP = 'http://pdp.lhds.svc.cluster.local:8181';
 const BASE = 'https://x.example';
 const RPM = 600;
 const NOW = new Date('2026-11-25T10:00:00.000Z');
+// Two builds of loom-health-fhir as deploy-health pins them (#5439): same registry and repository, different digests.
+const IMG_BUILD_1 = `acrx.azurecr.io/loom-health-fhir@sha256:${'1'.repeat(64)}`;
+const IMG_BUILD_2 = `acrx.azurecr.io/loom-health-fhir@sha256:${'2'.repeat(64)}`;
 const ident = (slug: string) => ({ name: `id-lhds-${STAMP}-${slug}-fhir`, clientId: '11111111-2222-3333-4444-555555555555', principalId: 'aaaaaaaa-2222-3333-4444-555555555555' });
 
 /** Several tenants' engines on one stamp. `gate` holds every apply open until released, so a job can be observed queued/running. */
 class FakeHost implements FhirEngineHost {
+  /** The reference this control plane renders (deploy-health pins it by digest, #5439). A test re-pins it to simulate a new build + deploy. */
+  engineImage = IMG_BUILD_1;
   configs = new Map<string, AppliedEngineConfig>();
   applyCalls: Array<{ tenantId: string; revision: string }> = [];
   listCalls = 0;
@@ -139,6 +144,30 @@ describe('engine drift reconciler (#5482 item 6)', () => {
     // And the engine is current afterwards: a further pass submits nothing.
     const after = await s.a.pass();
     expect([after.current, after.submitted]).toEqual([['acme-health'], []]);
+  });
+
+  it('#5439: a re-pinned engine image (new build + deploy-health) makes every EXISTING engine stale, and one pass re-applies each once', async () => {
+    const s = setup(['acme-health', 'beta-clinic']);
+    await s.create('acme-health');
+    await s.create('beta-clinic');
+    const before = new Map([...s.host.configs].map(([id, c]) => [id, c.revision]));
+    const applied = s.host.applyCalls.length; // 2, from the creates
+    // Fixture check: the two references differ, so the test is not re-pinning to the same value.
+    expect(IMG_BUILD_2).not.toBe(IMG_BUILD_1);
+    // The control plane restarts on the new LOOM_HEALTH_CP_FHIR_IMAGE: nothing else changed (same tenants, quotas, stamp, PDP).
+    s.host.engineImage = IMG_BUILD_2;
+    const pass = await s.a.pass();
+    await s.a.runner.idle();
+    // Input that breaks it: a revision that ignores the image renders the SAME revision for both builds, so submitted is [] and
+    // current is both tenants -- the engines keep running the old jar forever (the measured defect).
+    expect([...pass.submitted].sort()).toEqual(['acme-health', 'beta-clinic']);
+    expect(pass.current).toEqual([]);
+    const reapplied = s.host.applyCalls.slice(applied);
+    expect(reapplied.map((c) => c.tenantId).sort()).toEqual(['acme-health', 'beta-clinic']);
+    for (const c of reapplied) expect(c.revision).not.toBe(before.get(c.tenantId));
+    // Settled: a second pass on the same image submits nothing (breaks on a term that is not deterministic, e.g. hashes a timestamp).
+    const after = await s.a.pass();
+    expect([[...after.current].sort(), after.submitted]).toEqual([['acme-health', 'beta-clinic'], []]);
   });
 
   it('an equal revision submits nothing and applies nothing', async () => {

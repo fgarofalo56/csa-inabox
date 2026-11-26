@@ -193,6 +193,13 @@ export interface RenderInput {
   pgAdminName: string;
   /** The NetworkPolicy peer list hashed into the revision. Defaults to what the production host renders; tests vary it. */
   ingressPeers?: readonly IngressPeer[];
+  /**
+   * The engine image reference the host renders into the Deployment (FhirEngineHost.engineImage; production passes it on every render,
+   * fhir-tenant-jobs.ts render()). Hashed into the revision, not returned in the body: deploy-health pins LOOM_HEALTH_CP_FHIR_IMAGE by
+   * digest (#5439), so a new FHIR build plus a deploy changes this string, every engine's revision moves, and the drift reconciler
+   * (#5486) re-applies every engine, existing ones included. Without it a new image never reached a running engine.
+   */
+  engineImage?: string;
 }
 
 export interface RenderedEngineConfig {
@@ -304,8 +311,9 @@ export function renderEngineConfig(i: RenderInput): RenderedEngineConfig {
   const body = { tenantId: i.tenantId, stampId: i.stampId, names, identity, env, overrides, partitioning: true as const, partitions };
   // The NetworkPolicy peer list is in the revision but not in the returned body: it is not engine config, it is what the host
   // renders beside it. A peer change therefore re-applies (and, through the pod-template revision annotation, restarts) every engine once.
+  // The engine image is in the revision for the same reason (#5439): a new digest re-applies and restarts every engine once.
   const revision = createHash('sha256')
-    .update(canonical({ ...body, ingressPeers: ingressPeersTerm(i.ingressPeers) }))
+    .update(canonical({ ...body, ingressPeers: ingressPeersTerm(i.ingressPeers), engineImage: i.engineImage ?? '' }))
     .digest('hex');
   return { ...body, revision };
 }

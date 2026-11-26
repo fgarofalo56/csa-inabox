@@ -197,6 +197,13 @@ describe('renderEngineManifest', () => {
     expect(ctr.image).toBe(FHIR_IMAGE);
   });
 
+  it('#5439: the engine container sets imagePullPolicy IfNotPresent explicitly (deterministic with the digest reference deploy-health renders)', () => {
+    // Breaks if the field is dropped (undefined: the Kubernetes default, which for a tag reference is ALSO IfNotPresent, silently)
+    // or set to Always (every restart pulls through the stamp private endpoint for content the digest already names).
+    expect(ctr.imagePullPolicy).toBe('IfNotPresent');
+    expect(ctr.name).toBe('hapi');
+  });
+
   it('restricted security context, probes, the revision annotation, and a ClusterIP service to the http port', () => {
     expect(dep.spec.template.spec.securityContext).toMatchObject({ runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } });
     expect(ctr.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } });
@@ -1026,6 +1033,40 @@ describe('engine image pin', () => {
     expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir:latest' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE.*latest/);
     expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: 'acrx.azurecr.io/loom-health-fhir' })).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE/);
     expect(loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: FHIR_IMAGE })?.fhirImage).toBe(FHIR_IMAGE);
+  });
+  // #5439: deploy-health renders LOOM_HEALTH_CP_FHIR_IMAGE as <acr>/loom-health-fhir@sha256:<64 hex>.
+  const DIGEST_REF = `acrx.azurecr.io/loom-health-fhir@sha256:${'d'.repeat(64)}`;
+  it('#5439: the config loader ACCEPTS the digest reference deploy-health renders (breaks if the IMAGE pattern has no @ form)', () => {
+    const base = { LOOM_HEALTH_CP_PG_CLIENT_IMAGE: `acrx.azurecr.io/postgres@sha256:${'b'.repeat(64)}` };
+    // Before #5439 the pattern was /^[a-z0-9][a-z0-9.\-/:_]{0,200}$/ (no `@`): this exact value threw "must be an image reference".
+    expect(loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: DIGEST_REF })?.fhirImage).toBe(DIGEST_REF);
+  });
+  it('#5439: an INVALID digest is refused by the loader and the host (63 hex, uppercase hex, md5, empty digest)', () => {
+    const base = { LOOM_HEALTH_CP_PG_CLIENT_IMAGE: `acrx.azurecr.io/postgres@sha256:${'b'.repeat(64)}` };
+    const bad = [
+      `acrx.azurecr.io/loom-health-fhir@sha256:${'d'.repeat(63)}`,
+      `acrx.azurecr.io/loom-health-fhir@sha256:${'D'.repeat(64)}`,
+      `acrx.azurecr.io/loom-health-fhir@md5:${'d'.repeat(32)}`,
+      'acrx.azurecr.io/loom-health-fhir@sha256:',
+    ];
+    for (const ref of bad) {
+      expect(() => loadFhirEngineConfig('commercial', { ...base, LOOM_HEALTH_CP_FHIR_IMAGE: ref }), ref).toThrow(/LOOM_HEALTH_CP_FHIR_IMAGE/);
+      // The host check alone (assertEngineImagePinned) must refuse it too: before #5439 any `@sha256:` substring passed.
+      expect(mk(ref), ref).toThrow(/digest that is not sha256/);
+    }
+    // Paired positive: the well-formed digest constructs a host whose engineImage is that reference.
+    expect(mk(DIGEST_REF)).not.toThrow();
+  });
+  it('#5439: the host exposes as engineImage exactly the reference it renders into the Deployment', async () => {
+    const c = new FakeCluster();
+    const host = new RunCommandFhirEngineHost({ run: c, target: async () => TARGET, fhirImage: DIGEST_REF, pgClientImage: PG_IMAGE, pgScope: 's', sleep: async () => {} });
+    expect(host.engineImage).toBe(DIGEST_REF);
+    await host.applyEngineConfig(cfgFor());
+    const cmd = c.commands.find((x) => x.includes('"kind":"List"')) ?? '';
+    const m = JSON.parse(/<<'LOOM_MANIFEST_EOF'\n([\s\S]*)\nLOOM_MANIFEST_EOF/.exec(cmd)?.[1] ?? '{}') as { items: Array<Record<string, any>> };
+    const ctr = m.items.find((i) => i.kind === 'Deployment')?.spec.template.spec.containers[0];
+    // Breaks if the host renders a different value than the one the jobs hash into the revision (e.g. a tag stripped of its digest).
+    expect(ctr.image).toBe(host.engineImage);
   });
 });
 
