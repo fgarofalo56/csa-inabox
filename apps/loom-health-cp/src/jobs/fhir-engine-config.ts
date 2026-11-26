@@ -28,7 +28,9 @@ export interface FhirEngineConfig {
   pgScope: string;
 }
 
-const IMAGE = /^[a-z0-9][a-z0-9.\-/:_]{0,200}$/;
+// A tag reference, or a digest reference (`repo@sha256:<64 hex>`): deploy-health pins LOOM_HEALTH_CP_FHIR_IMAGE by digest (#5439).
+// Before #5439 this had no `@`, so the digest form the deploy now renders would have refused to start the control plane.
+const IMAGE = /^[a-z0-9][a-z0-9.\-/:_]{0,200}(@sha256:[0-9a-f]{64})?$/;
 const IMAGE_BY_DIGEST = /^[a-z0-9][a-z0-9.\-/:_]{0,200}@sha256:[0-9a-f]{64}$/;
 
 export function loadFhirEngineConfig(cloud: Cloud, env: NodeJS.ProcessEnv = process.env): FhirEngineConfig | undefined {

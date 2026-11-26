@@ -55,7 +55,11 @@ const FQDN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z
 const IMAGE_BY_DIGEST = /^[a-z0-9][a-z0-9.\-/:_]{0,200}@sha256:[0-9a-f]{64}$/;
 /** A digest, or an explicit tag other than `latest`. An untagged reference means `latest`, so it is refused too. */
 export function assertEngineImagePinned(image: string): void {
-  if (image.includes('@sha256:')) return;
+  if (image.includes('@')) {
+    // deploy-health pins the engine by digest (#5439). A reference that claims a digest must BE one: `@sha256:abc` or `@md5:...` is refused.
+    if (IMAGE_BY_DIGEST.test(image)) return;
+    throw new JobFailure('fhir_image_unpinned', 'the FHIR engine image carries a digest that is not sha256:<64 lowercase hex>; refusing to render an engine from it');
+  }
   const last = image.split('/').pop() ?? '';
   const tag = last.includes(':') ? last.split(':').pop() : '';
   if (!tag || tag.toLowerCase() === 'latest') {
@@ -164,6 +168,11 @@ export function renderEngineManifest(cfg: RenderedEngineConfig, o: { image: stri
                 {
                   name: 'hapi',
                   image: o.image,
+                  // Explicit, not the Kubernetes default (#5439). With the digest reference deploy-health renders, IfNotPresent is
+                  // correct and deterministic: a digest names immutable content, so a cached copy IS the pinned image, and a new build
+                  // arrives as a new digest (a new revision, re-applied by the drift reconciler) rather than by re-pulling a moved tag.
+                  // With a tag reference (other callers) IfNotPresent still lets a node run a stale cached tag; that is why the deploy pins.
+                  imagePullPolicy: 'IfNotPresent',
                   env: envList(cfg.env),
                   ports: [{ name: 'http', containerPort: ENGINE_PORT }],
                   resources: { requests: { cpu: '500m', memory: '1Gi' }, limits: { cpu: '2', memory: '2Gi' } },
@@ -495,6 +504,11 @@ export class RunCommandFhirEngineHost implements FhirEngineHost {
     this.ns = o.namespace ?? ENGINE_NAMESPACE;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.log = o.log ?? (() => {});
+  }
+
+  /** The reference renderEngineManifest puts in every engine Deployment; the jobs hash the same value into the revision (#5439). */
+  get engineImage(): string {
+    return this.o.fhirImage;
   }
 
   private async resolve(tenantId: string): Promise<EngineTarget> {

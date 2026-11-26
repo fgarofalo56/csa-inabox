@@ -508,6 +508,49 @@ jobs:
             *) echo "::error::assert-acr-image-tags.sh exited $RC (usage or unclassified)."; exit 1 ;;
           esac
 
+      # #5439: the FHIR engine image is pinned BY DIGEST. loom-health-fhir:<tag> MOVES on every build, and the engine Deployment
+      # pulls IfNotPresent, so a tag reference left a node with the tag cached on the old jar and never rolled a running engine
+      # (the rendered revision did not change). The digest is resolved HERE, before either health.bicep deployment renders the
+      # control plane, and passed to BOTH as fhirImageDigest: LOOM_HEALTH_CP_FHIR_IMAGE becomes <acr>/loom-health-fhir@<digest>, a
+      # new build is a new reference, every engine's revision moves, and the control plane's drift reconciler (#5486) re-applies
+      # every engine. Same condition as the loom-health-cp preflight above: without audiences there is no control plane to render.
+      # The tag is read from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed.
+      - name: Resolve the FHIR engine image digest (loom-health-fhir) for the digest pin
+        id: fhirdigest
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && steps.audiences.outputs.resolved == 'true' }}
+        env:
+          ACR: ${{ steps.hub.outputs.acr }}
+          # The documented 90 s firewall propagation (docs/fiab/acr-firewall-lease.md), as on the stamp image step below.
+          LOOM_ACR_LEASE_OPEN_SECONDS: '90'
+        run: |
+          set -uo pipefail
+          set +e
+          FHIR_TAG=v0.1
+          if [ -f temp/cp.json ]; then
+            FHIR_TAG=$(jq -r '.imageTag // "v0.1"' temp/cp.json) || { echo "::error::could not read imageTag from temp/cp.json, so the FHIR engine tag to pin is unknown. Nothing was deployed."; exit 1; }
+          fi
+          REF="loom-health-fhir:$FHIR_TAG"
+          bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$REF" --lease > temp/fhir-digest.out 2> temp/fhir-digest.err
+          RC=$?
+          cat temp/fhir-digest.err
+          case "$RC" in
+            0) ;;
+            3) echo "::error::MISSING: the registry answered and $REF is not in $ACR (the Trivy gate untags refused images). Every engine would get an image it cannot pull. Build it: build-fiab-images-acr-tasks.yml with boundary set to this estate (the only producer of loom-health-fhir in both clouds). Nothing was deployed."; exit 1 ;;
+            4) echo "::error::UNPROVEN: $ACR could not be read, so the digest of $REF is unknown. This is NOT a claim that the image is missing. Nothing was deployed; re-run."; exit 1 ;;
+            *) echo "::error::resolve-acr-digest.sh exited $RC (usage or unclassified) resolving $REF. Nothing was deployed."; exit 1 ;;
+          esac
+          # A digest is ONLY a whole line of exactly sha256:<64 lowercase hex>. The lease prints ::notice:: lines on stdout too, and a
+          # registry that is still locked can answer with a credential prompt (Username:) instead of JSON: neither may become a pin.
+          DIGESTS=$(tr -d '\r' < temp/fhir-digest.out | grep -E '^sha256:[0-9a-f]{64}$' | sort -u)
+          N=$(printf '%s' "$DIGESTS" | grep -c '^sha256:')
+          if [ "$N" != "1" ]; then
+            echo "::error::resolve-acr-digest.sh exited 0 for $REF, but its output has $N distinct lines of the form sha256:<64 lowercase hex> (exactly 1 is required): $(tr '\r\n' '  ' < temp/fhir-digest.out | head -c 300). The digest could NOT be read; this is not a claim that the image is missing. Nothing was deployed."
+            exit 1
+          fi
+          echo "digest=$DIGESTS" >> "$GITHUB_OUTPUT"
+          echo "::notice::FHIR engine image pinned: $ACR/loom-health-fhir@$DIGESTS (the content of $REF now)."
+          echo "FHIR engine image pinned: loom-health-fhir@$DIGESTS (resolved from $REF in $ACR)." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Bicep what-if
         if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode != 'full' }}
         env:
@@ -533,6 +576,7 @@ jobs:
         env:
           PF: ${{ steps.params.outputs.pf }}
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+          FHIR_DIGEST: ${{ steps.fhirdigest.outputs.digest }}
         run: |
           set -uo pipefail
           # The runner shell is `bash -e`, and `set -uo pipefail` does not clear -e. Without
@@ -541,9 +585,13 @@ jobs:
           set +e
           CP_ARG=()
           if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
+          # #5439: the FHIR engine digest pin rides EVERY health.bicep deployment, so no deployment renders the moving tag back.
+          FHIR_ARG=()
+          FHIR_DIGEST="${FHIR_DIGEST:-}"
+          if [ -n "$FHIR_DIGEST" ]; then FHIR_ARG=(--parameters fhirImageDigest="$FHIR_DIGEST"); fi
           az deployment sub create --name "lhds-${GITHUB_RUN_ID}" --location "$HUB_LOCATION" \
             --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
-            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" "${FHIR_ARG[@]}" \
             --query properties.outputs -o json > temp/outputs.json 2> temp/apply.err
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -817,6 +865,7 @@ jobs:
           HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
           TLS_URI: ${{ steps.tlswait.outputs.uri }}
           PDP_FETCHED: ${{ steps.pdpkey.outputs.fetched }}
+          FHIR_DIGEST: ${{ steps.fhirdigest.outputs.digest }}
         run: |
           set -uo pipefail
           set +e
@@ -824,9 +873,18 @@ jobs:
           if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
           TLS_ARG=()
           if [ -n "$TLS_URI" ]; then TLS_ARG=(--parameters issuedTlsSecretUri="$TLS_URI"); fi
+          # #5439: this is the deployment that renders LOOM_HEALTH_CP_FHIR_IMAGE (with the PDP). Without the digest it would render
+          # the moving tag, so a fetched PDP key with no resolved digest stops HERE, before anything changes.
+          FHIR_DIGEST="${FHIR_DIGEST:-}"
+          if [ "$PDP_FETCHED" = "true" ] && [ -z "$FHIR_DIGEST" ]; then
+            echo "::error::Phase 2 would deploy the PDP, which renders the FHIR engine image into the control plane, but no loom-health-fhir digest was resolved by this run (step fhirdigest). Refusing to render the tag reference (#5439). Nothing was changed by phase 2."
+            exit 1
+          fi
+          FHIR_ARG=()
+          if [ -n "$FHIR_DIGEST" ]; then FHIR_ARG=(--parameters fhirImageDigest="$FHIR_DIGEST"); fi
           az deployment sub create --name "lhds-${GITHUB_RUN_ID}-tls" --location "$HUB_LOCATION" \
             --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
-            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${TLS_ARG[@]}" "${CP_ARG[@]}" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${TLS_ARG[@]}" "${CP_ARG[@]}" "${FHIR_ARG[@]}" \
             --query properties.outputs -o json > temp/outputs-phase2.json 2> temp/apply2.err
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -844,6 +902,14 @@ jobs:
           if [ "$PDP_FETCHED" = "true" ] && [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs-phase2.json)" != "true" ]; then
             echo "::error::The PDP verification key was fetched but the deployment reports the PDP is NOT deployed: $(jq -r '.healthPdpState.value.reason // "no reason reported"' temp/outputs-phase2.json)"
             exit 1
+          fi
+          # #5439: read the pin back from what was deployed: the control plane must have been given the digest reference, not the tag.
+          if [ "$(jq -r '.healthPdpState.value.deployed' temp/outputs-phase2.json)" = "true" ]; then
+            GOT_IMG=$(jq -r '.healthControlPlaneState.value.fhirImage // ""' temp/outputs-phase2.json)
+            case "$GOT_IMG" in
+              */loom-health-fhir@"$FHIR_DIGEST") echo "::notice::The control plane renders engines from $GOT_IMG (digest-pinned)." ;;
+              *) echo "::error::Phase 2 deployed, but the control plane was given FHIR engine image '${GOT_IMG}', not <acr>/loom-health-fhir@${FHIR_DIGEST}. Engines would not roll to the resolved build (#5439)."; exit 1 ;;
+            esac
           fi
           mv temp/outputs-phase2.json temp/outputs.json
 
@@ -1045,7 +1111,8 @@ jobs:
           # 1b. The FHIR engine image (loom-health-fhir:<tag>) is built by the build lane, not imported, and the Trivy gate
           #     UNTAGS refused images, so its absence is realistic. This step only runs when the PDP deployed, which is exactly
           #     when health.bicep emits LOOM_HEALTH_CP_FHIR_IMAGE, so a stamp without the PDP is not failed. The tag is read
-          #     from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed.
+          #     from the same controlPlaneConfig.imageTag health.bicep uses (default v0.1), not transcribed. The control plane
+          #     is given the tag's DIGEST, resolved before the deploy (step fhirdigest, #5439); this re-check of the tag is kept.
           FHIR_TAG=v0.1
           if [ -f temp/cp.json ]; then
             FHIR_TAG=$(jq -r '.imageTag // "v0.1"' temp/cp.json) || { echo "::error::could not read imageTag from temp/cp.json."; exit 1; }

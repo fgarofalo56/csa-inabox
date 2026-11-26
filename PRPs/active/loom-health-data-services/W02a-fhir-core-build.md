@@ -115,6 +115,7 @@ Start with the SBOM claim vs `build-fiab-images-acr-tasks.yml`, then W2-2 and W2
 - **B2c** #5435 `48dcf74e0`: a runCommand client and the production `FhirEngineHost`. A PG principal Job runs `pgaadauth_create_principal_with_oid` (decision 10). The password role and KV secret are gone.
 - **B2e** #5438 `070a6a3e0` (decision 11): the engine reconciles its own partitions in-process. HAPI's PDP interceptor 401s tokenless partition calls. The engine grants SELECT on `hfj_partition` only; the CP reads it back through the PG Job, and DB rows are authoritative for ids. Real HAPI 8.12 + PG16 probe passed.
 - **B2d** #5437 `bdae9e020`: `LOOM_HEALTH_CP_FHIR_IMAGE` (tag) and `_PG_CLIENT_IMAGE` (digest) are set from bicep. deploy-health imports the PG client image and asserts `loom-health-fhir:<tag>` exists.
+  - Superseded for the FHIR image by the #5439 digest pin (branch `fix/lhds-fhir-image-digest-pin`; live only once a deploy-health run carries it): deploy-health resolves the digest of `loom-health-fhir:<tag>` before the deploy and passes `fhirImageDigest` to both health.bicep deployments, so `LOOM_HEALTH_CP_FHIR_IMAGE` is `<acr>/loom-health-fhir@sha256:<digest>`. The control plane hashes the reference into the engine revision, so a new build rolls every engine through the #5486 drift reconciler.
 
 The loom-health-cp vitest suite is green locally (579). It runs in no CI (#5396). Follow-ups: #5439.
 

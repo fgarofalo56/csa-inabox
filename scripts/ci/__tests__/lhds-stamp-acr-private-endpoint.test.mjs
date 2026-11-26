@@ -389,12 +389,14 @@ test('B2d step script: a PG import that fails after a good PDP import is NOT swa
   assert.ok(r.out.includes(want), `expected "${want}" in:\n${r.out}`);
 });
 
-test('B2d health: the control plane gets the FHIR image TAG-pinned to the CP tag and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
+test('B2d health: the control plane gets the FHIR image from cpFhirImage (tag fallback on the CP tag, digest pin per #5439) and the PG image DIGEST-pinned from pg-client-image.json, both only with the PDP', () => {
   const cp = resourcesOf(health).find((r) => r.type === 'Microsoft.Resources/deployments' && /lhds-control-plane/.test(JSON.stringify(r.name)));
   assert.ok(cp, 'control plane module missing');
   const p = cp.properties.parameters;
-  // Breaks if the FHIR image drops to :latest / another repo / another tag variable, or is emitted without the PDP.
-  assert.equal(p.fhirImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/loom-health-fhir:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))), createObject('value', ''))]");
+  // Breaks if the FHIR image is inlined again (the #5439 digest pin would be bypassed). The full cpFhirImage expression, including
+  // the tag fallback on cpImageTag and the PDP gate, is pinned in lhds-fhir-image-digest-pin.test.mjs.
+  assert.deepEqual(p.fhirImage, { value: "[variables('cpFhirImage')]" });
+  assert.match(health.variables.cpFhirImage, /^\[if\(not\(variables\('pdpDeploy'\)\), '', if\(empty\(parameters\('fhirImageDigest'\)\), format\('\{0\}\/loom-health-fhir:\{1\}', variables\('cpAcrLoginServer'\), variables\('cpImageTag'\)\)/);
   assert.equal(p.image.value, "[format('{0}/loom-health-cp:{1}', variables('cpAcrLoginServer'), variables('cpImageTag'))]", 'the CP image must share the tag variable with the FHIR image');
   // Breaks if the PG image goes by tag (no @digest) or reads a different spec.
   assert.equal(p.pgClientImage, "[if(variables('pdpDeploy'), createObject('value', format('{0}/{1}@{2}', variables('cpAcrLoginServer'), variables('pgClientImageSpec').acrRepository, variables('pgClientImageSpec').digest)), createObject('value', ''))]");

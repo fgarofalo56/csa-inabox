@@ -172,6 +172,23 @@ describe('renderEngineConfig', () => {
     expect(now.env).toEqual(preEdge.env);
   });
 
+  it('the engine image is in the revision (#5439): a new digest re-applies every engine, the same reference does not', () => {
+    const d1 = `acrx.azurecr.io/loom-health-fhir@sha256:${'a'.repeat(64)}`;
+    const d2 = `acrx.azurecr.io/loom-health-fhir@sha256:${'b'.repeat(64)}`;
+    const r1 = renderEngineConfig({ ...baseInput, engineImage: d1 });
+    // Input that breaks it: a revision without the image term renders d1 and d2 identically, so a new build never rolls an engine.
+    expect(renderEngineConfig({ ...baseInput, engineImage: d2 }).revision).not.toBe(r1.revision);
+    // The same reference in a fresh string is the same revision (breaks on a term that is not a pure function of the string).
+    expect(renderEngineConfig({ ...baseInput, engineImage: `${d1}` }).revision).toBe(r1.revision);
+    // A tag reference still renders (other callers of health.bicep), and differs from the digest form.
+    const tag = renderEngineConfig({ ...baseInput, engineImage: 'acrx.azurecr.io/loom-health-fhir:v0.1' });
+    expect(tag.revision).toMatch(/^[0-9a-f]{64}$/);
+    expect(tag.revision).not.toBe(r1.revision);
+    // The term is hashed, not leaked into the engine config body or env (the image is the Deployment's, not the engine's config).
+    expect(r1).not.toHaveProperty('engineImage');
+    expect(r1.env).toEqual(tag.env);
+  });
+
   it('caps may only LOWER the file ceiling: 201 is refused, a default above the max is refused', () => {
     expect(() => renderEngineConfig({ ...baseInput, overrides: { maxPageSize: 201 } })).toThrow(); // zod: max 200
     expect(renderEngineConfig({ ...baseInput, overrides: { maxPageSize: 200 } }).env.HAPI_FHIR_MAX_PAGE_SIZE).toBe('200'); // boundary accepted
@@ -245,6 +262,7 @@ describe('config/application.yaml (static policy)', () => {
 // ---------------------------------------------------------------- jobs
 
 class FakeHost implements FhirEngineHost {
+  engineImage = `acrx.azurecr.io/loom-health-fhir@sha256:${'e'.repeat(64)}`;
   config: AppliedEngineConfig | undefined;
   role: RoleReadback = { exists: false, connectableDatabases: [] };
   /** What a role ensure leaves behind (default: scoped to its own database). */

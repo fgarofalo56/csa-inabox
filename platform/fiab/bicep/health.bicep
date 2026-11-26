@@ -92,6 +92,10 @@ param postgresQuotaAvailable bool = true
 @description('Phase 2 of the ingress TLS ordering (#5345): the VERSIONLESS Key Vault secret URI of the certificate the control plane issued. deploy-health.yml passes it only after confirming, through the ARM management plane, that the secret exists. Empty = phase 1: no TLS listener yet.')
 param issuedTlsSecretUri string = ''
 
+@description('#5439: the sha256 digest (sha256:<64 lowercase hex>) of loom-health-fhir:<controlPlaneConfig.imageTag> in the hub registry. deploy-health.yml resolves it before the deploy and passes it to BOTH health.bicep deployments. Non-empty = the control plane gets the DIGEST-pinned reference <acr>/loom-health-fhir@<digest> as LOOM_HEALTH_CP_FHIR_IMAGE, so a new build changes the reference and every engine\'s rendered revision, and the drift reconciler re-applies every engine. Empty = the tag reference (other callers; a node with the tag cached keeps the old image). A malformed value fails any deployment that renders the FHIR image (the PDP is deployed); with no PDP it is unused.')
+@maxLength(71)
+param fhirImageDigest string = ''
+
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
@@ -274,6 +278,23 @@ module healthAuthEndpoint 'modules/health/afd-issuer.bicep' = if (fdIssuerDeploy
 // The one tag the control plane image and the FHIR engine image are both pulled at (one build, one release).
 var cpImageTag = string(controlPlaneConfig.?imageTag ?? 'v0.1')
 
+// #5439: the FHIR engine image the control plane renders into every tenant engine. The tag above MOVES on every build, and the
+// engine Deployment pulls IfNotPresent, so a tag reference left nodes on a cached old jar and never rolled a running engine (the
+// rendered revision did not change). deploy-health.yml resolves the tag's digest in the hub registry and passes it here; the
+// reference is then content-addressed, and a new build is a new reference -> a new revision -> the #5486 drift reconciler re-applies.
+// Validation: exactly 'sha256:' + 64 lowercase hex, or empty. A malformed digest FAILS the deployment (fail()), never falls back to
+// the tag: a silent fallback would deploy the very drift this exists to remove.
+var fhirDigestHex = length(fhirImageDigest) > 7 ? substring(fhirImageDigest, 7) : ''
+var fhirDigestBadChars = filter(map(range(0, length(fhirDigestHex)), i => substring(fhirDigestHex, i, 1)), c => !contains('0123456789abcdef', c))
+var fhirDigestValid = length(fhirImageDigest) == 71 && startsWith(fhirImageDigest, 'sha256:') && empty(fhirDigestBadChars)
+var cpFhirImage = !pdpDeploy
+  ? ''
+  : (empty(fhirImageDigest)
+      ? '${cpAcrLoginServer}/loom-health-fhir:${cpImageTag}'
+      : (fhirDigestValid
+          ? '${cpAcrLoginServer}/loom-health-fhir@${fhirImageDigest}'
+          : fail('fhirImageDigest must be sha256:<64 lowercase hex> (deploy-health.yml resolves it from loom-health-fhir:<imageTag>); refusing to deploy a malformed FHIR engine image reference')))
+
 module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   name: 'lhds-control-plane-${healthStampName}'
   scope: healthRg
@@ -315,9 +336,10 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     pdpUrl: pdpDeploy ? pdpBaseUrl : ''
     // #5422 B2d: the images the control plane's fhir-tenant.* jobs deliver, emitted only with the PDP (an engine without a
     // PDP answers 503, and main.ts registers the jobs only when both images AND the PDP url are set). The FHIR image is
-    // TAG-pinned: build-fiab-images-acr-tasks.yml pushes loom-health-fhir under the same tag as loom-health-cp, so the
-    // two are one release. The PG client image is DIGEST-pinned from pg-client-image.json, the file deploy-health imports.
-    fhirImage: pdpDeploy ? '${cpAcrLoginServer}/loom-health-fhir:${cpImageTag}' : ''
+    // DIGEST-pinned when deploy-health passes fhirImageDigest (#5439; cpFhirImage above): build-fiab-images-acr-tasks.yml
+    // pushes loom-health-fhir under the same tag as loom-health-cp, so the two are one release, and the digest is that tag's
+    // content at deploy time. The PG client image is DIGEST-pinned from pg-client-image.json, the file deploy-health imports.
+    fhirImage: cpFhirImage
     pgClientImage: pdpDeploy ? '${cpAcrLoginServer}/${pgClientImageSpec.acrRepository}@${pgClientImageSpec.digest}' : ''
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
@@ -536,6 +558,8 @@ output healthControlPlaneState object = cpDeploy ? {
   identityClientId: healthControlPlane!.outputs.identityClientId
   authServerMissing: cpAuthMissing
   authFederatedCredential: healthControlPlane!.outputs.authFederatedCredential
+  // #5439: the FHIR engine reference the control plane was given (digest-pinned when deploy-health passed fhirImageDigest; empty without the PDP). deploy-health reads it back after phase 2.
+  fhirImage: cpFhirImage
 } : {
   deployed: false
   platform: cpPlatform
