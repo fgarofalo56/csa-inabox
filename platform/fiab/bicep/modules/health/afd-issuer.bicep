@@ -139,6 +139,109 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = if (rou
 // as bots; and no console-specific custom rules or cookie exclusions. Request-body inspection is off
 // as on the console: the token endpoint receives form-encoded JWT client assertions, which DRS 2.1
 // body rules are prone to block; URL, header and cookie inspection stay active.
+//
+// SMART / OAuth argument exclusions. Measured 2026-11-26 (Front Door WAF log, law-csa-loom-centralus,
+// tracking ref 20261126T224811Z-165649489d9qllrghC1BL1xk1s00000017tg0000000041h0): the operator's first
+// headed SMART authorize GET /auth/{tenant}/authorize reached anomaly score 15 (DRS 2.1 blocks at 5) and
+// was refused by BLOCKING-EVALUATION-949110. Three rules contributed:
+//  - RFI-931130 "Off-Domain Reference/Link" on QueryParamValue:redirect_uri
+//    (https://192.168.2.252/custom/smart_stu2_2/redirect). Every SMART client's redirect_uri is
+//    off-domain by design: it is the CLIENT's URL, never this issuer host.
+//  - RFI-931100 "URL Parameter using IP Address" on QueryParamValue:redirect_uri (same value).
+//  - MS-ThreatIntel-SQLI-99031002 "SQL Comment Sequence Detected" on QueryParamValue:scope
+//    (launch/patient openid fhirUser offline_access patient/*.rs). The '/*' in every SMART wildcard
+//    scope reads as a SQL comment opener.
+// The fix is PER RULE and BY ARGUMENT NAME: each exclusion names one rule and only the OAuth arguments
+// that rule is measured (or, where stated, predicted) to hit. Every other rule still inspects these
+// arguments, and these rules still inspect every other argument, header and cookie. No rule set or
+// rule group exclusion, no disabled rule, Prevention mode unchanged. Group names are the DRS 2.1
+// ruleGroupName values from https://learn.microsoft.com/azure/web-application-firewall/afds/waf-front-door-drs
+// ('RFI', 'SQLI', 'MS-ThreatIntel-SQLI'). A rule override defaults enabledState to Disabled when it is omitted,
+// so each override restates Enabled + AnomalyScoring: the override must add exclusions, not switch the
+// rule off.
+//
+// The policy covers the whole endpoint, so these exclusions also apply on /api/health/pdp/*; those
+// routes (apps/loom-health-cp/src/http/app.ts, the /api/health/pdp/stamps/... handlers) read none of
+// these argument names.
+//
+// Token endpoint (POST /auth/{tenant}/token: client_assertion, code, code_verifier, refresh_token,
+// redirect_uri, scope): NO RequestBodyPostArgNames exclusions, because requestBodyCheck is Disabled and
+// the body is not inspected at all. If body inspection is ever turned on, those six names need the same
+// treatment first (a client_assertion JWT and a refresh token are long base64url strings).
+var issuerRuleGroupOverrides = [
+  {
+    ruleGroupName: 'RFI'
+    rules: [
+      {
+        // Measured: redirect_uri. Not aud: the FHIR base is a host name, never an IP literal.
+        ruleId: '931100'
+        enabledState: 'Enabled'
+        action: 'AnomalyScoring'
+        exclusions: [
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'redirect_uri' }
+        ]
+      }
+      {
+        // Measured: redirect_uri. Predicted: aud, which SMART requires to be the tenant FHIR base URL
+        // (https://<stamp ingress>/...), a different host from this issuer endpoint, so off-domain on
+        // every authorize (server.ts rejects any other aud value).
+        ruleId: '931130'
+        enabledState: 'Enabled'
+        action: 'AnomalyScoring'
+        exclusions: [
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'redirect_uri' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'aud' }
+        ]
+      }
+    ]
+  }
+  {
+    ruleGroupName: 'MS-ThreatIntel-SQLI'
+    rules: [
+      {
+        // Measured: scope. Predicted (not measured): the opaque base64url values a SMART flow carries in
+        // the query string. 99031002 replaced CRS 942440, whose pattern includes '--[^-]*?-'; a random
+        // base64url string contains '--' followed later by '-' often enough to refuse real sign-ins
+        // at random. state and code_challenge (client-generated, authorize GET), launch (EHR launch
+        // handle, authorize GET), code (Entra's authorization code on the GET /auth/.../callback
+        // redirect, the longest of them), req (rand(24) base64url pick id on the standalone picker
+        // redirect GET /auth/{tenant}/pick?req=..., server.ts). The MSTIC pattern is not published, so
+        // this is reasoned from the rule it replaced.
+        ruleId: '99031002'
+        enabledState: 'Enabled'
+        action: 'AnomalyScoring'
+        exclusions: [
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'scope' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'state' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'code_challenge' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'launch' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'code' }
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'req' }
+        ]
+      }
+    ]
+  }
+  {
+    ruleGroupName: 'SQLI'
+    rules: [
+      {
+        // Measured: clientdata. Entra appends &clientdata=e|||microsoftonline.com|none to the redirect
+        // back to GET /auth/{tenant}/callback (#5279; the console excludes the same name in
+        // admin-plane/front-door.bicep). WAF log, law-csa-loom-centralus, last 30 days as of 2026-11-26:
+        // every hit whose matches include clientdata is Microsoft_DefaultRuleSet-2.1-SQLI-942120,
+        // AnomalyScoring, 29 hits 2026-11-09..11, QueryParamValue:clientdata = e|||microsoftonline.com|none.
+        // The callback never reads clientdata (server.ts reads only state, code and error there).
+        ruleId: '942120'
+        enabledState: 'Enabled'
+        action: 'AnomalyScoring'
+        exclusions: [
+          { matchVariable: 'QueryStringArgNames', selectorMatchOperator: 'Equals', selector: 'clientdata' }
+        ]
+      }
+    ]
+  }
+]
+
 resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = if (routeDeploy) {
   name: 'waflhdsauth${uniqueString(resourceGroup().id, stampName)}'
   location: 'global'
@@ -156,6 +259,7 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
           ruleSetType: 'Microsoft_DefaultRuleSet'
           ruleSetVersion: '2.1'
           ruleSetAction: 'Block'
+          ruleGroupOverrides: issuerRuleGroupOverrides
         }
       ]
     }
