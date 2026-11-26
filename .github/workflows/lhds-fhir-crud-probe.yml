@@ -31,7 +31,10 @@ name: lhds fhir crud probe
 #   e  GET  that id, token A, engine B                         403  PDP tenant-mismatch (ForbiddenOperationException; the reason is audit-only)
 #   f_ctrl GET Patient?_count=1, reader token B, engine B      200  positive control: tenant B IS admitted, so f's 403 is the scope
 #   f  POST Patient, reader token B, engine B                  403  PDP scope-denied
-#   A 403 counts as a PASS only when its paired positive control passed (c+d for e, f_ctrl for f).
+#   g  POST Patient at the BARE base, writer token A, engine A 201  #5489: bare base = DEFAULT partition; Location has no partition segment
+#   h  GET  that bare-base Patient at the bare base, token A    200  and the returned id equals the created one
+#   i  GET  the facility Patient from c at the bare base        404  DEFAULT is a distinct partition (a 2xx is a partition leak)
+#   A 403 counts as a PASS only when its paired positive control passed (c+d for e, f_ctrl for f); i's 404 only after d and h passed.
 #   c retries ONLY while the answer is 403 or 503 (a PDP that has not loaded the new bundle yet; the response cannot tell that from a real
 #   deny), for at most retry_window_s, printing every attempt. Exit 0 pass, 1 defect, 2 unmeasured (R7: no claim of a cause that was not established).
 #

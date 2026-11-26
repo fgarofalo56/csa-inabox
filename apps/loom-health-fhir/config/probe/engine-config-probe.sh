@@ -8,7 +8,8 @@
 #
 # Checks (FAIL text names the breaking value):
 #   C1 partition mode is ON         log must say "Database Partition Mode Enabled: true" (a misplaced key logs false)
-#   C2 no partition segment = 400   fail closed: a request outside any partition must not reach the default one
+#   C2 no partition segment = 400   on the STOCK engine (no plugin): HAPI's own strategy consumes "Patient" as a partition.
+#                                   This is the CONTROL for C11b, which must turn the same request into a 200 (#5489).
 #   C3 validation on write          Observation with no `status` -> 422; the same body with status -> 201
 #   C4 RI on write                  Observation -> Patient/<missing> rejected; -> existing Patient accepted
 #   C5 RI on delete                 delete of a referenced Patient rejected; accepted once the referrer is gone
@@ -18,6 +19,11 @@
 #   C9 env caps bind over the file  restart with max 5 / default 3 (file: 200 / 20) -> 5 / 3 entries
 #   C10 plugin partition reconcile  (B2e) loads the plugin jar; LOOM_HEALTH_PARTITIONS created in-process, a role gets SELECT on
 #                                   hfj_partition ONLY (hfj_resource denied), a same-id-other-name entry stops the engine
+#   C11 bare base = DEFAULT (#5489) with the plugin loaded by the REAL starter: the plugin logs that it replaced the
+#                                   starter's UrlBaseTenantIdentificationStrategy (proves it ran AFTER the starter set
+#                                   it); $BASE/Patient search 200; create 201 with a Location at the bare base (no
+#                                   /DEFAULT); read back 200; a site-a Patient is 404 at the bare base and 200 at site-a,
+#                                   and the bare-base Patient is 404 at site-a (DEFAULT is a distinct partition)
 # Controls (each makes a check able to fail): C3b, C4b, C5b, C6-control (50 unconditional creates -> 50),
 # C7-fixture (history really has 40 versions), C7-control (counter sees 35 extra reads), C9-control (file default 20).
 # KNOWN BLIND ARM: conditional_create_duplicate_identifiers_enabled=true does NOT turn C6 red (measured in a
@@ -78,7 +84,7 @@ A="$BASE/site-a"
 
 # C2
 c=$(code "$BASE/Patient")
-[ "$c" = 400 ] && pass "C2 request with no partition segment -> 400" || fail "C2 /Patient with no partition returned $c, expected 400 (fail closed)"
+[ "$c" = 400 ] && pass "C2 stock engine: /Patient with no partition segment -> 400 (control for C11b)" || fail "C2 stock-engine /Patient returned $c, expected 400 (HAPI's strategy changed: C11b no longer proves the plugin's)"
 
 # C3
 OBS_NO_STATUS='{"resourceType":"Observation","code":{"text":"x"}}'
@@ -186,6 +192,24 @@ ROWS=$(psql_as 'SELECT part_id || chr(58) || part_name FROM hfj_partition ORDER 
 case "$(psql_as 'SELECT count(*) FROM hfj_resource')" in *"permission denied"*) pass "C10c the grant is partition-table only: hfj_resource is denied";; *) fail "C10c role can read hfj_resource: the grant is wider than hfj_partition";; esac
 c=$(code "$BASE/site-c/Patient")
 [ "$c" = 200 ] && pass "C10d the in-process-created partition serves requests (site-c -> 200)" || fail "C10d GET /site-c/Patient returned $c, expected 200"
+
+# C11 (#5489): same plugin-loaded engine. The log line names the class it REPLACED: "skipped" (strategy still null when the
+# plugin ran, i.e. it ran BEFORE the starter) or any other class fails C11a, and an overwrite after it fails C11b.
+if grep -q '"event":"tenant-strategy.installed","replaced":"ca.uhn.fhir.rest.server.tenant.UrlBaseTenantIdentificationStrategy"' <<<"$(docker logs "$HAPI" 2>&1)"; then pass "C11a plugin replaced the starter's UrlBaseTenantIdentificationStrategy"; else fail "C11a no tenant-strategy.installed line naming UrlBaseTenantIdentificationStrategy (plugin ran before the starter, or not at all)"; fi
+c=$(code "$BASE/Patient?_count=1")
+[ "$c" = 200 ] && pass "C11b bare-base search -> 200 (C2 shows 400 for the same request on the stock engine)" || fail "C11b GET \$BASE/Patient?_count=1 returned $c, expected 200"
+# Headers captured first, then parsed: a `| head` here closes the pipe early and curl's exit 23 aborts the probe (set -e + pipefail).
+HDRS=$(curl -s -D - -o /dev/null -X POST -H "$JSON" "$BASE/Patient" -d '{"resourceType":"Patient","name":[{"family":"BareBase"}]}' || true)
+LOC=$(printf '%s\n' "$HDRS" | tr -d '\r' | sed -n 's/^[Ll]ocation: *//p')
+BID=$(sed -n 's|.*/Patient/\([0-9]*\)/_history/.*|\1|p' <<<"$LOC")
+case "$LOC" in "$BASE/Patient/"[0-9]*) pass "C11c bare-base create Location at the bare base: $LOC";; *) fail "C11c Location [$LOC], expected $BASE/Patient/<id>/... (a /DEFAULT segment or a missing header fails)";; esac
+c=$(code "$BASE/Patient/${BID:-0}")
+[ "$c" = 200 ] && pass "C11d bare-base read-back of Patient/$BID -> 200" || fail "C11d GET \$BASE/Patient/${BID:-?} returned $c, expected 200"
+SID=$(curl -s -X POST -H "$JSON" "$A/Patient" -d '{"resourceType":"Patient","name":[{"family":"SiteA"}]}' | sed -n 's/.*"id": *"\([0-9]*\)".*/\1/p' | head -1)
+c=$(code "$A/Patient/${SID:-0}"); c2=$(code "$BASE/Patient/${SID:-0}")
+{ [ "$c" = 200 ] && [ "$c2" = 404 ]; } && pass "C11e site-a Patient/$SID: 200 at site-a, 404 at the bare base" || fail "C11e site-a Patient/${SID:-?} returned $c at site-a (want 200) and $c2 at the bare base (want 404: DEFAULT must not see a facility)"
+c=$(code "$A/Patient/${BID:-0}")
+[ "$c" = 404 ] && pass "C11f bare-base Patient/$BID is 404 at site-a" || fail "C11f GET site-a/Patient/${BID:-?} returned $c, expected 404 (a facility must not see DEFAULT)"
 # Conflict: id 1 is site-a. Desired id 1 under another name must stop the engine from starting, loudly, and change nothing.
 docker rm -f "$HAPI" >/dev/null 2>&1 || true
 docker run -d --name "$HAPI" --network "$NET" -v "$CONF:/opt/loom/fhir/config:ro" -v "$PLUGIN_JAR:/app/extra-classes/loom-health-fhir-plugin.jar:ro" \

@@ -60,7 +60,7 @@ export const READER = Object.freeze({ scope: 'system/*.rs', allowedScopes: ['sys
  * the rule that fired goes to the audit record only) for every PDP deny. So a tenant mismatch (e) and a missing role/scope (f) both read 403
  * here; the reason (`tenant-mismatch`, `scope-denied`) is in the engine's audit log, not in the response.
  */
-export const EXPECT = Object.freeze({ a: 200, b: 401, c: 201, d: 200, e: 403, f_ctrl: 200, f: 403 });
+export const EXPECT = Object.freeze({ a: 200, b: 401, c: 201, d: 200, e: 403, f_ctrl: 200, f: 403, g: 201, h: 200, i: 404 });
 export const STEP_TITLES = Object.freeze({
   a: 'GET /fhir/metadata, no token',
   b: 'POST Patient, no token',
@@ -69,6 +69,10 @@ export const STEP_TITLES = Object.freeze({
   e: 'GET that Patient id, token A, engine B (cross-tenant)',
   f_ctrl: 'GET Patient?_count=1, reader token B, engine B (positive control for f)',
   f: 'POST Patient, reader token B, engine B (scope denial)',
+  // #5489: the BARE tenant base (no facility segment) serves HAPI's DEFAULT partition.
+  g: 'POST Patient at the bare base, writer token A, engine A (Location has no partition segment)',
+  h: 'GET that bare-base Patient at the bare base, token A, engine A',
+  i: 'GET the facility Patient from (c) at the bare base, token A, engine A (DEFAULT must not see a facility)',
 });
 const STEP_ORDER = Object.keys(EXPECT);
 
@@ -287,6 +291,16 @@ created_id() {
   printf '%s' "$id"
 }
 
+# yes when the create's Location is at the bare base (.../fhir/Patient/...), no when it carries a segment (.../fhir/<p>/Patient/...).
+location_bare() {
+  loc=''
+  while IFS= read -r line; do
+    line=\${line%"$CR"}
+    case "$line" in [Ll]ocation:*) loc=\${line#*:} ;; esac
+  done < "$HF"
+  case "$loc" in *'/fhir/Patient/'*) printf 'yes' ;; *) printf 'no' ;; esac
+}
+
 body_has_id() { # $1 = id ; 0 when the response body is a Patient whose id is $1
   b=''
   while IFS= read -r line || [ -n "$line" ]; do b="$b$line"; done < "$BF"
@@ -320,11 +334,24 @@ if [ -n "$PID" ]; then
 fi
 req hdrB GET "$BASE_B/$PART/Patient?_count=1";  echo "PROBE step=f_ctrl status=$CODE"
 req hdrB POST "$BASE_B/$PART/Patient" "$PAT";   echo "PROBE step=f status=$CODE"
+
+# (g..i) #5489: the bare tenant base serves the DEFAULT partition, which is distinct from the facility partition.
+req hdrA POST "$BASE_A/Patient" "$PAT"
+GID=''; BARE=no
+if [ "$CODE" = "201" ]; then GID=$(created_id); BARE=$(location_bare); fi
+if [ -n "$GID" ]; then echo "PROBE step=g status=$CODE id=$GID bare=$BARE"; else echo "PROBE step=g status=$CODE bare=$BARE"; fi
+if [ -n "$GID" ]; then
+  req hdrA GET "$BASE_A/Patient/$GID"
+  if [ "$CODE" = "200" ] && body_has_id "$GID"; then echo "PROBE step=h status=$CODE id_match=yes"; else echo "PROBE step=h status=$CODE id_match=no"; fi
+fi
+if [ -n "$PID" ]; then
+  req hdrA GET "$BASE_A/Patient/$PID";          echo "PROBE step=i status=$CODE"
+fi
 exit 0
 `;
 }
 
-const PROBE_LINE = /^PROBE step=([a-z_]+) status=(\d{3})(?: id=([A-Za-z0-9.-]{1,64}))?(?: id_match=(yes|no))?$/;
+const PROBE_LINE = /^PROBE step=([a-z_]+) status=(\d{3})(?: id=([A-Za-z0-9.-]{1,64}))?(?: id_match=(yes|no))?(?: bare=(yes|no))?$/;
 
 /** The step results in a pod's log text. The LAST line per step wins; anything that is not a PROBE line is ignored and never echoed. */
 export function parseProbeLogs(text) {
@@ -332,7 +359,7 @@ export function parseProbeLogs(text) {
   for (const raw of String(text ?? '').split(/\r?\n/)) {
     const m = PROBE_LINE.exec(raw.trim());
     if (!m || !STEP_ORDER.includes(m[1])) continue;
-    out[m[1]] = { status: Number(m[2]), ...(m[3] ? { id: m[3] } : {}), ...(m[4] ? { idMatch: m[4] === 'yes' } : {}) };
+    out[m[1]] = { status: Number(m[2]), ...(m[3] ? { id: m[3] } : {}), ...(m[4] ? { idMatch: m[4] === 'yes' } : {}), ...(m[5] ? { bare: m[5] === 'yes' } : {}) };
   }
   const tries = [...String(text ?? '').matchAll(/^PROBE step=c_try n=(\d+) status=(\d{3})$/gm)].map((m) => ({ n: Number(m[1]), status: Number(m[2]) }));
   return { steps: out, tries };
@@ -392,6 +419,36 @@ export function judge(parsed) {
   else if (f.status !== 403) put('f', 'fail', 'expected 403');
   else if (ctrlOk) put('f', 'pass', '');
   else put('f', 'unmeasured', '403 is not evidence while the reader positive control (f_ctrl) did not pass');
+  // g (#5489): a create at the BARE base is 201 with an id and a Location at the bare base. 400/404 is the #5489 defect
+  // itself (the engine consumed "Patient" as a partition name). A 403 is a fail only once the same writer was admitted at
+  // the facility base (c); before that it cannot be told apart from the PDP not admitting the tenant at all.
+  const g = s.g;
+  if (!g) put('g', 'unmeasured', 'no result line for this step');
+  else if (UNAVAILABLE(g.status)) put('g', 'unmeasured', 'no usable answer');
+  else if (g.status === 201 && !g.id) put('g', 'fail', 'created, but the Location header carried no Patient id');
+  else if (g.status === 201 && g.bare !== true) put('g', 'fail', 'created, but the Location carries a partition segment (e.g. /DEFAULT): a client at the bare base is sent elsewhere');
+  else if (g.status === 201) put('g', 'pass', '');
+  else if (g.status === 403 && !cOk) put('g', 'unmeasured', '403 is not evidence while the same writer was not admitted at the facility base (c)');
+  else if (g.status === 400 || g.status === 404) put('g', 'fail', `expected 201; ${g.status} is #5489 (the bare base read "Patient" as a partition name)`);
+  else put('g', 'fail', 'expected 201');
+  const gOk = res.g.verdict === 'pass';
+  // h: the bare-base Patient reads back at the bare base, and it is the one created.
+  if (!gOk) put('h', 'unmeasured', 'not evaluated: the bare-base create (g) did not pass');
+  else if (!s.h) put('h', 'unmeasured', 'no result line for this step');
+  else if (UNAVAILABLE(s.h.status)) put('h', 'unmeasured', 'no usable answer');
+  else if (s.h.status !== 200) put('h', 'fail', 'expected 200');
+  else if (s.h.idMatch !== true) put('h', 'fail', 'the read returned 200 but the body is not the Patient that was created');
+  else put('h', 'pass', '');
+  const hOk = res.h.verdict === 'pass';
+  // i: the FACILITY Patient from (c) is NOT readable at the bare base. A success is a leak and fails regardless. A 404 counts
+  // only when the facility read (d) and the bare-base read (h) passed: with #5489 unfixed EVERY bare-base read is 404.
+  const i = s.i;
+  if (i && i.status >= 200 && i.status < 300) put('i', 'fail', `PARTITION LEAK: the facility Patient answered ${i.status} at the bare base (DEFAULT)`);
+  else if (!i) put('i', 'unmeasured', cOk ? 'no result line for this step' : 'not evaluated: no facility Patient was created to read');
+  else if (UNAVAILABLE(i.status)) put('i', 'unmeasured', 'no usable answer');
+  else if (i.status !== 404) put('i', 'fail', 'expected 404');
+  else if (cOk && dOk && hOk) put('i', 'pass', '');
+  else put('i', 'unmeasured', '404 is not evidence while the facility read (d) or the bare-base read (h) did not pass');
   const list = STEP_ORDER.map((k) => res[k]);
   const code = list.some((r) => r.verdict === 'fail') ? 1 : list.some((r) => r.verdict === 'unmeasured') ? 2 : 0;
   return { results: list, code };

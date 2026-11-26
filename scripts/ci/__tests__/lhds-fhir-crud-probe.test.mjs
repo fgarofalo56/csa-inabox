@@ -131,18 +131,62 @@ const ALL_OK = [
   'PROBE tool sleep=yes', 'PROBE step=a status=200', 'PROBE step=b status=401', 'PROBE step=c_try n=1 status=201',
   'PROBE step=c status=201 id=77', 'PROBE step=d status=200 id_match=yes', 'PROBE step=e status=403',
   'PROBE step=f_ctrl status=200', 'PROBE step=f status=403',
+  'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=h status=200 id_match=yes', 'PROBE step=i status=404',
 ].join('\n');
 const verdictOf = (logs) => Object.fromEntries(judge(parseProbeLogs(logs)).results.map((r) => [r.step, r.verdict]));
 const swap = (logs, from, to) => { assert.ok(logs.includes(from), `fixture drift: ${from} is not in the fixture`); return logs.replace(from, to); };
 
 test('judge: the all-correct fixture passes every step and exits 0 (positive control: breaks if a correct run is reported as a failure)', () => {
   const v = judge(parseProbeLogs(ALL_OK));
-  assert.deepEqual(v.results.map((r) => `${r.step}:${r.verdict}`), ['a:pass', 'b:pass', 'c:pass', 'd:pass', 'e:pass', 'f_ctrl:pass', 'f:pass']);
+  assert.deepEqual(v.results.map((r) => `${r.step}:${r.verdict}`),
+    ['a:pass', 'b:pass', 'c:pass', 'd:pass', 'e:pass', 'f_ctrl:pass', 'f:pass', 'g:pass', 'h:pass', 'i:pass']);
   assert.equal(v.code, 0);
 });
 
-test('judge: EXPECT is a:200 b:401 c:201 d:200 e:403 f_ctrl:200 f:403 (breaks if any expected code is edited)', () => {
-  assert.deepEqual({ ...EXPECT }, { a: 200, b: 401, c: 201, d: 200, e: 403, f_ctrl: 200, f: 403 });
+test('judge: EXPECT is a:200 b:401 c:201 d:200 e:403 f_ctrl:200 f:403 g:201 h:200 i:404 (breaks if any expected code is edited)', () => {
+  assert.deepEqual({ ...EXPECT }, { a: 200, b: 401, c: 201, d: 200, e: 403, f_ctrl: 200, f: 403, g: 201, h: 200, i: 404 });
+});
+
+// #5489 bare-base steps. Each names the value that breaks it.
+test('judge: (g) the #5489 defect (400 on the bare-base create) FAILS and names #5489; (h) and (i) are then not passes (breaks if a 400/404 at the bare base is unmeasured or a pass)', () => {
+  const logs = swap(swap(ALL_OK, 'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=400 bare=no'), 'PROBE step=h status=200 id_match=yes\n', '');
+  const v = judge(parseProbeLogs(logs));
+  const g = v.results.find((r) => r.step === 'g');
+  assert.equal(g.verdict, 'fail');
+  assert.match(g.note, /#5489/);
+  assert.equal(verdictOf(logs).h, 'unmeasured');
+  assert.equal(verdictOf(logs).i, 'unmeasured'); // its 404 is what the defect produces for EVERY bare-base read
+  assert.equal(v.code, 1);
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=404 bare=no')).g, 'fail');
+});
+
+test('judge: (g) 201 whose Location carries a partition segment (bare=no) FAILS; 201 with no id FAILS (breaks if the Location shape is not checked)', () => {
+  const v = judge(parseProbeLogs(swap(ALL_OK, 'bare=yes', 'bare=no')));
+  assert.equal(v.results.find((r) => r.step === 'g').verdict, 'fail');
+  assert.match(v.results.find((r) => r.step === 'g').note, /partition segment/);
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=201 bare=yes')).g, 'fail');
+  assert.equal(parseProbeLogs(ALL_OK).steps.g.bare, true); // positive: the parser reads bare=yes as true
+});
+
+test('judge: (g) 403 is a FAIL once (c) admitted the same writer, and UNMEASURED when (c) did not pass (breaks if a tenant-wide deny is blamed on the bare base)', () => {
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=403 bare=no')).g, 'fail');
+  const noC = swap(swap(ALL_OK, 'PROBE step=c status=201 id=77', 'PROBE step=c status=403'), 'PROBE step=g status=201 id=88 bare=yes', 'PROBE step=g status=403 bare=no');
+  assert.equal(verdictOf(noC).g, 'unmeasured');
+});
+
+test('judge: (h) needs 200 AND the created id (breaks if a 200 with another Patient, or a 404, passes)', () => {
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=h status=200 id_match=yes', 'PROBE step=h status=200 id_match=no')).h, 'fail');
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=h status=200 id_match=yes', 'PROBE step=h status=404 id_match=no')).h, 'fail');
+});
+
+test('judge: (i) a 200 for the facility Patient at the bare base is a PARTITION LEAK; its 404 is evidence only after (d) and (h) passed (breaks if i accepts any 2xx or credits a 404 from a broken bare base)', () => {
+  const leak = judge(parseProbeLogs(swap(ALL_OK, 'PROBE step=i status=404', 'PROBE step=i status=200')));
+  assert.equal(leak.results.find((r) => r.step === 'i').verdict, 'fail');
+  assert.match(leak.results.find((r) => r.step === 'i').note, /LEAK/);
+  assert.equal(leak.code, 1);
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=h status=200 id_match=yes', 'PROBE step=h status=200 id_match=no')).i, 'unmeasured');
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=d status=200 id_match=yes', 'PROBE step=d status=200 id_match=no')).i, 'unmeasured');
+  assert.equal(verdictOf(swap(ALL_OK, 'PROBE step=i status=404', 'PROBE step=i status=400')).i, 'fail');
 });
 
 test('judge: a 403 where 201 is expected for (c) FAILS the create, and (d)/(e) are then NOT passes (breaks if a denied create is reported as success)', () => {
@@ -250,8 +294,12 @@ test('renderProbeScript embeds no secret and reads tokens from header files only
 
 const SH = spawnSync('sh', ['-c', 'command -v curl >/dev/null 2>&1 && echo ok']).stdout?.toString().trim() === 'ok';
 
-/** Two engines on loopback. `denyWriterOnA` simulates a PDP that refuses the writer. */
-function engines({ denyWriterOnA = false, leak = false } = {}) {
+/**
+ * Two engines on loopback. `denyWriterOnA` simulates a PDP that refuses the writer. The bare base (/fhir/Patient...) is
+ * the DEFAULT partition: its create is Patient 88, and the facility Patient 77 is 404 there. `bareDefect` answers the bare
+ * base the way HAPI's own strategy did (#5489: POST 400, GET 404); `defaultLeak` serves the facility Patient at the bare base.
+ */
+function engines({ denyWriterOnA = false, leak = false, bareDefect = false, defaultLeak = false, locDefault = false } = {}) {
   const mk = (tenant) => new Promise((r) => {
     const srv = createServer((req, res) => {
       const send = (c, h = {}, b = '') => { res.writeHead(c, h); res.end(b); };
@@ -260,6 +308,13 @@ function engines({ denyWriterOnA = false, leak = false } = {}) {
       if (!auth) return send(401);
       const [who, role] = auth.slice(7).split('|');
       if (who !== tenant && !leak) return send(403);
+      if (req.url.startsWith('/fhir/Patient')) {
+        if (bareDefect) return send(req.method === 'POST' ? 400 : 404);
+        if (req.method === 'POST') return role === 'w' && !(denyWriterOnA && tenant === 'A') ? send(201, { location: `http://x/fhir/${locDefault ? 'DEFAULT/' : ''}Patient/88/_history/1` }, '{}') : send(403);
+        if (req.url.includes('Patient/88')) return send(200, {}, '{"resourceType":"Patient","id":"88"}');
+        if (req.url.includes('Patient/77')) return defaultLeak ? send(200, {}, '{"resourceType":"Patient","id":"77"}') : send(404);
+        return send(200, {}, '{"resourceType":"Bundle"}');
+      }
       if (req.method === 'POST') return role === 'w' && !(denyWriterOnA && tenant === 'A') ? send(201, { location: 'http://x/fhir/probe-site/Patient/77/_history/1' }, '{}') : send(403);
       if (req.url.includes('Patient/77')) return send(200, {}, '{"resourceType":"Patient","id":"77"}'); // no trailing newline, as HAPI sends it
       return send(200, {}, '{"resourceType":"Bundle"}');
@@ -289,14 +344,32 @@ async function runScript(opts) {
   } finally { a.close(); b.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
-test('the generated script runs under sh+curl against two loopback engines: a correct system passes all seven steps, and ONLY PROBE lines are printed', { skip: !SH && 'sh or curl is not available' }, async () => {
+test('the generated script runs under sh+curl against two loopback engines: a correct system passes all ten steps, and ONLY PROBE lines are printed', { skip: !SH && 'sh or curl is not available' }, async () => {
   const r = await runScript({});
   assert.equal(r.code, 0);
   assert.ok(r.out.split('\n').filter(Boolean).every((l) => l.startsWith('PROBE ')), r.out);
   assert.equal(r.out.includes('Bearer'), false);
   const v = judge(parseProbeLogs(r.out));
-  assert.deepEqual(v.results.map((x) => x.verdict), ['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass'], r.out);
+  assert.deepEqual(v.results.map((x) => `${x.step}:${x.verdict}`),
+    ['a:pass', 'b:pass', 'c:pass', 'd:pass', 'e:pass', 'f_ctrl:pass', 'f:pass', 'g:pass', 'h:pass', 'i:pass'], r.out);
   assert.equal(parseProbeLogs(r.out).steps.c.id, '77');
+  assert.equal(parseProbeLogs(r.out).steps.g.id, '88');
+  assert.equal(parseProbeLogs(r.out).steps.g.bare, true);
+});
+
+test('under sh+curl, an engine with the #5489 defect fails (g) and a DEFAULT that serves the facility Patient fails (i); (a)..(f) are unchanged (breaks if the script misreads either)', { skip: !SH && 'sh or curl is not available' }, async () => {
+  const defect = judge(parseProbeLogs((await runScript({ bareDefect: true })).out));
+  assert.deepEqual(defect.results.map((x) => `${x.step}:${x.verdict}`),
+    ['a:pass', 'b:pass', 'c:pass', 'd:pass', 'e:pass', 'f_ctrl:pass', 'f:pass', 'g:fail', 'h:unmeasured', 'i:unmeasured']);
+  assert.equal(defect.code, 1);
+  const leaky = judge(parseProbeLogs((await runScript({ defaultLeak: true })).out));
+  assert.equal(leaky.results.find((x) => x.step === 'i').verdict, 'fail');
+  assert.equal(leaky.results.find((x) => x.step === 'g').verdict, 'pass');
+  assert.equal(leaky.code, 1);
+  // A create whose Location gained /DEFAULT (massageServerBaseUrl appending the partition) is read as bare=no by the script.
+  const loc = (await runScript({ locDefault: true })).out;
+  assert.match(loc, /^PROBE step=g status=201 id=88 bare=no$/m);
+  assert.equal(judge(parseProbeLogs(loc)).results.find((x) => x.step === 'g').verdict, 'fail');
 });
 
 test('under sh+curl, a writer the engine REFUSES fails (c) and a leaky engine fails (e) (breaks if the script reports the wrong code for either)', { skip: !SH && 'sh or curl is not available' }, async () => {

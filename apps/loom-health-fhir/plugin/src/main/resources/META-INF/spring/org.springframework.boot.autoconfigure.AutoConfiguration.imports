@@ -1,1 +1,2 @@
 ai.loom.health.fhir.partition.LoomPartitionConfiguration
+ai.loom.health.fhir.partition.LoomTenantStrategyConfiguration
