@@ -19,10 +19,26 @@ name: lhds fhiruser map
 #   5. the client id is recorded to a runner-temp file as soon as the mint returns; the (always) cleanup step
 #      PATCH-disables each recorded id and checks the answer, in addition to the in-process disable. A lost runner
 #      runs neither: the client then stays active until disabled by hand (PATCH .../clients/<id> status=disabled).
+#   OPTIONAL, additive, off by default (the steps above run exactly as before without them):
+#   6. bind_group_id (an Entra GROUP object id, not secret; must not equal the oid secret) + bind_role (a CHOICE of
+#      the read-only SMART roles fhir-smart-user | fhir-data-reader; the job has no environment approval, so no
+#      writer/admin/break-glass role is offered, and the script re-checks it against role-scope-map.v1.json read from
+#      the file). A preflight BEFORE the mint reads the tenant's role bindings and decides; only AFTER the mapping
+#      succeeds is the pair MERGED in (never dropping a binding; nothing added if present), PUT with v1Scopes:false
+#      and read back. Why false: v2 `.rs` scopes parse whatever the flag, so this is not about Inferno's scopes;
+#      false KEEPS the effective state of a tenant with no binding doc (auth reads a missing doc as v1 off, though
+#      its GET answers v1Scopes:true) and stops advertising permission-v1. Why guarded: on an existing doc with
+#      v1Scopes:true, false stops v1 scopes (.read/.write/.*) being accepted on every SMART authorize of the tenant,
+#      for every client. So such a doc with other bindings is REFUSED (nothing created) unless set_v2_scopes.
+#   7. seed_patient: the same temporary client, its scope widened to system/Practitioner.cr system/Patient.cr ONLY
+#      then, conditionally creates (If-None-Exist on urn:loom:lhds:synthetic-patient|fhiruser-map-<tenant>) ONE
+#      synthetic Patient (HTEST tag, name "Synthetic InfernoPatient", no PHI) and reads it back; Patient/<id> is in
+#      the summary. Skipped when the mapped Practitioner does not resolve (a refusal creates nothing). The VERDICT line names each part: map=MAPPED|UNCHANGED bind=BOUND|UNCHANGED seed=SEEDED|UNCHANGED.
 #
 # THE OID IS A SECRET INPUT. The Entra object id comes ONLY from the repo secret LHDS_FHIRUSER_OID (this repo is public
 # and dispatch inputs are visible). It is masked by Actions, scrubbed from every line the script prints in every letter
-# case, and absent from the step summary, which carries only the tenant, Practitioner/<id> and mapping=ok.
+# case, and absent from the step summary, which carries only the tenant, Practitioner/<id> and mapping=ok
+# (plus, when asked for, the bound group id + role and Patient/<id>; none of those is the oid).
 #
 # SCOPE: Commercial dev01 only (the in-VNet `loom-aca` fleet exists only there; Gov has no equivalent runner, a
 # disclosed gap per cloud-parity.md). Caller: the deploy SP (HealthCP.Admin + control plane allowlist, and rights to
@@ -45,6 +61,25 @@ on:
         description: Replace an EXISTING mapping whose Practitioner answers 404/410 (it may be one this tool did not make)
         type: boolean
         default: false
+      bind_group_id:
+        description: OPTIONAL Entra group object id (GUID) to bind to bind_role on the tenant. Empty = no binding
+        type: string
+        default: ''
+      bind_role:
+        description: Read-only SMART role for bind_group_id (no writer/admin role is offered; the script re-checks it)
+        type: choice
+        options:
+          - fhir-smart-user
+          - fhir-data-reader
+        default: fhir-smart-user
+      set_v2_scopes:
+        description: Allow switching v1Scopes true->false on a tenant that already has OTHER bindings (affects every client)
+        type: boolean
+        default: false
+      seed_patient:
+        description: Also create (or reuse) ONE synthetic Patient at the tenant bare base
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,6 +99,10 @@ jobs:
       TENANT: ${{ inputs.tenant_id }}
       DISPLAY_NAME: ${{ inputs.display_name }}
       REPLACE_MISSING: ${{ inputs.replace_missing }}
+      BIND_GROUP_ID: ${{ inputs.bind_group_id }}
+      BIND_ROLE: ${{ inputs.bind_role }}
+      SET_V2_SCOPES: ${{ inputs.set_v2_scopes }}
+      SEED_PATIENT: ${{ inputs.seed_patient }}
       SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -83,8 +122,17 @@ jobs:
           if [ -z "$LHDS_FHIRUSER_OID" ]; then echo "::error::the LHDS_FHIRUSER_OID repo secret is empty or not set. Nothing was contacted."; exit 1; fi
           [[ "$LHDS_FHIRUSER_OID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "::error::the LHDS_FHIRUSER_OID repo secret is not a GUID (value withheld). Nothing was contacted."; exit 1; }
           [[ "$REPLACE_MISSING" =~ ^(true|false)$ ]] || { echo "::error::replace_missing must be true or false"; exit 1; }
+          [[ "$SET_V2_SCOPES" =~ ^(true|false)$ ]] || { echo "::error::set_v2_scopes must be true or false"; exit 1; }
+          [[ "$SEED_PATIENT" =~ ^(true|false)$ ]] || { echo "::error::seed_patient must be true or false"; exit 1; }
+          if [ -n "$BIND_GROUP_ID" ]; then
+            [[ "$BIND_GROUP_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "::error::bind_group_id must be a GUID (an Entra group object id)"; exit 1; }
+            # The group id is echoed below; the oid must not be. Equal (any case) = the oid was pasted as the group: refuse, print neither.
+            if [ "${BIND_GROUP_ID,,}" = "${LHDS_FHIRUSER_OID,,}" ]; then echo "::error::bind_group_id equals the LHDS_FHIRUSER_OID secret (a user object id, not a group); neither value is printed. Nothing was contacted."; exit 1; fi
+            # The choice input already limits this; the script re-checks it against role-scope-map.v1.json read from the file.
+            [[ "$BIND_ROLE" =~ ^(fhir-smart-user|fhir-data-reader)$ ]] || { echo "::error::bind_role must be fhir-smart-user or fhir-data-reader"; exit 1; }
+          fi
           if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
-          echo "inputs valid: tenant $TENANT; replace_missing $REPLACE_MISSING; oid secret present and GUID-shaped (value withheld)"
+          echo "inputs valid: tenant $TENANT; replace_missing $REPLACE_MISSING; bind ${BIND_GROUP_ID:-none} -> $BIND_ROLE; set_v2_scopes $SET_V2_SCOPES; seed_patient $SEED_PATIENT; oid secret present and GUID-shaped (value withheld)"
 
       - name: Azure login (Commercial - limitlessdata_deploy SP)
         uses: azure/login@v2
@@ -164,7 +212,8 @@ jobs:
           LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhiruser-map.mjs --phase map \
             --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID" --display-name "$DISPLAY_NAME" \
             --replace-missing "$REPLACE_MISSING" --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
-            --summary-file "$GITHUB_STEP_SUMMARY" --client-file "$RUNNER_TEMP/lhds-fhiruser-map-clients.txt"
+            --summary-file "$GITHUB_STEP_SUMMARY" --client-file "$RUNNER_TEMP/lhds-fhiruser-map-clients.txt" \
+            --bind-group-id "$BIND_GROUP_ID" --bind-role "$BIND_ROLE" --set-v2-scopes "$SET_V2_SCOPES" --seed-patient "$SEED_PATIENT"
           rc=$?
           set -e
           echo "exit code: $rc (0 = mapped, 1 = defect/refused, 2 = UNMEASURED: nothing here is a claim the engine or control plane is broken)"
