@@ -1678,7 +1678,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the 503 state goes through sendHtml too
     expect(r.headers.get('x-frame-options')).toBe('DENY');
     expect(r.text).toContain('Patient search is unavailable');
-    expect(r.text).toContain('The tenant FHIR endpoint did not respond');
+    expect(r.text).toContain('The tenant FHIR endpoint could not be searched');
     expect(r.text).not.toContain('type="radio"'); // breaks if any patient is rendered without a FHIR answer
     expect(r.text).toContain('value="cancel"'); // Cancel stays available
     expect(seen.map((x) => x.url)).toEqual([`${fhir('visn-01')}/Patient?name=smith&_count=20`]);

@@ -11,6 +11,7 @@ import { createCosmosStores } from './store/cosmos.js';
 import { authoredMessage } from './safe-error.js';
 import { DefaultAzureCredential } from '@azure/identity';
 import { loadIngressCertConfig, scheduleIngressCert } from './tls/ingress-cert.js';
+import { StampIngressTrust } from './tls/stamp-trust.js';
 import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
 import { fhirEngineHostFromConfig, loadFhirEngineConfig } from './jobs/fhir-engine-config.js';
 import { loadStampSelfRegistration, scheduleStampSelfRegistration } from './registry/self-register.js';
@@ -56,6 +57,12 @@ function main(): void {
   } else {
     log('fhir_engine.disabled', { reason: !engineCfg ? 'LOOM_HEALTH_CP_FHIR_IMAGE and LOOM_HEALTH_CP_PG_CLIENT_IMAGE unset' : 'LOOM_HEALTH_CP_PDP_URL unset (an engine without a PDP answers 503)' });
   }
+  // Interim until #5495 (Front Door + a trusted cert): the AS patient search trusts the self-signed ingress
+  // certificate THIS control plane issued, for the stamp ingress origin only (tls/stamp-trust.ts).
+  const stampTrust = tlsCfg ? new StampIngressTrust({ fqdn: tlsCfg.fqdn, log }) : undefined;
+  if (!stampTrust) {
+    log('tls.stamp_trust_disabled', { reason: 'LOOM_HEALTH_CP_TLS_FQDN unset: the CP issues no ingress certificate, so FHIR calls use the default trust' });
+  }
   const app = compose({
     stores,
     auth: authOptionsFromConfig(cfg),
@@ -63,7 +70,7 @@ function main(): void {
     // Cosmos-backed by default (published via PUT .../bundle); a configured dir overrides it (read-only, dev).
     bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : new CollectionBundleSource(stores.pdpBundles, undefined, bundleSigner),
     bundleKey: bundleSigner ? () => verificationKeyPem(bundleSigner) : undefined,
-    authServer: authServerInitFromConfig(cfg, authCfg),
+    authServer: { ...authServerInitFromConfig(cfg, authCfg), ...(stampTrust ? { fetchFhir: stampTrust.fetch } : {}) },
     tenantArm,
     fhirEngine,
     log,
@@ -78,7 +85,15 @@ function main(): void {
   // #5345: ensure the stamp ingress certificate in Key Vault (startup + timer). Off when the TLS vars are unset.
   if (tlsCfg) {
     const credential = new DefaultAzureCredential({ authorityHost: `https://${cfg.authorityHost}` });
-    scheduleIngressCert({ cfg: tlsCfg, getToken: async (scope) => (await credential.getToken(scope)).token }, log);
+    scheduleIngressCert(
+      {
+        cfg: tlsCfg,
+        getToken: async (scope) => (await credential.getToken(scope)).token,
+        // Every run re-reads the certificate, so a rotation re-pins within one timer interval.
+        onCertificate: (cer) => stampTrust?.setCertificate(cer),
+      },
+      log,
+    );
   }
 
   // #5377: register this stamp in our own registry and mark it healthy once its deployment reads back. A failure

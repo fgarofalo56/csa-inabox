@@ -137,7 +137,7 @@ describe('createFhirPatientSearch', () => {
     await expect(refused.s.search('t1', 'o', [], { name: 'x' })).rejects.toBeInstanceOf(PatientSearchUnavailableError);
     // Never answers; rejects only when the AbortSignal fires, as undici does. Breaks (hangs) if no timeout signal is passed.
     const slow = make((_u, init) => new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))), 20);
-    await expect(slow.s.search('t1', 'o', [], { name: 'x' })).rejects.toThrow(/unavailable: (timeout|no response)/);
+    await expect(slow.s.search('t1', 'o', [], { name: 'x' })).rejects.toThrow(/unavailable: timeout$/);
     await expect(make(() => json(500, {})).s.search('t1', 'o', [], { name: 'x' })).rejects.toThrow('HTTP 500');
     await expect(make(() => json(200, { resourceType: 'OperationOutcome' })).s.search('t1', 'o', [], { name: 'x' })).rejects.toThrow('not a Bundle');
   });
@@ -153,5 +153,40 @@ describe('createFhirPatientSearch', () => {
     expect(await s.read('t1', 'o', [], '..')).toBeUndefined();
     expect(calls.length).toBe(before); // a dot-only id never builds a URL
     await expect(make(() => Promise.reject(new TypeError('fetch failed'))).s.read('t1', 'o', [], 'p1')).rejects.toBeInstanceOf(PatientSearchUnavailableError);
+  });
+
+  // R7: the live picker logged `reason: no response` for what may have been a rejected certificate. Each row is the
+  // shape undici rejects with (TypeError('fetch failed') + a coded cause); the expected reason is what the AS logs.
+  // Breaks if the classes collapse back to one label (every row would read the same), if TLS codes fall to
+  // `network`, or if the cause chain / AggregateError member is not walked (those rows would read `network`).
+  const failed = (cause: unknown) => new TypeError('fetch failed', { cause });
+  const coded = (code: string) => Object.assign(new Error('x'), { code });
+  it.each([
+    [failed(coded('SELF_SIGNED_CERT_IN_CHAIN')), 'tls SELF_SIGNED_CERT_IN_CHAIN', 'tls'],
+    [failed(coded('DEPTH_ZERO_SELF_SIGNED_CERT')), 'tls DEPTH_ZERO_SELF_SIGNED_CERT', 'tls'],
+    [failed(coded('ERR_TLS_CERT_ALTNAME_INVALID')), 'tls ERR_TLS_CERT_ALTNAME_INVALID', 'tls'],
+    [failed(coded('CERT_HAS_EXPIRED')), 'tls CERT_HAS_EXPIRED', 'tls'],
+    [failed(coded('ENOTFOUND')), 'dns ENOTFOUND', 'dns'],
+    [failed(coded('EAI_AGAIN')), 'dns EAI_AGAIN', 'dns'],
+    [failed(coded('ECONNREFUSED')), 'refused ECONNREFUSED', 'refused'],
+    [failed(new AggregateError([coded('ECONNREFUSED')])), 'refused ECONNREFUSED', 'refused'],
+    [failed(coded('ECONNRESET')), 'reset ECONNRESET', 'reset'],
+    [failed(coded('EHOSTUNREACH')), 'network EHOSTUNREACH', 'network'],
+    [new TypeError('fetch failed'), 'network', 'network'],
+    [new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'timeout', 'timeout'],
+    [new DOMException('This operation was aborted', 'AbortError'), 'timeout', 'timeout'],
+  ])('a fetch rejected with %s is logged as %j', async (err, reason, kind) => {
+    const e = (await make(() => Promise.reject(err)).s.search('t1', 'o', [], { name: 'x' }).catch((x: unknown) => x)) as PatientSearchUnavailableError;
+    expect(e).toBeInstanceOf(PatientSearchUnavailableError);
+    expect(e.reason).toBe(reason);
+    expect(e.kind).toBe(kind);
+  });
+
+  it('never puts the URL, token or a message into the reason: a code that is not a bare token is dropped', async () => {
+    // Breaks if the classifier copies a free-text code (or the message) into the logged reason.
+    const err = failed(Object.assign(new Error('https://stamp.example/t1/fhir Bearer tok-1'), { code: 'https://stamp.example/?tok-1' }));
+    const e = (await make(() => Promise.reject(err)).s.search('t1', 'o', [], { name: 'x' }).catch((x: unknown) => x)) as PatientSearchUnavailableError;
+    expect(e.reason).toBe('network');
+    expect(e.message).toBe('patient search unavailable: network');
   });
 });

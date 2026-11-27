@@ -136,7 +136,7 @@ export function renderPicker(v: PickerView): string {
       middle = note('warning', 'Check the search', s.message);
       break;
     case 'unavailable':
-      middle = note('error', 'Patient search is unavailable', 'The tenant FHIR endpoint did not respond, so no patient can be selected right now. Cancel to return to the app, or try again later.');
+      middle = note('error', 'Patient search is unavailable', 'The tenant FHIR endpoint could not be searched, so no patient can be selected right now. Cancel to return to the app, or try again later.');
       break;
     case 'not-permitted':
       middle = note('error', 'You are not permitted to search patients in this tenant', 'Your roles in this tenant do not include reading Patient records. Ask a tenant administrator for a FHIR reader role. You can continue without a patient (the app gets no patient-level access) or cancel to return to the app.');

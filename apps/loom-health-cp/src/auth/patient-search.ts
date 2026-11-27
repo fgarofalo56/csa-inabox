@@ -28,10 +28,85 @@ export interface PatientSearch {
   read(tenant: string, oid: string, roles: readonly string[], id: string): Promise<PatientSummary | undefined>;
 }
 
+/**
+ * Why a FHIR request produced no HTTP response. Fixed classes only; the URL, token and body never appear.
+ *   tls      the server certificate was rejected (untrusted, self-signed, expired, wrong host)
+ *   dns      the host name did not resolve
+ *   refused  the TCP connection was refused
+ *   reset    the connection was reset
+ *   timeout  no answer before the deadline
+ *   network  any other failure before a response
+ */
+export type FetchFailureClass = 'tls' | 'dns' | 'refused' | 'reset' | 'timeout' | 'network';
+
+const TLS_CODES = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'CERT_UNTRUSTED',
+  'CERT_REJECTED',
+  'CERT_SIGNATURE_FAILURE',
+  'CERT_CHAIN_TOO_LONG',
+  'INVALID_CA',
+  'HOSTNAME_MISMATCH',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'EPROTO',
+]);
+const ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
+
+/** The first well-formed error code on the error, its cause chain, or an AggregateError's members. */
+export function fetchErrorCode(e: unknown, depth = 0): string | undefined {
+  if (!e || typeof e !== 'object' || depth > 4) return undefined;
+  const o = e as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof o.code === 'string' && ERROR_CODE.test(o.code)) return o.code;
+  const fromCause = fetchErrorCode(o.cause, depth + 1);
+  if (fromCause) return fromCause;
+  if (Array.isArray(o.errors)) {
+    for (const x of o.errors) {
+      const c = fetchErrorCode(x, depth + 1);
+      if (c) return c;
+    }
+  }
+  return undefined;
+}
+
+/** Map a rejected fetch to a fixed class plus the error code (when one is present). */
+export function classifyFetchFailure(e: unknown): { kind: FetchFailureClass; code?: string } {
+  const name = e instanceof Error || (e && typeof e === 'object') ? (e as { name?: unknown }).name : undefined;
+  if (name === 'TimeoutError' || name === 'AbortError') return { kind: 'timeout' };
+  const code = fetchErrorCode(e);
+  const withCode = <K extends FetchFailureClass>(kind: K) => (code ? { kind, code } : { kind });
+  if (!code) return { kind: 'network' };
+  if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_HEADERS_TIMEOUT') return withCode('timeout');
+  if (TLS_CODES.has(code) || code.startsWith('ERR_TLS_') || code.startsWith('ERR_SSL_')) return withCode('tls');
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return withCode('dns');
+  if (code === 'ECONNREFUSED') return withCode('refused');
+  if (code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') return withCode('reset');
+  return withCode('network');
+}
+
 export class PatientSearchUnavailableError extends Error {
-  constructor(readonly reason: string) {
+  /** Set when the request produced no HTTP response. */
+  readonly kind?: FetchFailureClass;
+  readonly code?: string;
+
+  constructor(readonly reason: string, failure?: { kind: FetchFailureClass; code?: string }) {
     super(`patient search unavailable: ${reason}`);
     this.name = 'PatientSearchUnavailableError';
+    if (failure) {
+      this.kind = failure.kind;
+      if (failure.code) this.code = failure.code;
+    }
+  }
+
+  /** reason = `<class>` or `<class> <CODE>`, e.g. "tls DEPTH_ZERO_SELF_SIGNED_CERT". Logged as-is by the AS. */
+  static fromFetchFailure(e: unknown): PatientSearchUnavailableError {
+    const f = classifyFetchFailure(e);
+    return new PatientSearchUnavailableError(f.code ? `${f.kind} ${f.code}` : f.kind, f);
   }
 }
 
@@ -87,8 +162,8 @@ export function createFhirPatientSearch(o: FhirPatientSearchOptions): PatientSea
         headers: { accept: 'application/fhir+json', authorization: `Bearer ${bearer}` },
       });
     } catch (e) {
-      // Network failure, DNS failure or the timeout: the endpoint did not respond. Nothing else is claimed.
-      throw new PatientSearchUnavailableError(e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'no response');
+      // No HTTP response. Say WHICH failure (R7): a rejected certificate is not "did not respond".
+      throw PatientSearchUnavailableError.fromFetchFailure(e);
     }
     let body: unknown;
     try {
