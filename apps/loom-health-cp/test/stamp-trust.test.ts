@@ -6,6 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer, type Server } from 'node:https';
 import { Agent } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -38,6 +39,11 @@ const servers: Server[] = [];
 async function serve(p: Pair): Promise<number> {
   const s = createServer({ key: p.key, cert: p.cert }, (req, res) => {
     if (req.url === '/hang') return; // never answers: the timeout test
+    if (req.url === '/redirect') {
+      res.writeHead(302, { location: `http://127.0.0.1:${targetPort}/hit` });
+      res.end();
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/fhir+json' });
     res.end(JSON.stringify({ resourceType: 'Bundle', entry: [{ resource: { resourceType: 'Patient', id: 'p1', name: [{ text: 'Ada' }] } }] }));
   });
@@ -53,12 +59,25 @@ let portA: number; // serves A
 let portA2: number; // also serves A, on another origin
 let portB: number; // serves B
 let portC: number; // serves C
+let D: Pair; // a third certificate for the same host (rotation bound)
+let W: Pair; // a WILDCARD certificate, *.wild.test
+let targetPort: number; // plain-http redirect target; counts hits
+let targetHits = 0;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'lhds-stamp-trust-'));
   A = selfSigned('a', HOST);
   B = selfSigned('b', HOST);
   C = selfSigned('c', 'other.invalid');
+  D = selfSigned('d', HOST);
+  W = selfSigned('w', '*.wild.test');
+  const target = createHttpServer((_req, res) => {
+    targetHits++;
+    res.end('reached');
+  });
+  servers.push(target as unknown as Server);
+  await new Promise<void>((r) => target.listen(0, '127.0.0.1', r));
+  targetPort = (target.address() as AddressInfo).port;
   portA = await serve(A);
   portA2 = await serve(A);
   portB = await serve(B);
@@ -197,7 +216,7 @@ describe('StampIngressTrust fallback and refusal', () => {
     // Breaks if the vault's certificate is pinned without checking it is the stamp's own (C names other.invalid).
     const { t } = trustFor(portA);
     t.setCertificate(C.cer);
-    expect(t.state()).toEqual({ pinned: false, reason: 'the vault certificate does not name the stamp FQDN' });
+    expect(t.state()).toEqual({ pinned: false, reason: 'the vault certificate does not name the stamp FQDN exactly' });
   });
 
   it('an unusable read after a good pin keeps the pin (the ingress still serves it)', async () => {
@@ -212,5 +231,78 @@ describe('StampIngressTrust fallback and refusal', () => {
   it('origin is https://<fqdn> on 443 (no port), as fhirBaseFor builds it from LOOM_HEALTH_CP_FHIR_BASE_URL', () => {
     const t = new StampIngressTrust({ fqdn: 'LHDS-dev01-x.centralus.cloudapp.azure.com', log: () => {} });
     expect(t.origin).toBe('https://lhds-dev01-x.centralus.cloudapp.azure.com');
+  });
+});
+
+describe('StampIngressTrust hardening', () => {
+  const clocked = (port: number, graceMs: number) => {
+    let now = 1_000_000;
+    const logs: Log[] = [];
+    const t = new StampIngressTrust({ fqdn: HOST, port, graceMs, now: () => now, log: (event, f) => logs.push({ event, f }) });
+    return { t, logs, advance: (ms: number) => { now += ms; } };
+  };
+  const fp = (p: Pair) => new X509Certificate(p.cert).fingerprint256;
+
+  it('the trust list is bounded at two: A, B, D leaves [D, B]', () => {
+    // Breaks if rotation keeps every certificate it ever saw (length 3, A still listed).
+    const { t } = clocked(portA, 60_000);
+    t.setCertificate(A.cer);
+    t.setCertificate(B.cer);
+    t.setCertificate(D.cer);
+    const s = t.state();
+    expect(s.pinned && s.fingerprints).toEqual([fp(D), fp(B)]);
+  });
+
+  it('a rotated-out certificate is trusted inside the grace window and REJECTED (tls) after it', async () => {
+    // portA serves A. Breaks if the previous certificate is never retired (the second fetch would answer 200),
+    // or retired immediately (the first would fail). The grace is the bound the review asked for.
+    const { t, logs, advance } = clocked(portA, 60_000);
+    t.setCertificate(A.cer);
+    t.setCertificate(B.cer);
+    advance(59_000);
+    expect((await t.fetch(url(portA))).status).toBe(200);
+    advance(2_000);
+    expect((await failureOf(t.fetch(url(portA)))).kind).toBe('tls');
+    expect(t.state()).toEqual({ pinned: true, fingerprints: [fp(B)] });
+    expect(logs.some((l) => l.event === 'tls.stamp_trust_retired')).toBe(true);
+  });
+
+  it('the default grace covers the gateway Key Vault poll (4 h) plus two 15-min timer runs, and no more', async () => {
+    // Pins the chosen constant: breaks if it is shortened below the 4 h gateway poll or left unbounded.
+    const { PREVIOUS_CERT_GRACE_MS } = await import('../src/tls/stamp-trust.js');
+    expect(PREVIOUS_CERT_GRACE_MS).toBe(4.5 * 3_600_000);
+  });
+
+  it('a redirect on the pinned path is refused and its target is never reached', async () => {
+    // portA answers /redirect with 302 to a plain-http target that counts hits. Breaks if the pinned fetch follows it.
+    const { t } = trustFor(portA);
+    t.setCertificate(A.cer);
+    const before = targetHits;
+    await expect(t.fetch(url(portA, '/redirect'), { redirect: 'error' })).rejects.toThrow('fetch failed');
+    expect(targetHits).toBe(before);
+    // Positive control: the target is live, so a zero count above is a refusal, not a dead server.
+    expect(await (await fetch(`http://127.0.0.1:${targetPort}/hit`)).text()).toBe('reached');
+    expect(targetHits).toBe(before + 1);
+  });
+
+  it('a WILDCARD certificate is not pinned, even for a host it would match', () => {
+    // *.wild.test matches stamp.wild.test under checkHost's default; breaks if wildcards are accepted.
+    const logs: Log[] = [];
+    const t = new StampIngressTrust({ fqdn: 'stamp.wild.test', log: (event, f) => logs.push({ event, f }) });
+    expect(new X509Certificate(W.cert).checkHost('stamp.wild.test')).toBe('*.wild.test'); // the cert really is a match by default
+    t.setCertificate(W.cer);
+    expect(t.state()).toEqual({ pinned: false, reason: 'the vault certificate does not name the stamp FQDN exactly' });
+  });
+
+  it('an oversize cer is refused before decoding, with its own reason', () => {
+    // Breaks if the size cap is dropped: A's cer padded with a 20 KB base64 tail would then fail as "could not be
+    // parsed" (a different reason), or pin if the decoder tolerated it.
+    const { t, logs } = trustFor(portA);
+    t.setCertificate(A.cer + 'A'.repeat(20_000));
+    const reason = 'the vault certificate exceeds 16384 characters';
+    expect(t.state()).toEqual({ pinned: false, reason });
+    expect(logs.at(-1)).toEqual({ event: 'tls.stamp_trust_default', f: { origin: `https://${HOST}:${portA}`, reason } });
+    t.setCertificate(A.cer); // positive control: the unpadded value pins
+    expect(t.state().pinned).toBe(true);
   });
 });

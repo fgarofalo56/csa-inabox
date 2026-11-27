@@ -9,8 +9,8 @@
 // the CP read back from the vault; every other origin goes to the ordinary global fetch, so nothing else
 // in the process trusts the stamp cert. Hostname verification stays ON (Node's default
 // checkServerIdentity; the certificate's CN/SAN is the stamp FQDN). The pin refreshes whenever the
-// ingress-cert timer reads a different certificate, and the previous one stays trusted alongside it so
-// a gateway still serving the old version does not fail during the rotation. Until a certificate has
+// ingress-cert timer reads a different certificate, and the previous one stays trusted for a bounded
+// grace (PREVIOUS_CERT_GRACE_MS) so a gateway still serving the old version does not fail mid-rotation. Until a certificate has
 // been read, or when the vault returned one that cannot be used, the stamp origin falls back to the
 // default trust and a distinct reason is logged.
 //
@@ -35,18 +35,33 @@ export interface StampIngressTrustOptions {
   port?: number;
   /** Every non-stamp origin, and the stamp origin while nothing is pinned. Default: the global fetch at call time. */
   fallback?: typeof fetch;
+  /** How long a rotated-out certificate stays trusted. Default PREVIOUS_CERT_GRACE_MS. */
+  graceMs?: number;
+  now?: () => number;
 }
 
+/**
+ * Grace for the PREVIOUS certificate after a rotation: Application Gateway re-reads a versionless Key Vault
+ * secret on a 4-hour poll, so for up to 4 h after the CP sees version B the gateway may still present A.
+ * Plus two 15-min ingress-cert timer intervals for the CP's own lag. Bounded: A is never trusted for months.
+ */
+export const PREVIOUS_CERT_GRACE_MS = 4 * 3_600_000 + 2 * 15 * 60_000;
+/** A Key Vault RSA-2048 certificate's DER is ~1 KB of base64; anything far larger is not one. */
+export const MAX_CER_CHARS = 16 * 1024;
+
 const NO_CERT_YET = 'the ingress certificate has not been read from the vault yet';
+
+interface Pinned { pem: string; fp: string; retireAtMs?: number }
 
 export class StampIngressTrust {
   readonly origin: string;
   private readonly fqdn: string;
   private readonly log: StampIngressTrustOptions['log'];
   private readonly fallback: StampIngressTrustOptions['fallback'];
-  /** Newest first, at most two distinct PEMs. */
-  private pems: string[] = [];
-  private fingerprints: string[] = [];
+  private readonly graceMs: number;
+  private readonly now: () => number;
+  /** Newest first: the current certificate, then at most ONE previous one with a retirement time. */
+  private pinned: Pinned[] = [];
   private agent: Agent | undefined;
   private unpinnedReason = NO_CERT_YET;
 
@@ -55,10 +70,23 @@ export class StampIngressTrust {
     this.origin = new URL(`https://${this.fqdn}${o.port && o.port !== 443 ? `:${o.port}` : ''}`).origin;
     this.log = o.log;
     this.fallback = o.fallback;
+    this.graceMs = o.graceMs ?? PREVIOUS_CERT_GRACE_MS;
+    this.now = o.now ?? Date.now;
   }
 
   state(): StampTrustState {
-    return this.agent ? { pinned: true, fingerprints: [...this.fingerprints] } : { pinned: false, reason: this.unpinnedReason };
+    this.retireExpired();
+    return this.agent ? { pinned: true, fingerprints: this.pinned.map((p) => p.fp) } : { pinned: false, reason: this.unpinnedReason };
+  }
+
+  /** Drop a previous certificate whose grace has run out, and rebuild the agent without it. */
+  private retireExpired(): void {
+    const now = this.now();
+    const keep = this.pinned.filter((p) => p.retireAtMs === undefined || p.retireAtMs > now);
+    if (keep.length === this.pinned.length) return;
+    this.pinned = keep;
+    this.agent = pinnedAgent(keep.map((p) => p.pem));
+    this.log('tls.stamp_trust_retired', { origin: this.origin, certs: keep.length });
   }
 
   /**
@@ -68,20 +96,26 @@ export class StampIngressTrust {
    */
   setCertificate(cer: string | undefined): void {
     if (typeof cer !== 'string' || cer.trim() === '') return this.unusable('the vault returned no public certificate (cer)');
+    if (cer.length > MAX_CER_CHARS) return this.unusable(`the vault certificate exceeds ${MAX_CER_CHARS} characters`);
     let x: X509Certificate;
     try {
       x = new X509Certificate(Buffer.from(cer.trim(), 'base64'));
     } catch {
       return this.unusable('the vault certificate could not be parsed as X.509');
     }
-    if (x.checkHost(this.fqdn) === undefined) return this.unusable('the vault certificate does not name the stamp FQDN');
+    // Exact host only: a wildcard certificate (*.centralus.cloudapp.azure.com) is not the stamp's own.
+    if (x.checkHost(this.fqdn, { wildcards: false }) === undefined) {
+      return this.unusable('the vault certificate does not name the stamp FQDN exactly');
+    }
+    this.retireExpired();
     const fp = x.fingerprint256;
-    if (this.fingerprints[0] === fp) return;
+    if (this.pinned[0]?.fp === fp) return;
     const pem = x.toString();
-    this.pems = [pem, ...this.pems.filter((p) => p !== pem)].slice(0, 2);
-    this.fingerprints = [fp, ...this.fingerprints.filter((f) => f !== fp)].slice(0, 2);
-    this.agent = pinnedAgent(this.pems);
-    this.log('tls.stamp_trust_pinned', { origin: this.origin, certs: this.pems.length, fingerprint: fp });
+    // The outgoing current certificate keeps a bounded grace; anything older is dropped now.
+    const previous = this.pinned[0] && this.pinned[0].fp !== fp ? [{ ...this.pinned[0], retireAtMs: this.now() + this.graceMs }] : [];
+    this.pinned = [{ pem, fp }, ...previous];
+    this.agent = pinnedAgent(this.pinned.map((p) => p.pem));
+    this.log('tls.stamp_trust_pinned', { origin: this.origin, certs: this.pinned.length, fingerprint: fp });
   }
 
   private unusable(reason: string): void {
@@ -98,6 +132,7 @@ export class StampIngressTrust {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const fallback = this.fallback ?? globalThis.fetch;
     if (url.origin !== this.origin) return fallback(input, init);
+    this.retireExpired();
     if (!this.agent) {
       this.log('tls.stamp_trust_default', { origin: this.origin, reason: this.unpinnedReason });
       return fallback(input, init);
