@@ -29,7 +29,7 @@ import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backe
 import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
-import { FederationError, GraphConsentRequiredError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
+import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
@@ -1397,10 +1397,13 @@ export function createAuthServer(deps: AuthServerDeps) {
       },
     };
     try {
-      // Probe with the all-zero object id: a consent failure is the only outcome we classify.
+      // Probe with the all-zero object id. No such directory object exists, so a permitted caller gets 404 and an
+      // unpermitted one 403 (Graph authorizes before it resolves the object). 404 therefore proves the permission
+      // works; a real object id would need a principal the AS does not have at readiness time. A 200 also reads ok.
       await deps.graph.memberOf('00000000-0000-0000-0000-000000000000', ['00000000-0000-0000-0000-000000000000']);
       return { ...gate, status: 'ok' };
     } catch (e) {
+      if (e instanceof GraphObjectNotFoundError) return { ...gate, status: 'ok' };
       if (e instanceof GraphConsentRequiredError) return { ...gate, status: 'needs-consent' };
       return { ...gate, status: 'unknown' };
     }
