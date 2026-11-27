@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createAuthenticator } from '../src/middleware/auth.js';
 import { createAuthServer } from '../src/auth/server.js';
 import { ASSERTION_TYPE } from '../src/auth/backend-auth.js';
-import { GraphConsentRequiredError, type Federation, type GraphMembership } from '../src/auth/federation.js';
+import { GraphConsentRequiredError, createEntraFederation, type Federation, type GraphMembership } from '../src/auth/federation.js';
 import { LocalRsaSigner, LocalSigner, type IdTokenSigner } from '../src/auth/signer.js';
 import { createFhirUserResolver } from '../src/auth/fhir-user.js';
 import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.js';
@@ -96,6 +96,7 @@ afterEach(async () => {
 async function boot(over: {
   signer?: LocalSigner;
   idTokenSigner?: IdTokenSigner;
+  federation?: Federation;
   log?: (event: string, f: Record<string, string | number>) => void;
   patientSearch?: PatientSearch;
   fetchFhir?: typeof fetch;
@@ -125,7 +126,7 @@ async function boot(over: {
     tenants,
     signer,
     idTokenSigner,
-    federation: fed,
+    federation: over.federation ?? fed,
     graph,
     fhirBaseFor: fhir,
     // The production resolver over the fake store, exactly as wire.ts builds it (#5454 A4).
@@ -350,6 +351,69 @@ describe('authorization-code flow', () => {
     expect((await flow(c, 'user/*.rs')).token!.status).toBe(200);
     c.fed.fail = true;
     expect((await flow(c, 'user/*.rs')).redirect.searchParams.get('error')).toBe('access_denied'); // Entra failure fails closed
+  });
+
+  describe('Entra callback over the REAL federation (first headed SMART sign-in, 2026-11-27)', () => {
+    // The production createEntraFederation.exchange at the seam, with only Entra's token endpoint faked.
+    async function realFed(respond: (idToken: string, body: string) => Response, claims: Record<string, unknown>): Promise<Federation> {
+      const { publicKey, privateKey } = await generateKeyPair('RS256');
+      const ENTRA_CLIENT = 'cccccccc-0000-0000-0000-00000000000a';
+      const idToken = await new SignJWT(claims)
+        .setProtectedHeader({ alg: 'RS256', kid: 'k' })
+        .setIssuer(`https://entra.test/${TENANT}/v2.0`)
+        .setAudience(ENTRA_CLIENT)
+        .setExpirationTime('5m')
+        .sign(privateKey);
+      return createEntraFederation({
+        authorityHost: 'entra.test', entraTenantId: TENANT, clientId: ENTRA_CLIENT, getClientAssertion: async () => 'assertion-value', keyResolver: async () => publicKey,
+        fetchImpl: (async (_u: string, init: RequestInit) => respond(idToken, String(init.body))) as unknown as typeof fetch,
+      });
+    }
+    async function signIn(respond: (idToken: string, body: string) => Response, claims: (nonce: string) => Record<string, unknown>) {
+      const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+      // authorizeUrl on host entra.test so authorizeAndLogin follows it as it does FakeFed. The id_token is minted at
+      // exchange time so it carries the nonce the AS sent to Entra, as Entra echoes it.
+      const lazy: Federation = {
+        authorizeUrl: (p) => `https://entra.test/${TENANT}/oauth2/v2.0/authorize?state=${p.state}`,
+        exchange: async (p) => (await realFed(respond, claims(p.nonce))).exchange(p),
+      };
+      const c = await boot({ federation: lazy, log: (event, f) => logs.push({ event, f }) });
+      await c.registerApp('app-1');
+      await c.bind({ [G_READER]: 'fhir-data-reader' });
+      c.graph.members.set(USER, new Set([G_READER]));
+      const { redirect } = await c.authorizeAndLogin({ scope: 'user/*.rs' });
+      return { redirect, logs, fed: logs.filter((l) => l.event === 'auth.federation_failed') };
+    }
+    const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
+
+    it('an openid-only id_token (no oid) logs id_token_invalid naming oid, and the client sees only the generic access_denied', async () => {
+      // Reproduces the live failure: tid + nonce, NO oid. Breaks on the old silent catch (no auth.federation_failed),
+      // or if the reason loses the claim name, or if the detail leaks into the RP redirect.
+      const r = await signIn((t) => json({ id_token: t }), (nonce) => ({ tid: TENANT, nonce }));
+      expect(r.redirect.searchParams.get('error')).toBe('access_denied');
+      expect(r.redirect.searchParams.get('error_description')).toBe('sign-in could not be completed');
+      expect(r.redirect.toString()).not.toContain('oid'); // breaks if the reason class reaches the RP
+      expect(r.fed.map((l) => l.f)).toEqual([{ reason: 'id_token_invalid:ERR_JWT_CLAIM_VALIDATION_FAILED:oid' }]);
+    });
+    it('a token-endpoint 400 invalid_grant logs the class and AADSTS number, never the body or the authorization code', async () => {
+      const body = { error: 'invalid_grant', error_description: 'AADSTS70008: expired. Trace ID: trace-xyz-123', error_codes: [70008], trace_id: 'trace-xyz-123' };
+      const r = await signIn(() => json(body, 400), (nonce) => ({ oid: USER, tid: TENANT, nonce }));
+      expect(r.redirect.searchParams.get('error')).toBe('access_denied');
+      expect(r.fed.map((l) => l.f)).toEqual([{ reason: 'token_endpoint_400', entraError: 'invalid_grant', entraErrorCode: 70008 }]); // breaks on a status-only or silent log
+      const all = JSON.stringify(r.logs);
+      expect(all).not.toContain('trace-xyz-123'); // breaks if the body (description / trace) is logged
+      expect(all).not.toContain('entra-code'); // the authorization code authorizeAndLogin sends; breaks if it is logged
+      expect(all).not.toContain('assertion-value'); // breaks if the client assertion is logged
+    });
+    it('happy path unchanged: an id_token WITH oid issues a code and logs no federation failure', async () => {
+      // The paired control: differs from the first test by the oid claim alone.
+      let tokenBody = '';
+      const r = await signIn((t, b) => ((tokenBody = b), json({ id_token: t })), (nonce) => ({ oid: USER, tid: TENANT, nonce }));
+      expect(r.redirect.searchParams.get('error')).toBeNull();
+      expect(r.redirect.searchParams.get('code')).toMatch(/.+/); // breaks if the real federation rejects a valid id_token
+      expect(r.fed).toEqual([]);
+      expect(new URLSearchParams(tokenBody).get('scope')).toBe('openid profile');
+    });
   });
 
   it('aud must be the tenant FHIR base; unknown redirect_uri is never redirected to', async () => {

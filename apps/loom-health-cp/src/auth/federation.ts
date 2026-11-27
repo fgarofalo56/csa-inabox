@@ -4,7 +4,7 @@
 // the production factories below talk to the per-cloud Entra and Graph hosts.
 // The AS NEVER trusts a `groups` claim carried by a client or an id_token.
 
-import { jwtVerify, type JWTVerifyGetKey } from 'jose';
+import { jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import type { Cloud } from '../config.js';
 import { GRAPH_BY_CLOUD, graphScope } from './clouds.js';
 
@@ -27,6 +27,56 @@ export interface GraphMembership {
 
 /** The AS identity lacks the Graph application permission: a tenant-admin consent gate. */
 export class GraphConsentRequiredError extends Error {}
+
+/**
+ * Scopes the AS asks Entra for. `profile` is REQUIRED: per the Entra ID token claims reference
+ * (learn.microsoft.com/entra/identity-platform/id-token-claims-reference#payload-claims) `oid` is
+ * only issued when the `profile` scope is requested, and exchange() requires `oid`. `tid` is issued
+ * without `profile`. With `openid` alone every real sign-in failed on the missing `oid` (2026-11-27).
+ */
+export const ENTRA_SCOPE = 'openid profile';
+
+/**
+ * A federation exchange failure carrying ONLY a fixed reason class and, for a token-endpoint
+ * refusal, Entra's `error` token and first `error_codes` number. Never the response body, the
+ * authorization code, a token, or any claim value: the fields are safe to log as they stand.
+ */
+export class FederationError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly entraError?: string,
+    readonly entraErrorCode?: number,
+  ) {
+    super('entra federation exchange failed');
+    this.name = 'FederationError';
+  }
+}
+
+const OAUTH_ERROR = /^[a-z_]{1,64}$/;
+const JOSE_CODE = /^ERR_[A-Z_]{1,60}$/;
+const CLAIM_NAME = /^[A-Za-z_]{1,32}$/;
+
+async function tokenEndpointError(res: Response): Promise<FederationError> {
+  let entraError: string | undefined;
+  let entraErrorCode: number | undefined;
+  try {
+    const b = (await res.json()) as { error?: unknown; error_codes?: unknown };
+    if (typeof b?.error === 'string' && OAUTH_ERROR.test(b.error)) entraError = b.error;
+    const first = Array.isArray(b?.error_codes) ? b.error_codes[0] : undefined;
+    if (typeof first === 'number' && Number.isInteger(first)) entraErrorCode = first;
+  } catch {
+    // Not JSON: the status alone is the class.
+  }
+  return new FederationError(`token_endpoint_${res.status}`, entraError, entraErrorCode);
+}
+
+/** jose's error code (plus the claim NAME for a claim failure); never its message or payload. */
+function idTokenInvalid(e: unknown): FederationError {
+  const raw = (e ?? {}) as { code?: unknown; claim?: unknown };
+  const code = typeof raw.code === 'string' && JOSE_CODE.test(raw.code) ? raw.code : 'unknown';
+  const claim = typeof raw.claim === 'string' && CLAIM_NAME.test(raw.claim) ? `:${raw.claim}` : '';
+  return new FederationError(`id_token_invalid:${code}${claim}`);
+}
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isGuid = (v: string): boolean => GUID.test(v);
@@ -52,7 +102,7 @@ export function createEntraFederation(o: EntraFederationOptions): Federation {
         client_id: o.clientId,
         response_type: 'code',
         redirect_uri: p.redirectUri,
-        scope: 'openid',
+        scope: ENTRA_SCOPE,
         state: p.state,
         nonce: p.nonce,
         code_challenge: p.codeChallenge,
@@ -75,20 +125,30 @@ export function createEntraFederation(o: EntraFederationOptions): Federation {
           code_verifier: p.codeVerifier,
           client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
           client_assertion: await o.getClientAssertion(),
-          scope: 'openid',
+          scope: ENTRA_SCOPE,
         }),
       });
-      if (!res.ok) throw new Error(`entra token endpoint returned ${res.status}`);
-      const body = (await res.json()) as { id_token?: unknown };
-      if (typeof body.id_token !== 'string') throw new Error('entra response has no id_token');
-      const { payload } = await jwtVerify(body.id_token, o.keyResolver, {
-        issuer: `https://${o.authorityHost}/${o.entraTenantId}/v2.0`,
-        audience: o.clientId,
-        algorithms: ['RS256'],
-        requiredClaims: ['exp', 'oid', 'tid', 'nonce'],
-      });
-      if (payload.nonce !== p.nonce) throw new Error('entra id_token nonce mismatch');
-      if (typeof payload.oid !== 'string' || typeof payload.tid !== 'string') throw new Error('entra id_token lacks oid/tid');
+      if (!res.ok) throw await tokenEndpointError(res);
+      let body: { id_token?: unknown } | undefined;
+      try {
+        body = (await res.json()) as { id_token?: unknown };
+      } catch {
+        throw new FederationError('id_token_missing');
+      }
+      if (typeof body?.id_token !== 'string') throw new FederationError('id_token_missing');
+      let payload: JWTPayload;
+      try {
+        ({ payload } = await jwtVerify(body.id_token, o.keyResolver, {
+          issuer: `https://${o.authorityHost}/${o.entraTenantId}/v2.0`,
+          audience: o.clientId,
+          algorithms: ['RS256'],
+          requiredClaims: ['exp', 'oid', 'tid', 'nonce'],
+        }));
+      } catch (e) {
+        throw idTokenInvalid(e);
+      }
+      if (payload.nonce !== p.nonce) throw new FederationError('nonce_mismatch');
+      if (typeof payload.oid !== 'string' || typeof payload.tid !== 'string') throw new FederationError('oid_tid_missing');
       return { oid: payload.oid, tid: payload.tid };
     },
   };

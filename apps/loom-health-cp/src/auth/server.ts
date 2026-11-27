@@ -29,7 +29,7 @@ import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backe
 import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
-import { GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
+import { FederationError, GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
@@ -48,6 +48,22 @@ import {
   type GrantDoc,
   type RoleBinding,
 } from './types.js';
+
+/**
+ * Log fields for a failed Entra exchange. FederationError carries only a fixed reason class plus Entra's
+ * error token and first error code (never the body, the authorization code or a token); anything else
+ * (network, timeout, client-assertion mint) goes through classifyError's sanitiser.
+ */
+function federationFailure(e: unknown): Record<string, string | number> {
+  if (e instanceof FederationError) {
+    return {
+      reason: e.reason,
+      ...(e.entraError ? { entraError: e.entraError } : {}),
+      ...(e.entraErrorCode !== undefined ? { entraErrorCode: e.entraErrorCode } : {}),
+    };
+  }
+  return { reason: 'exchange_error', ...classifyError(e) };
+}
 
 export interface AuthServerDeps {
   /** Public issuer URL including its path, e.g. https://cp.example/auth. No trailing slash. */
@@ -484,7 +500,10 @@ export function createAuthServer(deps: AuthServerDeps) {
     let identity;
     try {
       identity = await deps.federation.exchange({ code, codeVerifier: ar.entraVerifier as string, redirectUri: callbackUrl, nonce: ar.entraNonce as string });
-    } catch {
+    } catch (e) {
+      // One structured line per failed exchange: a silent catch here hid every real sign-in failing (2026-11-27).
+      // The RP still sees only the generic access_denied.
+      deps.log('auth.federation_failed', federationFailure(e));
       return back({ error: 'access_denied', error_description: 'sign-in could not be completed' });
     }
     // T4: the Entra tid must equal the Entra tenant bound to the control plane.
