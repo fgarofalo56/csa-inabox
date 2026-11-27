@@ -1453,11 +1453,11 @@ describe('standalone patient picker (#5454 A5)', () => {
   const PICK_SCOPE = 'openid launch/patient patient/*.rs user/*.rs offline_access';
   const XSS_NAME = `<script>alert("x")</script> & O'Brien`;
 
-  async function setup(o: { search?: FakeSearch; fetchFhir?: typeof fetch } = {}) {
+  async function setup(o: { search?: FakeSearch; fetchFhir?: typeof fetch; log?: (event: string, f: Record<string, string | number>) => void } = {}) {
     const search = o.search ?? new FakeSearch();
     search.visible.set('pat-1', { id: 'pat-1', name: 'Ada Smith', birthDate: '1970-01-02', gender: 'female' });
     search.visible.set('pat-x', { id: 'pat-x', name: XSS_NAME });
-    const c = await boot(o.fetchFhir ? { fetchFhir: o.fetchFhir } : { patientSearch: search });
+    const c = await boot({ ...(o.fetchFhir ? { fetchFhir: o.fetchFhir } : { patientSearch: search }), ...(o.log ? { log: o.log } : {}) });
     await c.registerApp('app-1');
     await c.bind({ [G_READER]: 'fhir-data-reader' });
     c.graph.members.set(USER, new Set([G_READER]));
@@ -1488,6 +1488,8 @@ describe('standalone patient picker (#5454 A5)', () => {
     return c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, action: 'search', q } });
   }
   const LOCKDOWN_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+  /** A page for one pick: form-action also allows the origin of the pick's stored redirect_uri (https://app.test/cb). */
+  const PICK_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://app.test; frame-ancestors 'none'; base-uri 'none'";
 
   it('a standalone launch/patient sign-in goes to the picker with no code, and sets a path-scoped HttpOnly cookie', async () => {
     const { c } = await setup();
@@ -1517,7 +1519,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(r.text).not.toContain('<script');
     expect(r.text).toContain('value="pat-1"'); // positive: the visible patient is offered
     expect(r.text).toContain('type="radio"');
-    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP);
+    expect(r.headers.get('content-security-policy')).toBe(PICK_CSP); // breaks ('self' only) if the redirect after a pick is blocked
     expect(r.headers.get('x-frame-options')).toBe('DENY');
     expect(r.headers.get('cache-control')).toBe('no-store');
     expect(r.headers.get('referrer-policy')).toBe('no-referrer');
@@ -1648,6 +1650,123 @@ describe('standalone patient picker (#5454 A5)', () => {
     expect(r.text).not.toContain('name="csrf"'); // a dead end: nothing to submit
   });
 
+  describe('form-action covers the redirect back to the client (Chromium blocks a 302 the page CSP does not allow)', () => {
+    const cspOf = (r: { headers: Headers }) => r.headers.get('content-security-policy') ?? '';
+    const formAction = (csp: string) => csp.split(';').map((d) => d.trim()).filter((d) => d.startsWith('form-action'));
+    /** Re-point the STORED pick at another redirect_uri, as a client registered with it would have. */
+    const storeRedirect = (c: Ctx, req: string, redirectUri: string) =>
+      c.stores.grants.docs.set(req, { ...(c.stores.grants.docs.get(req) as any), redirectUri } as never);
+
+    it('the page for a pick allows exactly self + the ORIGIN of its stored redirect_uri; the request cannot choose it', async () => {
+      const { c } = await setup();
+      const s = await signIn(c);
+      storeRedirect(c, s.req, 'https://app.example:8443/cb?x=1');
+      // A redirect_uri in the request must change nothing: only the stored grant counts.
+      const r = await c.page('GET', pickPath(s.req, '&redirect_uri=https%3A%2F%2Fevil.test%2Fcb'), { cookie: s.cookie });
+      expect(r.status).toBe(200);
+      // Breaks: 'self' only (the live defect); '*'; the full URL (path/query kept); the request's redirect_uri; the
+      // authorize-time app.test origin instead of the stored one.
+      expect(formAction(cspOf(r))).toEqual(["form-action 'self' https://app.example:8443"]);
+      expect(cspOf(r)).not.toMatch(/evil\.test|\/cb|x=1|\*/);
+      // The redirect that header allows really goes to that origin.
+      const csrf = csrfOf(r.text);
+      const sel = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, patient: 'pat-1', action: 'select' } });
+      expect(sel.status).toBe(302);
+      expect(new URL(sel.headers.get('location')!).origin).toBe('https://app.example:8443');
+    });
+
+    it('every state rendered for a pick carries it: start, results, empty, invalid input, not-permitted, roles unavailable', async () => {
+      const { c } = await setup();
+      const s = await signIn(c);
+      const seen: Array<[string, number, string[]]> = [];
+      const start = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      seen.push(['start', start.status, formAction(cspOf(start))]);
+      const post = (form: Record<string, string>, csrf: string) => c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf, ...form } });
+      const results = await post({ action: 'search', q: 'ada' }, csrfOf(start.text));
+      seen.push(['results', results.status, formAction(cspOf(results))]);
+      const empty = await post({ action: 'search', q: 'nobody' }, csrfOf(results.text));
+      seen.push(['empty', empty.status, formAction(cspOf(empty))]);
+      const invalid = await post({ action: 'search', q: '' }, csrfOf(empty.text));
+      seen.push(['invalid', invalid.status, formAction(cspOf(invalid))]);
+      c.graph.members.set(USER, new Set());
+      const denied = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      seen.push(['not-permitted', denied.status, formAction(cspOf(denied))]);
+      c.graph.failWith = new Error('graph down');
+      const noRoles = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      seen.push(['roles-unavailable', noRoles.status, formAction(cspOf(noRoles))]);
+      const want = ["form-action 'self' https://app.test"];
+      expect(seen).toEqual([
+        ['start', 200, want], ['results', 200, want], ['empty', 200, want], ['invalid', 400, want], ['not-permitted', 403, want], ['roles-unavailable', 503, want],
+      ]);
+    });
+
+    it('Cancel: the page offering it allows the redirect, and Cancel does redirect to that origin', async () => {
+      const { c } = await setup();
+      const s = await signIn(c);
+      const pg = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(pg.text).toContain('value="cancel"');
+      expect(formAction(cspOf(pg))).toEqual(["form-action 'self' https://app.test"]); // breaks ('self' only) if Cancel's 302 is blocked
+      const r = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie, form: { req: s.req, csrf: csrfOf(pg.text), action: 'cancel' } });
+      expect(r.status).toBe(302);
+      const back = new URL(r.headers.get('location')!);
+      expect([back.origin, back.searchParams.get('error')]).toEqual(['https://app.test', 'access_denied']);
+    });
+
+    it('a page with no pick context (refusal, unreadable request) keeps form-action self only', async () => {
+      const { c } = await setup();
+      const s = await signIn(c);
+      const noCookie = await c.page('GET', pickPath(s.req));
+      expect(noCookie.status).toBe(400);
+      expect(cspOf(noCookie)).toBe(LOCKDOWN_CSP); // breaks if a refusal page names any client origin
+      const garbled = await c.page('POST', '/auth/visn-01/pick', { cookie: s.cookie }); // no form content-type: unreadable
+      expect([garbled.status, garbled.text.includes('This request could not be read')]).toEqual([400, true]);
+      expect(garbled.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP);
+      // Paired: the same pick WITH its cookie gets the origin.
+      expect(formAction(cspOf(await c.page('GET', pickPath(s.req), { cookie: s.cookie })))).toEqual(["form-action 'self' https://app.test"]);
+    });
+
+    it('a redirect_uri the validator rejects is never registered, and an unregistered one never creates a pick', async () => {
+      const { c } = await setup();
+      for (const bad of ['javascript:alert(1)', 'http://evil.test/cb', 'https://u:p@app.test/cb', 'https://app.test/cb#f', 'not a url']) {
+        const r = await c.admin('POST', '/api/health/auth/clients', {
+          clientId: 'app-bad', tenant: 'visn-01', clientType: 'app', displayName: 'bad', allowedScopes: ['patient/*.rs'], redirectUris: [bad],
+        });
+        expect([bad, r.status]).toEqual([bad, 400]); // breaks if the registration validator admits it
+      }
+      const { challenge } = pkce();
+      const q = new URLSearchParams({ response_type: 'code', client_id: 'app-1', redirect_uri: 'https://evil.test/cb', scope: PICK_SCOPE, state: 's', aud: fhir('visn-01'), code_challenge: challenge, code_challenge_method: 'S256' });
+      const a = await c.call('GET', `/auth/visn-01/authorize?${q}`);
+      expect(a.status).toBe(400);
+      expect([...c.stores.grants.docs.values()].filter((d: any) => d.kind === 'pick').length).toBe(0);
+      expect((await signIn(c)).req).toMatch(/^[A-Za-z0-9_-]{32}$/); // paired: the registered one does create a pick
+    });
+
+    it('an origin the URL parser accepts but CSP cannot carry (; , quotes, *, IPv6) is refused and logged; the page keeps self only', async () => {
+      const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+      const { c } = await setup({ log: (event, f) => logs.push({ event, f }) });
+      // new URL('https://evil;script-src/cb').origin is 'https://evil;script-src': written raw, the ';' would end
+      // form-action and open an attacker-named directive. The registration validator ACCEPTS this shape today.
+      const reg = await c.admin('POST', '/api/health/auth/clients', {
+        clientId: 'app-semi', tenant: 'visn-01', clientType: 'app', displayName: 'semi', allowedScopes: ['patient/*.rs'], redirectUris: ['https://evil;script-src/cb'],
+      });
+      expect(reg.status).toBe(201);
+      const s = await signIn(c);
+      const crafted = ['https://evil;script-src/cb', 'https://a,b.test/cb', "https://a'b.test/cb", 'https://a"b.test/cb', 'https://*.test/cb', 'https://[::1]:8443/cb'];
+      for (const uri of crafted) {
+        storeRedirect(c, s.req, uri);
+        const r = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+        expect([uri, r.status, cspOf(r)]).toEqual([uri, 200, LOCKDOWN_CSP]); // breaks if the raw origin is emitted
+      }
+      const refused = () => logs.filter((l) => l.event === 'auth.pick_csp_origin_refused');
+      expect(refused().map((l) => l.f.reason)).toEqual(crafted.map(() => 'not-serializable'));
+      // Paired: a plain loopback origin on the same pick is emitted and nothing more is logged.
+      storeRedirect(c, s.req, 'http://localhost:3000/cb');
+      const ok = await c.page('GET', pickPath(s.req), { cookie: s.cookie });
+      expect(formAction(cspOf(ok))).toEqual(["form-action 'self' http://localhost:3000"]);
+      expect(refused().length).toBe(crafted.length);
+    });
+  });
+
   it('Cancel returns access_denied with the state, and consumes the pick', async () => {
     const { c } = await setup();
     const s = await signIn(c);
@@ -1675,7 +1794,7 @@ describe('standalone patient picker (#5454 A5)', () => {
     c.stores.grants.docs.set(s.req, { ...(c.stores.grants.docs.get(s.req) as any), idpTid: PICK_TID } as never);
     const r = await searchVia(c, s, 'smith');
     expect(r.status).toBe(503);
-    expect(r.headers.get('content-security-policy')).toBe(LOCKDOWN_CSP); // the 503 state goes through sendHtml too
+    expect(r.headers.get('content-security-policy')).toBe(PICK_CSP); // the 503 state (Cancel only) goes through pickHeaders too
     expect(r.headers.get('x-frame-options')).toBe('DENY');
     expect(r.text).toContain('Patient search is unavailable');
     expect(r.text).toContain('The tenant FHIR endpoint could not be searched');

@@ -11,7 +11,7 @@ import {
   patientName,
   summarize,
 } from '../src/auth/patient-search.js';
-import { escapeHtml, renderPicker, renderPickerError } from '../src/auth/picker-page.js';
+import { PICKER_HEADERS, escapeHtml, formActionSource, pickerCsp, pickerHeaders, renderPicker, renderPickerError } from '../src/auth/picker-page.js';
 
 describe('escapeHtml', () => {
   it('escapes the five significant characters, & first so nothing is double-escaped', () => {
@@ -66,6 +66,28 @@ describe('renderPicker', () => {
     expect(html).toContain('&lt;h&gt;');
     expect(html).toContain('a &amp; b');
     expect(html).not.toContain('<form');
+  });
+});
+
+describe('formActionSource / pickerCsp', () => {
+  it('emits the serialized origin only: no path, query, default port, or upper case; refuses what CSP cannot carry', () => {
+    // Breaks if the full URL, the path, or a wildcard is used instead of the origin.
+    expect(formActionSource('https://app.example:8443/cb?x=1')).toEqual({ source: 'https://app.example:8443' });
+    expect(formActionSource('https://App.Example:443/cb')).toEqual({ source: 'https://app.example' });
+    expect(formActionSource('https://192.168.2.252/custom/smart_stu2_2/redirect')).toEqual({ source: 'https://192.168.2.252' });
+    expect(formActionSource('https://bücher.example/cb')).toEqual({ source: 'https://xn--bcher-kva.example' });
+    for (const bad of ['https://evil;script-src/cb', 'https://a,b.test/', "https://a'b.test/", 'https://a"b.test/', 'https://*.test/', 'https://a$b.test/', 'https://[::1]:8443/', 'javascript:alert(1)', 'data:text/html,x']) {
+      expect([bad, formActionSource(bad)]).toEqual([bad, { refused: 'not-serializable' }]);
+    }
+    expect(formActionSource('not a url')).toEqual({ refused: 'unparseable' });
+    expect(formActionSource('')).toEqual({ refused: 'unparseable' });
+  });
+  it('form-action is self alone without a target, self + the origin with one; the other directives never change', () => {
+    const rest = "default-src 'none'; style-src 'unsafe-inline'; form-action X; frame-ancestors 'none'; base-uri 'none'";
+    expect(pickerCsp()).toBe(rest.replace('X', "'self'"));
+    expect(pickerCsp('https://app.test')).toBe(rest.replace('X', "'self' https://app.test"));
+    expect(pickerHeaders('https://app.test')['content-security-policy']).toBe(pickerCsp('https://app.test'));
+    expect(PICKER_HEADERS['content-security-policy']).toBe(pickerCsp());
   });
 });
 

@@ -31,7 +31,7 @@ import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
-import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
+import { PICKER_HEADERS, formActionSource, pickerHeaders, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
 import { parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
 import type { IdTokenSigner, Signer } from './signer.js';
@@ -166,8 +166,9 @@ function redirect(res: ServerResponse, location: string, extra: Record<string, s
 const bindCookieName = (reqId: string): string => `lhds_ar_${reqId}`;
 /** The patient picker's own browser-binding cookie, one per pick, scoped to the pick path (#5454 A5). */
 const pickCookieName = (pickId: string): string => `lhds_pk_${pickId}`;
-function sendHtml(res: ServerResponse, status: number, html: string, extra: Record<string, string> = {}): void {
-  res.writeHead(status, { ...PICKER_HEADERS, 'content-length': String(Buffer.byteLength(html)), ...extra });
+/** `headers` defaults to the no-context picker headers (`form-action 'self'`); a page for one pick passes its own. */
+function sendHtml(res: ServerResponse, status: number, html: string, headers: Readonly<Record<string, string>> = PICKER_HEADERS): void {
+  res.writeHead(status, { ...headers, 'content-length': String(Buffer.byteLength(html)) });
   res.end(html);
 }
 function readCookie(req: string | undefined, name: string): string {
@@ -719,8 +720,21 @@ export function createAuthServer(deps: AuthServerDeps) {
       tenant: doc.tenant,
       query,
       state,
-    }));
+    }), pickHeaders(doc));
     return status;
+  }
+
+  /**
+   * Headers for a page rendered for ONE pick: `form-action` also allows the origin of the pick's STORED redirectUri,
+   * because Continue / Cancel / Continue-without-a-patient answer 302 there and Chromium checks form-action on that
+   * redirect (see pickerCsp). The value is never read from the request. An origin that cannot be written as a CSP
+   * host-source safely is logged and left out: the page still renders, and the redirect is what gets blocked.
+   */
+  function pickHeaders(doc: GrantDoc): Readonly<Record<string, string>> {
+    const r = formActionSource(doc.redirectUri ?? '');
+    if ('source' in r) return pickerHeaders(r.source);
+    deps.log('auth.pick_csp_origin_refused', { tenant: doc.tenant, reason: r.refused });
+    return PICKER_HEADERS;
   }
 
   /** Fresh group membership, as the refresh path does: a membership removed since sign-in counts. */
