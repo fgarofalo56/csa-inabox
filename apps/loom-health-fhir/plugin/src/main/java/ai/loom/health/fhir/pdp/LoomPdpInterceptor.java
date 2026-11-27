@@ -406,6 +406,11 @@ public class LoomPdpInterceptor {
    * <p>The read/vread test below is a near-EQUIVALENT mutant, disclosed rather than counted: filterResponse already
    * returns before this for every interaction but read/vread/history/search, and history and search always answer
    * with a Bundle, which takes the bundle branch and never calls this. It stays as a guard for a future caller.
+   *
+   * <p>REASONED, NOT MEASURED (#5497): batch/transaction GET sub-requests through the HAPI 8.12 JPA dispatch path.
+   * Each sub-request is expected to carry its own partition (a sub-request naming {@code facility-b} carries partition
+   * {@code facility-b} and is denied here and by the PDP), but no test in this module drives the JPA transaction
+   * processor; the EngineHarness is a plain RestfulServer.
    */
   private static boolean isOwnFhirUser(RequestDetails rd, FhirContext ctx, IBaseResource r, TokenView tv, String ix) {
     if (!(ix.equals("read") || ix.equals("vread")) || tv.fhirUser().isEmpty() || !"user".equals(tv.subType())

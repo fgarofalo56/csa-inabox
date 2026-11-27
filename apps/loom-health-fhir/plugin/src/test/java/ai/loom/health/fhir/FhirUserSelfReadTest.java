@@ -115,6 +115,22 @@ class FhirUserSelfReadTest {
   }
 
   @Test
+  void aCaseVariantOfDefaultIsAnotherPartitionAndIs403() throws Exception {
+    // BREAKS when: the partition comparison case-folds (equalsIgnoreCase): /default and /Default are consumed as
+    // partition names "default" / "Default", which are not HAPI's DEFAULT, and would then be 200.
+    try (EngineHarness e = engine()) {
+      for (String seg : new String[] {"default", "Default"}) {
+        String[] r = e.call("GET", "/" + seg + "/Practitioner/1000", token(GRANTED, SELF), null, null);
+        assertEquals("403", r[0], seg + ": " + r[1]);
+      }
+      assertEquals("default", pdp.inputs.get(0).get("request").get("partition").asText());
+      assertEquals("Default", pdp.inputs.get(1).get("request").get("partition").asText());
+      assertEquals("200", e.call("GET", "/DEFAULT/Practitioner/1000", token(GRANTED, SELF), null, null)[0]); // positive
+      e.awaitAudits(3);
+    }
+  }
+
+  @Test
   void anExplicitDefaultSegmentIsTheSamePartitionAndIs200() throws Exception {
     // Decision pinned: /DEFAULT/Practitioner/1000 IS the DEFAULT partition the bare base serves (the same row), so it
     // is allowed. BREAKS when: the explicit segment is no longer parsed as DEFAULT (partition sent would differ) or

@@ -448,6 +448,13 @@ test_fhiruser_other_partition_denied if {
 	n := dec(fx.tokens.fhiruser_self, object.remove(fu_read, ["partition"]))
 	n.allow == false
 	n.reason == "scope-denied"
+	# exact, case-sensitive: "default" / "Default" are facility-shaped names, not HAPI's DEFAULT.
+	# Breaks if the comparison case-folds (upper(req.partition) == "DEFAULT").
+	every p in ["default", "Default"] {
+		c := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"partition": p}))
+		c.allow == false
+		c.reason == "scope-denied"
+	}
 	# positive control: DEFAULT (the bare base, or an explicit /DEFAULT: both arrive as "DEFAULT")
 	dec(fx.tokens.fhiruser_self, fu_read).allow == true
 }
