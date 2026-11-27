@@ -174,7 +174,8 @@ describe('createFhirPatientSearch', () => {
     [failed(coded('EHOSTUNREACH')), 'network EHOSTUNREACH', 'network'],
     [new TypeError('fetch failed'), 'network', 'network'],
     [new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'timeout', 'timeout'],
-    [new DOMException('This operation was aborted', 'AbortError'), 'timeout', 'timeout'],
+    // A caller cancel is not a timeout: breaks if AbortError is folded into `timeout` (the pre-hardening shape).
+    [new DOMException('This operation was aborted', 'AbortError'), 'aborted', 'aborted'],
   ])('a fetch rejected with %s is logged as %j', async (err, reason, kind) => {
     const e = (await make(() => Promise.reject(err)).s.search('t1', 'o', [], { name: 'x' }).catch((x: unknown) => x)) as PatientSearchUnavailableError;
     expect(e).toBeInstanceOf(PatientSearchUnavailableError);

@@ -35,9 +35,10 @@ export interface PatientSearch {
  *   refused  the TCP connection was refused
  *   reset    the connection was reset
  *   timeout  no answer before the deadline
+ *   aborted  the caller cancelled the request (not a timeout)
  *   network  any other failure before a response
  */
-export type FetchFailureClass = 'tls' | 'dns' | 'refused' | 'reset' | 'timeout' | 'network';
+export type FetchFailureClass = 'tls' | 'dns' | 'refused' | 'reset' | 'timeout' | 'aborted' | 'network';
 
 const TLS_CODES = new Set([
   'SELF_SIGNED_CERT_IN_CHAIN',
@@ -77,7 +78,8 @@ export function fetchErrorCode(e: unknown, depth = 0): string | undefined {
 /** Map a rejected fetch to a fixed class plus the error code (when one is present). */
 export function classifyFetchFailure(e: unknown): { kind: FetchFailureClass; code?: string } {
   const name = e instanceof Error || (e && typeof e === 'object') ? (e as { name?: unknown }).name : undefined;
-  if (name === 'TimeoutError' || name === 'AbortError') return { kind: 'timeout' };
+  if (name === 'TimeoutError') return { kind: 'timeout' };
+  if (name === 'AbortError') return { kind: 'aborted' };
   const code = fetchErrorCode(e);
   const withCode = <K extends FetchFailureClass>(kind: K) => (code ? { kind, code } : { kind });
   if (!code) return { kind: 'network' };
