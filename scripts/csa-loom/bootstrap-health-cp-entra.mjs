@@ -126,8 +126,23 @@ export function asCallbackUrl(issuer) {
   if (!v) return null;
   let u;
   try { u = new URL(v); } catch { return null; }
-  if (u.protocol !== 'https:' || /^[^:]+:\/\/[^/?#]*@/.test(v) || u.search || u.hash) return null;
+  // Same refusal as config.ts cleanHttps: `u.username || u.password` (so `https://@h/auth`, empty userinfo, is ACCEPTED, as the AS does).
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
   return `${v.replace(/\/+$/, '')}${AS_CALLBACK_PATH}`;
+}
+
+/**
+ * An issuer value safe to print in a CI log: scheme, host and path only. Userinfo, query and fragment are dropped (a value
+ * rejected for carrying userinfo must not leak it in the rejection). Unparseable values are not echoed at all.
+ */
+export function describeIssuer(raw) {
+  if (raw === undefined) return 'not set';
+  const v = String(raw).trim();
+  if (!v) return 'empty';
+  let u;
+  try { u = new URL(v); } catch { return `not a URL (${v.length} characters, not echoed)`; }
+  const dropped = [u.username || u.password ? 'userinfo' : '', u.search ? 'query' : '', u.hash ? 'fragment' : ''].filter(Boolean);
+  return `'${u.protocol}//${u.host}${u.pathname}'${dropped.length ? ` (with ${dropped.join(', ')}, not echoed)` : ''}, not an https URL without userinfo, query or fragment`;
 }
 
 /** web.redirectUris with `uri` added once (exact match, as Entra compares the reply URL), every other entry kept in order. Pure; null when already present. */
@@ -242,7 +257,7 @@ export async function ensure(opts, io) {
   const issuerRaw = io.getAppEnv(app).find((e) => e.name === ISSUER_ENV)?.value;
   const callback = asCallbackUrl(issuerRaw);
   if (!callback) {
-    throw new Fatal(EXIT_FAILED, `could not determine the issuer: ${ISSUER_ENV} on the control-plane Container App ${opts.cpAppName} (${opts.cpResourceGroup}) is ${issuerRaw === undefined ? 'not set' : `'${String(issuerRaw).slice(0, 200)}', not an https URL without userinfo, query or fragment`}. The authorization-server reply URL (<issuer>${AS_CALLBACK_PATH}) cannot be registered without it, so nothing was changed. health.bicep renders it (controlPlaneConfig.authIssuerUrl, else the Front Door issuer endpoint, else the stamp ingress /auth); a non-empty healthControlPlaneState.authServerMissing names why it is empty. Re-deploy health, then re-run this bootstrap.`);
+    throw new Fatal(EXIT_FAILED, `could not determine the issuer: ${ISSUER_ENV} on the control-plane Container App ${opts.cpAppName} (${opts.cpResourceGroup}) is ${describeIssuer(issuerRaw)}. The authorization-server reply URL (<issuer>${AS_CALLBACK_PATH}) cannot be registered without it, so nothing was changed. health.bicep renders it (controlPlaneConfig.authIssuerUrl, else the Front Door issuer endpoint, else the stamp ingress /auth); a non-empty healthControlPlaneState.authServerMissing names why it is empty. Re-deploy health, then re-run this bootstrap.`);
   }
   io.log(`bootstrap-health-cp-entra: authorization-server reply URL = ${callback} (from ${ISSUER_ENV})`);
 

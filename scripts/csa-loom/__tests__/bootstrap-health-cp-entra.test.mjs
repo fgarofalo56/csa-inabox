@@ -38,7 +38,9 @@ const OPTS = {
 
 /** In-memory Graph + Container App. `calls` records every request; writes() filters non-GET. */
 function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = [], allow = '', cpSpExists = true, denyWrite = false, dropCredPost = false, rra = [], asSpExists = false, dropRraPatch = false, issuer = ISSUER, redirectUris = [], dropWebPatch = false } = {}) {
-  const st = { rra, asSpExists, redirectUris: [...redirectUris], webPatches: [], creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
+  // webOther: the rest of the app's `web` block. The fake PATCH merges a partial `web` the way Graph is expected to, so a
+  // request that SENDS stale/empty values for these is visible; it proves the request shape only (see the test below).
+  const st = { rra, asSpExists, redirectUris: [...redirectUris], webPatches: [], webOther: { implicitGrantSettings: { enableIdTokenIssuance: true, enableAccessTokenIssuance: false }, logoutUrl: 'https://other.example/logout' }, creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
   const log = [];
   const io = {
     cloud: () => cloud,
@@ -51,10 +53,13 @@ function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = 
       log.push(`${method} ${path.split('?')[0]}`);
       if (method !== 'GET' && denyWrite) throw new GraphError(403, `${method} -> 403: Insufficient privileges`);
       const p = path.split('?')[0];
-      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP, requiredResourceAccess: st.rra, web: { redirectUris: [...st.redirectUris] } } };
+      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP, requiredResourceAccess: st.rra, web: { ...st.webOther, redirectUris: [...st.redirectUris] } } };
       if (method === 'PATCH' && p === `/applications/${AS_OBJ}`) {
         if (body.requiredResourceAccess && !dropRraPatch) st.rra = body.requiredResourceAccess;
-        if (body.web) { st.webPatches.push(body); if (!dropWebPatch) st.redirectUris = body.web.redirectUris; }
+        if (body.web) {
+          st.webPatches.push(body);
+          if (!dropWebPatch) { const { redirectUris: ru, ...rest } = body.web; st.redirectUris = ru; st.webOther = { ...st.webOther, ...rest }; }
+        }
         return { json: {} };
       }
       if (method === 'GET' && p === `/servicePrincipals(appId='${AS_APP}')`) {
@@ -404,7 +409,16 @@ test('the derived reply URL is what the AS sends: issuer env + path, both LIFTED
   assert.equal(asCallbackUrl(ISSUER), `${ISSUER}${LIFTED_CALLBACK_PATH}`);
   assert.equal(asCallbackUrl(`  ${ISSUER}//  `), `${ISSUER}${LIFTED_CALLBACK_PATH}`);
   assert.equal(asCallbackUrl(GOV_ISSUER), `${GOV_ISSUER}${LIFTED_CALLBACK_PATH}`);
-  for (const bad of [undefined, '', 'http://h/auth', 'https://u:x@h/auth', 'https://h/auth?x=1', 'https://h/auth#f', 'not a url']) assert.equal(asCallbackUrl(bad), null, String(bad));
+  for (const bad of [undefined, '', 'http://h/auth', 'https://u:x@h/auth', 'https://:x@h/auth', 'https://u@h/auth', 'https://h/auth?x=1', 'https://h/auth#f', 'not a url']) assert.equal(asCallbackUrl(bad), null, String(bad));
+});
+
+test('userinfo refusal matches the AS exactly: `u.username || u.password` (config.ts), so EMPTY userinfo is accepted', () => {
+  // Breaks if: the script uses a stricter textual `@` check than config.ts. `https://@h/auth` parses with empty username and
+  // empty secret, the AS starts with it and sends `https://@h/auth/callback`; a script returning null here would fail the
+  // bootstrap on an issuer the AS accepts.
+  const cfg = readFileSync(fileURLToPath(new URL('../../../apps/loom-health-cp/src/auth/config.ts', import.meta.url)), 'utf8');
+  assert.match(cfg, /u\.username \|\| u\.pass/, 'the AS rule this mirrors is still the URL-field check');
+  assert.equal(asCallbackUrl('https://@h.example/auth'), `https://@h.example/auth${LIFTED_CALLBACK_PATH}`);
 });
 
 test('a missing reply URL is ADDED and every existing web redirect URI is preserved, in order', async () => {
@@ -416,6 +430,20 @@ test('a missing reply URL is ADDED and every existing web redirect URI is preser
   assert.deepEqual(w.st.redirectUris, [...keep, CALLBACK]);
   assert.equal(r.callback, CALLBACK);
   assert.deepEqual(withRedirectUri(['a', 'b'], 'c'), ['a', 'b', 'c']);
+});
+
+test('the reply-URL PATCH sends ONLY web.redirectUris, so implicitGrantSettings and logoutUrl survive', async () => {
+  // Breaks if: the request carries other `web` members (e.g. a rebuilt `web` with implicitGrantSettings {} / logoutUrl null),
+  // which would overwrite the app's values. REQUEST SHAPE ONLY: the fake merges a partial `web` the way Graph is expected
+  // to; that Graph really does so is NOT proven here. The real receipt is a live Graph read-back of `web` before and after
+  // on dev01, taken by the orchestrator.
+  const w = world();
+  const before = { ...w.st.webOther };
+  await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.webPatches.map((b) => Object.keys(b.web)), [['redirectUris']]);
+  assert.deepEqual(w.st.webOther, before);
+  assert.equal(w.st.webOther.logoutUrl, 'https://other.example/logout');
+  assert.deepEqual(w.st.webOther.implicitGrantSettings, { enableIdTokenIssuance: true, enableAccessTokenIssuance: false });
 });
 
 test('a reply URL already present issues NO PATCH (idempotent)', async () => {
@@ -441,13 +469,17 @@ test('the read-back fails the run RED when the reply URL never appears', async (
 test('an unknown issuer fails RED with "could not determine the issuer" BEFORE any write; never a silent skip', async () => {
   // Breaks if: an absent/invalid issuer is skipped (exit 0, the AS stays AADSTS500113), a guessed host is registered,
   // or other writes happen first (the message says nothing was changed).
-  for (const issuer of [null, '', 'http://lhds-auth.example/auth']) {
+  for (const issuer of [null, '', 'http://lhds-auth.example/auth', 'https://svc:S3cret@h/auth']) {
     const w = world({ issuer });
     const code = await run(argvAll, w.io);
     assert.equal(code, EXIT_FAILED, String(issuer));
     const out = w.log.join('\n');
     assert.match(out, /FAILED: could not determine the issuer: LOOM_HEALTH_CP_ISSUER_URL on the control-plane Container App loom-health-cp/);
-    assert.match(out, issuer === null ? /is not set\./ : /not an https URL/);
+    assert.match(out, issuer === null ? /is not set\./ : issuer === '' ? /is empty\./ : /not an https URL/);
+    // The pair: the error is still raised (above) AND a rejected value's userinfo never reaches the log.
+    // Breaks if: the raw issuer (or URL.href, which keeps userinfo) is echoed.
+    assert.ok(!out.includes('S3cret'), 'userinfo secret echoed into the log');
+    if (issuer?.includes('@')) assert.match(out, /'https:\/\/h\/auth' \(with userinfo, not echoed\)/);
     assert.deepEqual(w.writes(), []);
     assert.deepEqual(w.st.envSets, []);
     assert.doesNotMatch(out, /\bOK:/);
