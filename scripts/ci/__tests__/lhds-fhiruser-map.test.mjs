@@ -360,7 +360,7 @@ test('cleanup phase: `pending` with no id + a full (<500) list disables ONLY act
 
 test('cleanup phase: no record at all = nothing requested, exit 0 with no call; a list failure in the fallback is exit 1 (breaks if either is swallowed or inverted)', async () => {
   let calls = 0;
-  const none = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: join(tmpdir(), 'fum-absent-file.txt') }), { fetchImpl: async () => { calls += 1; throw new Error('x'); }, out }));
+  const none = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: clientFile().f }), { fetchImpl: async () => { calls += 1; throw new Error('x'); }, out }));
   assert.equal(none.code, 0);
   assert.equal(calls, 0);
   const { f, d } = clientFile(['pending']);
