@@ -67,7 +67,13 @@ optional_arrays_ok if {
 	every k in ["categories", "patient_compartment"] {
 		_array_of_strings_or_absent(k)
 	}
+	_string_or_absent("resource_id")
+	_string_or_absent("partition")
 }
+
+_string_or_absent(k) if not k in object.keys(req)
+
+_string_or_absent(k) if is_string(req[k])
 
 _array_of_strings_or_absent(k) if not k in object.keys(req)
 
@@ -235,6 +241,50 @@ authorized if {
 	type_ok(p.res)
 	patient_ok(p.ctx)
 	constraint_ok(p)
+}
+
+# SMART fhirUser self-read: a user token granted the `fhirUser` scope may read or vread
+# exactly the ONE resource its fhirUser claim names (SMART App Launch: an app granted
+# `openid fhirUser` can retrieve that resource). Nothing else: not search, not history,
+# not a write, not another id or type, not another partition. The claim is an absolute
+# URL; it is split into base/type/id and its base must EQUAL the address of the request's
+# partition (partition_address below), which is built on req.base, already pinned by
+# aud_ok to the token aud and to a base of the token's tenant on this stamp (decision 13).
+# Exact equality, never a prefix, so another tenant's base or a longer base never matches.
+authorized if fhir_user_self_read
+
+fhir_user_self_read if {
+	req.service == "fhir"
+	req.interaction in {"read", "vread"}
+	claims.sub_type == "user"
+	"fhirUser" in scope_list
+	ref := fhir_user_ref
+	ref.base == partition_address
+	ref.type == req.resource_type
+	ref.id == req.resource_id
+}
+
+# The address of the partition the request targets, as the engine renders it
+# (LoomTenantIdentificationStrategy.massageServerBaseUrl, #5489): DEFAULT is served at
+# the BARE base, every facility at <base>/<facility>. The same logical id can be a
+# different resource in each facility, so a claim on the bare base names the DEFAULT
+# partition and matches only a DEFAULT request. Defined for DEFAULT only: the AS mints
+# bare-base claims only (apps/loom-health-cp fhir-user.ts maps oid -> Type/id, no
+# facility), so any other partition, or an absent one (an engine that sent none),
+# leaves this undefined and the rule denies (fail closed). A future facility-bearing
+# claim <base>/<facility>/Type/id maps cleanly by adding the second branch,
+#   partition_address := concat("/", [req.base, req.partition]) if regex.match(<facility slug>, req.partition)
+# because fhir_user_ref's greedy base then captures <base>/<facility>.
+partition_address := req.base if req.partition == "DEFAULT"
+
+# The id holds no "/", so the split is unambiguous: the last two path segments are the
+# type and the id. Types are the four SMART allows as fhirUser; the id is a FHIR id not
+# made only of dots (the AS applies the same rule, apps/loom-health-cp fhir-user.ts).
+fhir_user_ref := {"base": m[1], "type": m[2], "id": m[3]} if {
+	is_string(claims.fhirUser)
+	found := regex.find_all_string_submatch_n(`^(.+)/(Practitioner|Patient|RelatedPerson|Person)/([A-Za-z0-9.-]{1,64})$`, claims.fhirUser, 1)
+	m := found[0]
+	not regex.match(`^\.+$`, m[3])
 }
 
 role_has_op(op) if {

@@ -22,7 +22,8 @@ POST /v1/data/lhds/authz/decision
 Input shape: `input-contract.json`. The PDP verifies the token itself (ES384
 against `data.lhds.config.jwks`); the interceptor passes the RAW token and the
 request facts (`tenant` from the route, `base` the tenant public FHIR base (the engine server address, no facility partition), `interaction`,
-`resource_type`, `op`, engine-resolved `patient_compartment`, `categories`).
+`resource_type`, `resource_id` (the id the URL names, if any), `op`, engine-resolved
+`patient_compartment`, `categories`).
 
 Reasons, in evaluation order: `invalid-input`, `token-invalid` (signature, alg
 not ES384, typ not at+jwt), `claims-invalid` (any missing/ill-typed claim, bad
@@ -42,6 +43,15 @@ Interceptor rules the PDP relies on:
   scopes grant nothing. `category` constraints compare by exact string.
 - Roles are NOT a grant of scopes (the AS applies the ceiling at issuance). The PDP
   uses `lhds_roles` only for operations (`$export`, ...) and DICOM, via the role map.
+- SMART `fhirUser` self-read: a user token granted the `fhirUser` scope may `read`/`vread`
+  exactly the resource its `fhirUser` claim names, with no data scope covering it (the AS
+  puts the claim in the access token only when the scope is granted). The claim's base must
+  EQUAL the address of the request's `partition`: only `DEFAULT` is defined, served at the
+  bare `request.base` (#5489; already pinned to `aud` and the tenant's stamp bases), because
+  the AS mints bare-base claims only and the same id can be another resource in a facility.
+  Its type and id must equal `resource_type`/`resource_id`. Never search, history, a write,
+  another id, type, base or partition, and never when `partition` is absent. The FHIR
+  plugin's response filter mirrors the same match.
 
 ## Bundle data supplied per stamp (not in git)
 

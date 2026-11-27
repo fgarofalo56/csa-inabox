@@ -1,5 +1,6 @@
 package ai.loom.health.fhir.pdp;
 
+import ai.loom.health.fhir.partition.LoomTenantIdentificationStrategy;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.interceptor.api.Hook;
 import ca.uhn.fhir.interceptor.api.Interceptor;
@@ -138,6 +139,13 @@ public class LoomPdpInterceptor {
     request.put("tenant", tenant == null ? "" : tenant);
     request.put("base", publicBase(rd, srd));
     request.put("resource_type", type);
+    if (!idPart.isEmpty()) {
+      request.put("resource_id", idPart); // the PDP's fhirUser self-read rule matches it against the token claim
+    }
+    if (rd.getTenantId() != null && !rd.getTenantId().isEmpty()) {
+      // The HAPI partition (DEFAULT at the bare base, #5489). The fhirUser rule denies when it is absent.
+      request.put("partition", rd.getTenantId());
+    }
     if (!op.isEmpty()) {
       request.put("op", op);
     }
@@ -372,7 +380,7 @@ public class LoomPdpInterceptor {
     if (response instanceof OperationOutcome) {
       return true;
     }
-    if (!visible(ctx, scopes, response, tv)) {
+    if (!visible(ctx, scopes, response, tv) && !isOwnFhirUser(rd, ctx, response, tv, ix)) {
       rd.getUserData().put(FilterOutcome.KEY,
           new FilterOutcome(List.of(), new ArrayList<>(ResourceFacts.owners(ctx, response)), 1));
       rd.getUserData().put(PdpOutcome.KEY, new PdpOutcome(out.tenant(), out.interaction(), out.resourceType(),
@@ -383,6 +391,45 @@ public class LoomPdpInterceptor {
     rd.getUserData().put(FilterOutcome.KEY,
         new FilterOutcome(new ArrayList<>(ResourceFacts.owners(ctx, response)), List.of(), 0));
     return true;
+  }
+
+  /**
+   * Mirrors the PDP's fhirUser self-read rule (authz.rego fhir_user_self_read) for the response filter: a single
+   * resource returned by a read/vread passes when it IS the token's fhirUser: a USER token granted the
+   * {@code fhirUser} scope, the returned resource's type/id EQUAL the authorized request's resource_type/resource_id,
+   * the request's partition is DEFAULT, and the claim equals exactly {@code <request.base>/<type>/<id>}.
+   * request.base is the pinned public base the PDP already matched against aud; an empty base never matches.
+   * DEFAULT only, as in the rego (partition_address): the bare base serves DEFAULT (#5489), the AS mints bare-base
+   * claims only, and the same id in a facility partition can be a different resource. An absent partition (an engine
+   * that does not partition) never matches.
+   *
+   * <p>The read/vread test below is a near-EQUIVALENT mutant, disclosed rather than counted: filterResponse already
+   * returns before this for every interaction but read/vread/history/search, and history and search always answer
+   * with a Bundle, which takes the bundle branch and never calls this. It stays as a guard for a future caller.
+   *
+   * <p>REASONED, NOT MEASURED (#5497): batch/transaction GET sub-requests through the HAPI 8.12 JPA dispatch path.
+   * Each sub-request is expected to carry its own partition (a sub-request naming {@code facility-b} carries partition
+   * {@code facility-b} and is denied here and by the PDP), but no test in this module drives the JPA transaction
+   * processor; the EngineHarness is a plain RestfulServer.
+   */
+  private static boolean isOwnFhirUser(RequestDetails rd, FhirContext ctx, IBaseResource r, TokenView tv, String ix) {
+    if (!(ix.equals("read") || ix.equals("vread")) || tv.fhirUser().isEmpty() || !"user".equals(tv.subType())
+        || !List.of(tv.scope().trim().split("\\s+")).contains("fhirUser")) {
+      return false;
+    }
+    Authorized a = (Authorized) rd.getUserData().get(STATE_KEY);
+    if (a == null) {
+      return false;
+    }
+    Map<String, Object> req = a.request();
+    String type = ctx.getResourceType(r);
+    String id = r.getIdElement() == null ? null : r.getIdElement().getIdPart();
+    if (!(req.get("base") instanceof String b) || b.isEmpty() || id == null || id.isEmpty()
+        || !LoomTenantIdentificationStrategy.DEFAULT_PARTITION.equals(req.get("partition"))
+        || !type.equals(req.get("resource_type")) || !id.equals(req.get("resource_id"))) {
+      return false;
+    }
+    return tv.fhirUser().equals(b + "/" + type + "/" + id);
   }
 
   private static boolean visible(FhirContext ctx, SmartScopes scopes, IBaseResource r, TokenView tv) {

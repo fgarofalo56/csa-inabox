@@ -347,3 +347,128 @@ test_empty_input_denied if {
 	d.allow == false
 	d.reason == "invalid-input"
 }
+
+# --- SMART fhirUser self-read (Inferno smart_openid_fhir_user_claim) ---------------------
+# fx.tokens.fhiruser_self: scope "patient/*.rs openid fhirUser", fhirUser <fhir_base>/Practitioner/1000.
+# Its only data scope is patient/, and a Practitioner read carries no patient compartment, so
+# every permit below can come from the fhirUser rule and nothing else.
+fu_read := rq({"resource_type": "Practitioner", "resource_id": "1000", "partition": "DEFAULT"})
+
+# Breaks if: the rule is absent or does not fire on read/vread of the exact reference (the
+# Inferno 403). Value that breaks it: removing `authorized if fhir_user_self_read`.
+test_fhiruser_self_read_and_vread_permitted if {
+	r := dec(fx.tokens.fhiruser_self, fu_read)
+	r.allow == true
+	r.reason == "permit"
+	v := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"interaction": "vread"}))
+	v.allow == true
+	v.reason == "permit"
+}
+
+# Breaks if: the rule permits ANY id of the type (id 1001 is not the claim's 1000).
+test_fhiruser_other_id_denied if {
+	d := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"resource_id": "1001"}))
+	d.allow == false
+	d.reason == "scope-denied"
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: a read that names no id is matched (resource_id absent).
+test_fhiruser_missing_resource_id_denied if {
+	d := dec(fx.tokens.fhiruser_self, rq({"resource_type": "Practitioner", "partition": "DEFAULT"}))
+	d.allow == false
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: the same id under another type is permitted (Patient/1000 is not Practitioner/1000;
+# the patient/ scope cannot cover it either: compartment ["1000"] is not the token patient p1).
+test_fhiruser_other_type_same_id_denied if {
+	d := dec(fx.tokens.fhiruser_self, rq({"resource_type": "Patient", "resource_id": "1000", "partition": "DEFAULT", "patient_compartment": ["1000"]}))
+	d.allow == false
+	d.reason == "scope-denied"
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: the interaction is not limited to read/vread. search, history and every write of
+# the SAME type and id must deny (the token holds letters r+s, so search is the case a
+# letter-only check would let through).
+test_fhiruser_only_read_and_vread if {
+	every ix in ["search", "history", "update", "patch", "delete", "create"] {
+		d := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"interaction": ix}))
+		d.allow == false
+		d.reason == "scope-denied"
+	}
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: the fhirUser SCOPE is not required (same claim, scope lacks fhirUser).
+test_fhiruser_requires_the_scope if {
+	d := dec(fx.tokens.fhiruser_no_scope, fu_read)
+	d.allow == false
+	d.reason == "scope-denied"
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: the base in the claim is not compared (claim names visn-02's base, request is on
+# visn-01's base, same type and id).
+test_fhiruser_other_tenant_base_denied if {
+	d := dec(fx.tokens.fhiruser_other_tenant, fu_read)
+	d.allow == false
+	d.reason == "scope-denied"
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: the base is compared by PREFIX (claim base "<fhir_base>2" starts with req.base).
+test_fhiruser_longer_base_denied if {
+	d := dec(fx.tokens.fhiruser_longer_base, fu_read)
+	d.allow == false
+	d.reason == "scope-denied"
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: a system token with a fhirUser claim and scope is honoured (fhirUser is a user identity).
+test_fhiruser_system_token_denied if {
+	d := dec(fx.tokens.fhiruser_system, fu_read)
+	d.allow == false
+	d.reason == "scope-denied"
+	# positive control: the SAME request with the user token is permitted
+	c := dec(fx.tokens.fhiruser_self, fu_read)
+	c.allow == true
+	c.reason == "permit"
+}
+
+# Partition isolation. The bare-base claim names the DEFAULT partition (#5489); the same id
+# in a facility partition can be a different resource.
+# Breaks if: the partition is not checked (facility-a request permitted) or an absent
+# partition is treated as DEFAULT (an engine that sent none would be permitted).
+test_fhiruser_other_partition_denied if {
+	d := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"partition": "facility-a"}))
+	d.allow == false
+	d.reason == "scope-denied"
+	n := dec(fx.tokens.fhiruser_self, object.remove(fu_read, ["partition"]))
+	n.allow == false
+	n.reason == "scope-denied"
+	# exact, case-sensitive: "default" / "Default" are facility-shaped names, not HAPI's DEFAULT.
+	# Breaks if the comparison case-folds (upper(req.partition) == "DEFAULT").
+	every p in ["default", "Default"] {
+		c := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"partition": p}))
+		c.allow == false
+		c.reason == "scope-denied"
+	}
+	# positive control: DEFAULT (the bare base, or an explicit /DEFAULT: both arrive as "DEFAULT")
+	dec(fx.tokens.fhiruser_self, fu_read).allow == true
+}
+
+# Breaks if: a non-string partition passes input validation.
+test_fhiruser_non_string_partition_invalid if {
+	d := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"partition": 0}))
+	d.allow == false
+	d.reason == "invalid-input"
+}
+
+# Breaks if: a non-string resource_id passes input validation.
+test_fhiruser_non_string_resource_id_invalid if {
+	d := dec(fx.tokens.fhiruser_self, object.union(fu_read, {"resource_id": 1000}))
+	d.allow == false
+	d.reason == "invalid-input"
+}
