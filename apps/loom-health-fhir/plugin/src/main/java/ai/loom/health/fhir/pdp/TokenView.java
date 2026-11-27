@@ -10,10 +10,12 @@ import java.util.Base64;
  * strictly AFTER the PDP returned allow=true for this exact token (the PDP verifies the
  * ES384 signature, issuer, audience, expiry). Never use it to make an access decision, and
  * never call it on a denied or unevaluated token for anything but a best-effort audit label.
+ *
+ * @param fhirUser the SMART {@code fhirUser} claim (absolute URL), empty when absent
  */
-public record TokenView(String scope, String patient, String subject, String clientId) {
+public record TokenView(String scope, String patient, String subject, String clientId, String fhirUser) {
   private static final ObjectMapper JSON = new ObjectMapper();
-  public static final TokenView EMPTY = new TokenView("", "", "", "");
+  public static final TokenView EMPTY = new TokenView("", "", "", "", "");
 
   public static TokenView of(String jwt) {
     try {
@@ -26,7 +28,8 @@ public record TokenView(String scope, String patient, String subject, String cli
           p.path("scope").asText(""),
           p.path("patient").asText(""),
           p.path("sub").asText(""),
-          p.path("client_id").asText(""));
+          p.path("client_id").asText(""),
+          p.path("fhirUser").isTextual() ? p.path("fhirUser").asText() : "");
     } catch (Exception e) {
       return EMPTY;
     }

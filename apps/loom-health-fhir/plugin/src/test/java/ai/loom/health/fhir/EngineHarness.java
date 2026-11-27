@@ -94,7 +94,7 @@ final class EngineHarness implements AutoCloseable {
     RestfulServer rs = new RestfulServer(FhirContext.forR4Cached()) {
       @Override
       protected void initialize() throws ServletException {
-        setResourceProviders(List.of(new PatientProvider(), new ObservationProvider()));
+        setResourceProviders(List.of(new PatientProvider(), new ObservationProvider(), new PractitionerProvider()));
         setPlainProviders(List.of(new TxProvider()));
         setPagingProvider(new ca.uhn.fhir.rest.server.FifoMemoryPagingProvider(100));
         svc = new InterceptorService();
@@ -222,6 +222,38 @@ final class EngineHarness implements AutoCloseable {
     o.addCategory(new CodeableConcept().addCoding(
         new org.hl7.fhir.r4.model.Coding("http://terminology.hl7.org/CodeSystem/observation-category", categoryCode, categoryCode)));
     return o;
+  }
+
+  /** Practitioners (no patient compartment): what a SMART fhirUser claim names (Inferno smart_openid_fhir_user_claim). */
+  public class PractitionerProvider implements IResourceProvider {
+    @Override
+    public Class<org.hl7.fhir.r4.model.Practitioner> getResourceType() {
+      return org.hl7.fhir.r4.model.Practitioner.class;
+    }
+
+    @Read(version = true)
+    public org.hl7.fhir.r4.model.Practitioner read(@IdParam IdType id) {
+      handlerCalls.incrementAndGet();
+      org.hl7.fhir.r4.model.Practitioner p = practitioner(id.getIdPart());
+      if (id.hasVersionIdPart()) {
+        p.setId(new IdType("Practitioner", id.getIdPart(), id.getVersionIdPart()));
+      }
+      return p;
+    }
+
+    /** Over-returns both practitioners, like the other providers: only the response filter narrows a search. */
+    @Search
+    public List<org.hl7.fhir.r4.model.Practitioner> search(@OptionalParam(name = "_id") StringParam id) {
+      handlerCalls.incrementAndGet();
+      return List.of(practitioner("1000"), practitioner("1001"));
+    }
+  }
+
+  static org.hl7.fhir.r4.model.Practitioner practitioner(String id) {
+    org.hl7.fhir.r4.model.Practitioner p = new org.hl7.fhir.r4.model.Practitioner();
+    p.setId(id);
+    p.addName().setFamily("Clinician" + id);
+    return p;
   }
 
   public class PatientProvider implements IResourceProvider {

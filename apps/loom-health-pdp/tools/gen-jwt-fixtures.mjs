@@ -66,6 +66,13 @@ const variants = [
   ['scope_category_lab', (c) => { c.scope = 'user/Observation.rs?category=laboratory'; }],
   ['scope_wildcard_cruds', (c) => { c.scope = 'user/*.cruds'; }],
   ['scope_empty', (c) => { c.scope = ''; }],
+  // SMART fhirUser self-read (Inferno smart_openid_fhir_user_claim). Data scope is patient/ only, so
+  // a Practitioner is outside every data scope: only the fhirUser rule can permit it.
+  ['fhiruser_self', (c) => { c.scope = 'patient/*.rs openid fhirUser'; c.fhirUser = `${FHIR}/Practitioner/1000`; }],
+  ['fhiruser_no_scope', (c) => { c.scope = 'patient/*.rs openid'; c.fhirUser = `${FHIR}/Practitioner/1000`; }],
+  ['fhiruser_other_tenant', (c) => { c.scope = 'patient/*.rs openid fhirUser'; c.fhirUser = 'https://visn-02.health.example.test/fhir/Practitioner/1000'; }],
+  ['fhiruser_longer_base', (c) => { c.scope = 'patient/*.rs openid fhirUser'; c.fhirUser = `${FHIR}2/Practitioner/1000`; }],
+  ['fhiruser_system', (c) => { c.sub_type = 'system'; delete c.idp_tid; c.scope = 'system/Observation.rs fhirUser'; c.fhirUser = `${FHIR}/Practitioner/1000`; }],
   // roles / operations
   ['system_exporter', (c) => { c.sub_type = 'system'; delete c.idp_tid; c.scope = 'system/*.rs'; c.lhds_roles = ['fhir-data-exporter']; }],
   ['system_no_role', (c) => { c.sub_type = 'system'; delete c.idp_tid; c.scope = 'system/*.rs'; c.lhds_roles = []; }],

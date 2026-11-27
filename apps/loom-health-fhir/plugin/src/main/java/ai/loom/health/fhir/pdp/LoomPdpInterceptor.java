@@ -138,6 +138,9 @@ public class LoomPdpInterceptor {
     request.put("tenant", tenant == null ? "" : tenant);
     request.put("base", publicBase(rd, srd));
     request.put("resource_type", type);
+    if (!idPart.isEmpty()) {
+      request.put("resource_id", idPart); // the PDP's fhirUser self-read rule matches it against the token claim
+    }
     if (!op.isEmpty()) {
       request.put("op", op);
     }
@@ -372,7 +375,7 @@ public class LoomPdpInterceptor {
     if (response instanceof OperationOutcome) {
       return true;
     }
-    if (!visible(ctx, scopes, response, tv)) {
+    if (!visible(ctx, scopes, response, tv) && !isOwnFhirUser(rd, ctx, response, tv, ix)) {
       rd.getUserData().put(FilterOutcome.KEY,
           new FilterOutcome(List.of(), new ArrayList<>(ResourceFacts.owners(ctx, response)), 1));
       rd.getUserData().put(PdpOutcome.KEY, new PdpOutcome(out.tenant(), out.interaction(), out.resourceType(),
@@ -383,6 +386,27 @@ public class LoomPdpInterceptor {
     rd.getUserData().put(FilterOutcome.KEY,
         new FilterOutcome(new ArrayList<>(ResourceFacts.owners(ctx, response)), List.of(), 0));
     return true;
+  }
+
+  /**
+   * Mirrors the PDP's fhirUser self-read rule (authz.rego fhir_user_self_read) for the response filter: a single
+   * resource returned by a read/vread passes when it IS the token's fhirUser, i.e. the claim equals exactly
+   * {@code <request.base>/<type>/<id>} of the returned resource and the token was granted the {@code fhirUser} scope.
+   * request.base is the pinned public base the PDP already matched against aud; an empty base never matches.
+   * Search and history bundles never reach here, so the fhirUser resource is never revealed through them.
+   */
+  private static boolean isOwnFhirUser(RequestDetails rd, FhirContext ctx, IBaseResource r, TokenView tv, String ix) {
+    if (!(ix.equals("read") || ix.equals("vread")) || tv.fhirUser().isEmpty()
+        || !List.of(tv.scope().trim().split("\\s+")).contains("fhirUser")) {
+      return false;
+    }
+    Authorized a = (Authorized) rd.getUserData().get(STATE_KEY);
+    Object base = a == null ? null : a.request().get("base");
+    String id = r.getIdElement() == null ? null : r.getIdElement().getIdPart();
+    if (!(base instanceof String b) || b.isEmpty() || id == null || id.isEmpty()) {
+      return false;
+    }
+    return tv.fhirUser().equals(b + "/" + ctx.getResourceType(r) + "/" + id);
   }
 
   private static boolean visible(FhirContext ctx, SmartScopes scopes, IBaseResource r, TokenView tv) {
