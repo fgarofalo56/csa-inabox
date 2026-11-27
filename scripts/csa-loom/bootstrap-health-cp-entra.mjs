@@ -18,6 +18,13 @@
  *      (--ci-client-id, the azure/login client id; operator decision 2026-11-15, so CI receipt
  *      workflows can call the control plane). Reader on the Azure resource (apim-access.bicep)
  *      is management-plane only and does not authorize that call.
+ *   1b. REPLY URL (AADSTS500113, 2026-11-27): the AS sends Entra redirect_uri = {issuer}/callback
+ *      (apps/loom-health-cp/src/auth/server.ts `callbackUrl`, issuer = LOOM_HEALTH_CP_ISSUER_URL,
+ *      config.ts). The issuer is read from that SAME env var on the deployed control-plane Container
+ *      App, so it is whatever health.bicep rendered for this boundary (the Front Door issuer endpoint
+ *      where controlPlaneConfig.frontDoor is set, else https://<stamp ingress>/auth, else an override).
+ *      The callback is MERGED into the AS app's web.redirectUris (existing URIs kept, no write when
+ *      present). An absent or invalid issuer fails the run BEFORE any write; it is never skipped.
  *   3. LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS on the control-plane Container App: the APIM
  *      appId, the Console UAMI client id and the CI SP app id are UNIONED into the current value (never
  *      overwritten, never removed).
@@ -66,6 +73,10 @@ export const GRAPH_PERMISSIONS = [
 // declaration is not this script's call) and reported, so the operator can remove it.
 export const GRAPH_BROAD_PERMISSION_ID = '7ab1d382-f21e-4acd-a863-ba3e13f7da61';
 export const ALLOWLIST_ENV = 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS';
+// The env var the AS reads its public issuer from (apps/loom-health-cp/src/auth/config.ts) and the path it appends for the
+// Entra redirect target (server.ts `callbackUrl`). The test lifts both from the AS source.
+export const ISSUER_ENV = 'LOOM_HEALTH_CP_ISSUER_URL';
+export const AS_CALLBACK_PATH = '/callback';
 
 export const MAX_ATTEMPTS = 4;
 export const READBACK_ATTEMPTS = 7;
@@ -103,6 +114,41 @@ export function withGraphPermission(current) {
   if (!graph) { graph = { resourceAppId: GRAPH_RESOURCE_APP_ID, resourceAccess: [] }; list.push(graph); }
   for (const g of missing) graph.resourceAccess.push({ id: g.id, type: g.type });
   return list;
+}
+
+/**
+ * The Entra redirect_uri the AS sends, from its issuer exactly as the AS forms it: trimmed (config.ts `need`), trailing
+ * slashes dropped (config.ts `cleanHttps`), then AS_CALLBACK_PATH appended (server.ts). Returns null for a value the AS
+ * itself refuses to start with (absent, not https, userinfo, query or fragment). Pure.
+ */
+export function asCallbackUrl(issuer) {
+  const v = String(issuer ?? '').trim();
+  if (!v) return null;
+  let u;
+  try { u = new URL(v); } catch { return null; }
+  // Same refusal as config.ts cleanHttps: `u.username || u.password` (so `https://@h/auth`, empty userinfo, is ACCEPTED, as the AS does).
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
+  return `${v.replace(/\/+$/, '')}${AS_CALLBACK_PATH}`;
+}
+
+/**
+ * An issuer value safe to print in a CI log: scheme, host and path only. Userinfo, query and fragment are dropped (a value
+ * rejected for carrying userinfo must not leak it in the rejection). Unparseable values are not echoed at all.
+ */
+export function describeIssuer(raw) {
+  if (raw === undefined) return 'not set';
+  const v = String(raw).trim();
+  if (!v) return 'empty';
+  let u;
+  try { u = new URL(v); } catch { return `not a URL (${v.length} characters, not echoed)`; }
+  const dropped = [u.username || u.password ? 'userinfo' : '', u.search ? 'query' : '', u.hash ? 'fragment' : ''].filter(Boolean);
+  return `'${u.protocol}//${u.host}${u.pathname}'${dropped.length ? ` (with ${dropped.join(', ')}, not echoed)` : ''}, not an https URL without userinfo, query or fragment`;
+}
+
+/** web.redirectUris with `uri` added once (exact match, as Entra compares the reply URL), every other entry kept in order. Pure; null when already present. */
+export function withRedirectUri(current, uri) {
+  const list = Array.isArray(current) ? [...current] : [];
+  return list.includes(uri) ? null : [...list, uri];
 }
 
 /** Union of two comma lists, order preserved, case-insensitive dedupe, blanks dropped. */
@@ -206,11 +252,20 @@ export async function ensure(opts, io) {
     throw new Fatal(EXIT_UNSUPPORTED, `the control plane platform is '${opts.platform}'. This step only wires the Container Apps path (it sets ${ALLOWLIST_ENV} with az containerapp update). Nothing was changed; the aks path is NOT done by this run.`);
   }
 
+  // The AS callback (1b) is derived before any write, so an unknown issuer changes nothing.
+  const app = { name: opts.cpAppName, resourceGroup: opts.cpResourceGroup, subscription: opts.subscription };
+  const issuerRaw = io.getAppEnv(app).find((e) => e.name === ISSUER_ENV)?.value;
+  const callback = asCallbackUrl(issuerRaw);
+  if (!callback) {
+    throw new Fatal(EXIT_FAILED, `could not determine the issuer: ${ISSUER_ENV} on the control-plane Container App ${opts.cpAppName} (${opts.cpResourceGroup}) is ${describeIssuer(issuerRaw)}. The authorization-server reply URL (<issuer>${AS_CALLBACK_PATH}) cannot be registered without it, so nothing was changed. health.bicep renders it (controlPlaneConfig.authIssuerUrl, else the Front Door issuer endpoint, else the stamp ingress /auth); a non-empty healthControlPlaneState.authServerMissing names why it is empty. Re-deploy health, then re-run this bootstrap.`);
+  }
+  io.log(`bootstrap-health-cp-entra: authorization-server reply URL = ${callback} (from ${ISSUER_ENV})`);
+
   // The credential values are validated against THIS cloud before any write.
   const fed = expectedFederatedCredential(io.cloud(), opts.tenantId, opts.cpIdentityPrincipalId);
 
   // ---- 1. federated credential on the authorization-server app ----
-  const asApp = await readApp(io, host, opts.asClientId, 'id,appId,displayName,requiredResourceAccess', 'authorization-server');
+  const asApp = await readApp(io, host, opts.asClientId, 'id,appId,displayName,requiredResourceAccess,web', 'authorization-server');
   // 1a. declare the Graph permission its group check needs, and make sure its service principal
   // exists. Without both, admin consent is impossible (#5346). NOT consent itself.
   const rra = withGraphPermission(asApp.requiredResourceAccess);
@@ -218,6 +273,13 @@ export async function ensure(opts, io) {
   if (rra) {
     if (plan.dryRun) plan.would.push(`declare Microsoft Graph ${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} (application) in requiredResourceAccess on the authorization-server app ${opts.asClientId}`);
     else { await call(io, host, 'PATCH', `/applications/${asApp.id}`, { requiredResourceAccess: rra }, { what: `declare ${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} on the authorization-server application ${asApp.id}` }); plan.writes++; }
+  }
+  // 1b. the reply URL Entra checks the AS redirect_uri against (AADSTS500113 without it). MERGE: every existing web
+  // redirect URI is kept. `web: { redirectUris }` is the same partial PATCH `az ad app update --web-redirect-uris` sends.
+  const redirectUris = withRedirectUri(asApp.web?.redirectUris, callback);
+  if (redirectUris) {
+    if (plan.dryRun) plan.would.push(`add the reply URL ${callback} to web.redirectUris on the authorization-server app ${opts.asClientId} (keeping ${(asApp.web?.redirectUris ?? []).length} existing)`);
+    else { await call(io, host, 'PATCH', `/applications/${asApp.id}`, { web: { redirectUris } }, { what: `add the reply URL ${callback} to the authorization-server application ${asApp.id}` }); plan.writes++; }
   }
   await ensureServicePrincipal(io, host, opts.asClientId, 'the authorization-server app', plan);
   const credPath = `/applications/${asApp.id}/federatedIdentityCredentials`;
@@ -294,7 +356,6 @@ export async function ensure(opts, io) {
 
   // ---- 3. caller allowlist on the Container App ----
   const addIds = [apimAppId, opts.consoleClientId, opts.ciClientId, opts.pdpClientId].filter(Boolean);
-  const app = { name: opts.cpAppName, resourceGroup: opts.cpResourceGroup, subscription: opts.subscription };
   const readAllow = () => (io.getAppEnv(app).find((e) => e.name === ALLOWLIST_ENV)?.value ?? '');
   const before = readAllow();
   const wanted = mergeAllowlist(before, addIds).join(',');
@@ -310,7 +371,9 @@ export async function ensure(opts, io) {
     for (let attempt = 1; attempt <= READBACK_ATTEMPTS; attempt++) {
       problems = [];
       const cc = await listAll(io, host, credPath);
-      if (withGraphPermission((await readApp(io, host, opts.asClientId, 'id,requiredResourceAccess', 'authorization-server')).requiredResourceAccess)) problems.push(`${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} declared in requiredResourceAccess on ${opts.asClientId}`);
+      const asBack = await readApp(io, host, opts.asClientId, 'id,requiredResourceAccess,web', 'authorization-server');
+      if (withGraphPermission(asBack.requiredResourceAccess)) problems.push(`${GRAPH_PERMISSIONS.map((g) => g.name).join(' + ')} declared in requiredResourceAccess on ${opts.asClientId}`);
+      if (withRedirectUri(asBack.web?.redirectUris, callback)) problems.push(`reply URL ${callback} in web.redirectUris on ${opts.asClientId}`);
       const asSp = await call(io, host, 'GET', `/servicePrincipals(appId='${opts.asClientId}')?$select=id,appId`, undefined, { nullOn404: true, what: 'read back the authorization-server service principal' });
       if (!asSp?.json?.id) problems.push(`service principal for the authorization-server app ${opts.asClientId}`);
       if (!cc.some(sameCred)) problems.push(`federated credential on ${opts.asClientId} with issuer ${fed.issuer} / subject ${fed.subject} / audience ${fed.audiences[0]}`);
@@ -337,7 +400,7 @@ export async function ensure(opts, io) {
   for (const p of partial) io.log(`bootstrap-health-cp-entra: PARTIAL: ${p}`);
   io.writeOutputs?.([['writes', String(plan.writes)], ['partial', String(partial.length > 0)], ['allowed_caller_app_ids', wanted]],
     `### LHDS control-plane Entra bootstrap\n- cloud: ${ep.cloud}${plan.dryRun ? ' (dry run)' : ''}\n- ${summary.split('\n')[0]}${partial.map((p) => `\n- PARTIAL: ${p}`).join('')}`);
-  return { writes: plan.writes, would: plan.would, partial, allowlist: wanted, fedAction };
+  return { writes: plan.writes, would: plan.would, partial, allowlist: wanted, fedAction, callback };
 }
 
 export function parseArgs(argv) {

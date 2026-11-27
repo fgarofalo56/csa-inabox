@@ -28,7 +28,16 @@
 3. The post-deploy bootstrap (`bootstrap-health-cp-entra.mjs`) declares Graph
    `User.ReadBasic.All` + `GroupMember.Read.All` (application) on `loom-health-cp-as` and creates its
    service principal, so a Global Administrator can grant consent. It does not
-   grant it.
+   grant it. It also registers the authorization server's Entra reply URL,
+   `<issuer>/callback`, in `web.redirectUris` on `loom-health-cp-as`. Without
+   it, SMART sign-in fails at Entra with `AADSTS500113`. The issuer is read from
+   `LOOM_HEALTH_CP_ISSUER_URL` on the deployed `loom-health-cp` Container App, the
+   same value the AS uses. That is the Front Door issuer endpoint where
+   `controlPlaneConfig.frontDoor` is set (Commercial, GCC-High), and otherwise
+   `https://<stamp ingress>/auth`. Existing reply URLs are kept, and nothing is
+   written when the URL is already there. The write is read back. An issuer that
+   is not set or not https fails the run with "could not determine the issuer",
+   before any write.
 4. A stood-down or what-if run is titled DRY RUN and is not a deployed SHA.
 5. IL5 and DoD are not offered. IL5 is `health-params/il5-health.bicepparam`,
    supported-in-code only.
