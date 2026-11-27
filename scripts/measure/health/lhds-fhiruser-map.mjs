@@ -21,6 +21,25 @@
  *               The route takes no If-Match: it re-reads its own etag between its get and replace. So there is a
  *               GET->PUT race with a concurrent writer of the SAME mapping (the console, #5472); the read-back after the
  *               PUT is what detects a lost race, nothing here makes the write exclusive.
+ *            OPTIONAL, additive (each off unless asked for; the map part above runs exactly as without them):
+ *   bind     --bind-group-id <GUID> [--bind-role fhir-smart-user]: after the mapping checks and BEFORE the mint, GET
+ *            /api/health/auth/tenants/{t}/bindings, MERGE {groupId, roleId} into the existing list (never dropping one,
+ *            adding nothing when the pair is present) and PUT it back with v1Scopes:false, then read it back and assert
+ *            the pair, every pre-existing pair, and v1Scopes:false. The role must be an id in
+ *            apps/loom-health-cp/src/auth/role-scope-map.v1.json, read from that file at run time (the control plane's
+ *            ROLE_IDS is built from it). Why v1Scopes:false: the GET of a tenant with NO binding doc answers
+ *            v1Scopes:true (server.ts BindingsSchema default), so echoing it back would switch v1 grammar ON. Why the
+ *            flip is guarded: v1Scopes is read by EVERY SMART authorize on the tenant (parseRequest {v1}) and by its
+ *            smart-configuration (`permission-v1`); turning it off makes v1 scopes (.read/.write/.*) unacceptable to
+ *            every client on the tenant, not only Inferno. So when the doc has v1Scopes:true AND bindings other than
+ *            this pair, the run REFUSES before anything is created unless --set-v2-scopes true. The PUT takes no
+ *            If-Match: a concurrent writer can race the GET->PUT; the read-back detects a lost pair, not prevention.
+ *   seed     --seed-patient true: the same temporary client, its scope widened to system/Practitioner.cr
+ *            system/Patient.cr (ONLY then), and the same pod run does a CONDITIONAL create (If-None-Exist on
+ *            urn:loom:lhds:synthetic-patient|fhiruser-map-<tenant>) of ONE synthetic Patient (HTEST meta.tag, name
+ *            "Synthetic InfernoPatient", no PHI) at the bare base, then reads it back. 201 SEEDED, 200 UNCHANGED.
+ *            The VERDICT line names each part: map=MAPPED|UNCHANGED, bind=BOUND|UNCHANGED, seed=SEEDED|UNCHANGED
+ *            (or not-requested / not-run / FAIL / UNMEASURED).
  *            The minted client is DISABLED in a finally on the normal and error paths. On SIGTERM/SIGINT a bounded
  *            (SIGNAL_DISABLE_MS) best-effort disable runs before exit 143. A SIGKILL or a lost runner skips both:
  *            that is what the cleanup phase is for.
@@ -32,7 +51,8 @@
  *
  * The oid comes ONLY from env LHDS_FHIRUSER_OID (a repo secret: the repo is public, inputs are visible). It is never
  * printed: every output line is scrubbed of it in every letter case BEFORE any truncation, and the summary carries only
- * the tenant, the Practitioner reference and mapping=ok. Tokens and keys are never printed or written outside a 0600
+ * the tenant, the Practitioner reference and mapping=ok (plus, when asked for, the bound group id + role and the Patient
+ * reference; a group id is not the user's oid). Tokens and keys are never printed or written outside a 0600
  * temp dir that is deleted in a finally.
  *
  * Exit 0 mapped (created, reused or already mapped), 1 defect / refused, 2 unmeasured (deploy-integrity R7: an outcome
@@ -40,6 +60,7 @@
  *
  * Args: --phase map|cleanup --cp-url --tenant --stamp [--display-name] [--replace-missing true|false] [--issuer-path]
  *       [--aks-rg --aks-name --aks-subscription] [--summary-file] [--client-file]
+ *       [--bind-group-id <GUID> --bind-role <role> --set-v2-scopes true|false] [--seed-patient true|false] [--role-map]
  * Env:  LHDS_CP_TOKEN (control-plane bearer), LHDS_FHIRUSER_OID (map only).
  */
 import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -60,6 +81,23 @@ export const SYNTHETIC_IDENTIFIER_SYSTEM = 'urn:loom:lhds:synthetic-practitioner
 /** STABLE per tenant, so the conditional create of a re-run matches the Practitioner an earlier run made. */
 export const syntheticIdentifierValue = (tenant) => `fhiruser-map-${tenant}`;
 export const clientPrefixFor = (tenant) => `${GRANT.clientPrefix}-${tenant}-`;
+/** The grant ONLY when --seed-patient true: the Practitioner grant plus exactly the Patient create/read. */
+export const SEED_GRANT = Object.freeze({ ...GRANT, scope: 'system/Practitioner.cr system/Patient.cr', allowedScopes: ['system/Practitioner.cr', 'system/Patient.cr'] });
+export const grantFor = (seed) => (seed ? SEED_GRANT : GRANT);
+export const SYNTHETIC_PATIENT_IDENTIFIER_SYSTEM = 'urn:loom:lhds:synthetic-patient';
+export const SYNTHETIC_PATIENT_NAME = Object.freeze({ use: 'official', text: 'Synthetic InfernoPatient', family: 'Synthetic', given: ['InfernoPatient'] });
+export const DEFAULT_BIND_ROLE = 'fhir-smart-user';
+/** The control plane's role list source (role-map.ts imports it; ROLE_IDS = its roles[].id). Read, never transcribed. */
+export const ROLE_MAP_URL = new URL('../../../apps/loom-health-cp/src/auth/role-scope-map.v1.json', import.meta.url);
+/** server.ts BindingsSchema: bindings .max(100). */
+export const BINDINGS_MAX = 100;
+
+/** The role ids the control plane accepts, read from role-scope-map.v1.json (or a test file). Throws when unreadable. */
+export function roleIdsFrom(file = ROLE_MAP_URL) {
+  const j = JSON.parse(readFileSync(file, 'utf8'));
+  if (!Array.isArray(j?.roles)) throw new Error('the role map has no roles[] array');
+  return new Set(j.roles.map((r) => r?.id).filter((x) => typeof x === 'string'));
+}
 /** The control plane's client list cap (apps/loom-health-cp/src/auth/server.ts `stores.clients.list(500)`). */
 export const CLIENT_LIST_CAP = 500;
 export const SIGNAL_DISABLE_MS = 10_000;
@@ -84,6 +122,8 @@ export function parseArgs(argv, env) {
     displayName: pick('display-name', DEFAULT_DISPLAY_NAME), replaceMissing: pick('replace-missing', 'false'),
     issuerPath: pick('issuer-path', '/auth'), aksRg: pick('aks-rg'), aksName: pick('aks-name'), aksSub: pick('aks-subscription'),
     summaryFile: pick('summary-file'), clientFile: pick('client-file'),
+    bindGroupId: pick('bind-group-id'), bindRole: pick('bind-role', DEFAULT_BIND_ROLE) || DEFAULT_BIND_ROLE,
+    setV2Scopes: pick('set-v2-scopes', 'false'), seedPatient: pick('seed-patient', 'false'), roleMap: pick('role-map'),
     cpToken: String(env.LHDS_CP_TOKEN ?? '').replace(/[\r\n]/g, ''),
     oid: String(env.LHDS_FHIRUSER_OID ?? '').replace(/[\r\n]/g, '').trim(),
   };
@@ -103,6 +143,15 @@ export function validate(c) {
   if (!/^[A-Za-z0-9._()-]{1,90}$/.test(c.aksRg)) return 'aks-rg is required (the stamp resource group)';
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(c.aksName)) return 'aks-name is required (the stamp AKS cluster)';
   if (c.aksSub && !GUID_RE.test(c.aksSub)) return 'aks-subscription must be a GUID when given';
+  if (!['true', 'false'].includes(c.seedPatient ?? 'false')) return 'seed-patient must be true or false';
+  if (!['true', 'false'].includes(c.setV2Scopes ?? 'false')) return 'set-v2-scopes must be true or false';
+  if (c.bindGroupId) {
+    if (!GUID_RE.test(c.bindGroupId)) return 'bind-group-id must be a GUID (the Entra group object id)';
+    if (!/^[a-z0-9-]{1,64}$/.test(c.bindRole)) return 'bind-role must be 1-64 chars of a-z, 0-9 and hyphen';
+    let roles;
+    try { roles = roleIdsFrom(c.roleMap || ROLE_MAP_URL); } catch (e) { return `could not read the role map (${redact(e?.message ?? 'error', 120)}), so bind-role is not validated`; }
+    if (!roles.has(c.bindRole)) return `bind-role ${c.bindRole} is not a role id in role-scope-map.v1.json (${[...roles].join(', ')})`;
+  }
   return null;
 }
 
@@ -119,31 +168,48 @@ export function practitionerBody({ displayName, tenant }) {
   };
 }
 
+/** The synthetic Patient (--seed-patient). No PHI: a fixed synthetic name, the HTEST tag and a STABLE identifier. */
+export function patientBody({ tenant }) {
+  if (!SLUG_RE.test(tenant)) throw new Error('patientBody: tenant is not a slug');
+  return {
+    resourceType: 'Patient',
+    meta: { tag: [{ ...SYNTHETIC_TAG }] },
+    identifier: [{ system: SYNTHETIC_PATIENT_IDENTIFIER_SYSTEM, value: syntheticIdentifierValue(tenant) }],
+    active: true,
+    name: [{ ...SYNTHETIC_PATIENT_NAME, given: [...SYNTHETIC_PATIENT_NAME.given] }],
+  };
+}
+
 /**
  * The script run in the aks-command pod (sh builtins + curl only, as the CRUD probe measured). The token is NOT in this
  * text: it arrives as the header file `hdr`, read with `curl -H @hdr`. The body arrives as practitioner.json. Prints
  * only `MAP ...` lines. With an existing id it GETs that Practitioner first; it goes on to the create only on a 404/410
- * answer AND replaceMissing. The create is conditional on the stable identifier (If-None-Exist).
+ * answer AND replaceMissing. The create is conditional on the stable identifier (If-None-Exist). With seed, a second
+ * block conditionally creates the synthetic Patient from patient.json and prints `SEED ...` lines; it runs whatever the
+ * Practitioner block concluded (it is judged separately).
  */
-export function renderMapScript({ tenant, existingId = '', replaceMissing = false }) {
+export function renderMapScript({ tenant, existingId = '', replaceMissing = false, seed = false }) {
   if (!SLUG_RE.test(tenant)) throw new Error('renderMapScript: tenant is not a slug');
   if (existingId && !FHIR_ID.test(existingId)) throw new Error('renderMapScript: existing id is not a FHIR id');
   return `#!/bin/sh
 # Generated by scripts/measure/health/lhds-fhiruser-map.mjs. Holds no secret: the token is the header file hdr.
-# Prints MAP lines only. curl stderr is discarded; no header, token or response body is ever printed.
+# Prints MAP and SEED lines only. curl stderr is discarded; no header, token or response body is ever printed.
 set -u
 BASE='${engineBase(tenant)}'
 EXISTING='${existingId}'
 REPLACE_MISSING='${replaceMissing ? 'yes' : 'no'}'
+SEED='${seed ? 'yes' : 'no'}'
 INE='If-None-Exist: identifier=${SYNTHETIC_IDENTIFIER_SYSTEM}|${syntheticIdentifierValue(tenant)}'
+PINE='If-None-Exist: identifier=${SYNTHETIC_PATIENT_IDENTIFIER_SYSTEM}|${syntheticIdentifierValue(tenant)}'
 TMP="\${TMPDIR:-/tmp}/lhds-fumap.$$"
 HF="$TMP.h"
 BF="$TMP.b"
-trap 'rm -f "$HF" "$BF" hdr practitioner.json 2>/dev/null' EXIT
+# rm -f is already silent on a missing file.
+trap 'rm -f "$HF" "$BF" hdr practitioner.json patient.json' EXIT
 CR=$(printf '\\r')
 CODE=000
 
-# req <METHOD> <url> [bodyfile] -> sets CODE; headers in $HF, body in $BF. A body means a CONDITIONAL create.
+# req <METHOD> <url> [bodyfile] -> sets CODE; headers in $HF, body in $BF. A body means a CONDITIONAL create on $INE.
 req() {
   : > "$HF" 2>/dev/null; : > "$BF" 2>/dev/null
   if [ "$#" -ge 3 ]; then
@@ -163,40 +229,56 @@ location() {
   printf '%s' "$loc"
 }
 
+# The resource type the helpers below read ($RT): Practitioner, then Patient for the seed block.
+RT=Practitioner
+
 created_id() {
   loc=$(location)
-  case "$loc" in *'/Practitioner/'*) rest=\${loc#*/Practitioner/}; id=\${rest%%/*} ;; *) id='' ;; esac
+  case "$loc" in *"/$RT/"*) rest=\${loc#*/"$RT"/}; id=\${rest%%/*} ;; *) id='' ;; esac
   case "$id" in ''|*[!A-Za-z0-9.-]*) id='' ;; esac
   printf '%s' "$id"
 }
 
 location_bare() {
-  case "$(location)" in *'/fhir/Practitioner/'*) printf 'yes' ;; *) printf 'no' ;; esac
+  case "$(location)" in *"/fhir/$RT/"*) printf 'yes' ;; *) printf 'no' ;; esac
 }
 
-body_is() { # $1 = id ; 0 when the response body is a Practitioner whose id is $1
+body_is() { # $1 = id ; 0 when the response body is a $RT whose id is $1
   b=''
   while IFS= read -r line || [ -n "$line" ]; do b="$b$line"; done < "$BF"
-  case "$b" in *'"resourceType":"Practitioner"'*|*'"resourceType": "Practitioner"'*) ;; *) return 1 ;; esac
+  case "$b" in *'"resourceType":"'"$RT"'"'*|*'"resourceType": "'"$RT"'"'*) ;; *) return 1 ;; esac
   case "$b" in *'"id":"'"$1"'"'*|*'"id": "'"$1"'"'*) return 0 ;; esac
   return 1
 }
 
-if [ -n "$EXISTING" ]; then
-  req GET "$BASE/Practitioner/$EXISTING"
-  if [ "$CODE" = "200" ] && body_is "$EXISTING"; then echo "MAP step=verify status=$CODE id_match=yes"; exit 0; fi
-  echo "MAP step=verify status=$CODE id_match=no"
-  case "$CODE" in 404|410) ;; *) exit 0 ;; esac
-  [ "$REPLACE_MISSING" = "yes" ] || exit 0
-fi
+# create_read <TAG> <bodyfile>: conditional create of $RT on $INE, then a read-back; prints <TAG> lines.
+create_read() {
+  req POST "$BASE/$RT" "$2"
+  NID=''; BARE=no
+  case "$CODE" in 200|201) NID=$(created_id); BARE=$(location_bare) ;; esac
+  if [ -n "$NID" ]; then echo "$1 step=create status=$CODE id=$NID bare=$BARE"; else echo "$1 step=create status=$CODE bare=$BARE"; fi
+  if [ -n "$NID" ]; then
+    req GET "$BASE/$RT/$NID"
+    if [ "$CODE" = "200" ] && body_is "$NID"; then echo "$1 step=read status=$CODE id_match=yes"; else echo "$1 step=read status=$CODE id_match=no"; fi
+  fi
+}
 
-req POST "$BASE/Practitioner" practitioner.json
-NID=''; BARE=no
-case "$CODE" in 200|201) NID=$(created_id); BARE=$(location_bare) ;; esac
-if [ -n "$NID" ]; then echo "MAP step=create status=$CODE id=$NID bare=$BARE"; else echo "MAP step=create status=$CODE bare=$BARE"; fi
-if [ -n "$NID" ]; then
-  req GET "$BASE/Practitioner/$NID"
-  if [ "$CODE" = "200" ] && body_is "$NID"; then echo "MAP step=read status=$CODE id_match=yes"; else echo "MAP step=read status=$CODE id_match=no"; fi
+practitioner() {
+  if [ -n "$EXISTING" ]; then
+    req GET "$BASE/Practitioner/$EXISTING"
+    if [ "$CODE" = "200" ] && body_is "$EXISTING"; then echo "MAP step=verify status=$CODE id_match=yes"; return 0; fi
+    echo "MAP step=verify status=$CODE id_match=no"
+    case "$CODE" in 404|410) ;; *) return 0 ;; esac
+    [ "$REPLACE_MISSING" = "yes" ] || return 0
+  fi
+  create_read MAP practitioner.json
+}
+
+practitioner
+if [ "$SEED" = "yes" ]; then
+  RT=Patient
+  INE="$PINE"
+  create_read SEED patient.json
 fi
 exit 0
 `;
@@ -234,20 +316,81 @@ export function judgeMap(p, existingId = '', replaceMissing = false) {
       return { code: 1, note: `REFUSED: the mapping points at Practitioner/${existingId}, which answers ${v.status}. It may be a mapping this tool did not make, so nothing was created or changed; dispatch again with replace_missing=true to replace it` };
     }
   }
+  return judgeCreateRead(p, 'Practitioner');
+}
+
+/** The create + read-back verdict shared by the Practitioner (MAP lines) and the seeded Patient (SEED lines). */
+function judgeCreateRead(p, noun) {
   const c = p.create;
   if (!c) return { code: 2, note: 'no create line from the pod' };
   if (NO_ANSWER(c.status)) return { code: 2, note: c.status === 0 ? 'curl got no HTTP answer from the engine' : 'the engine answered 503 to the create' };
   if (c.status === 403) return { code: 1, note: 'the engine refused the create (403). A PDP deny and a tenant not homed in the published bundle read the same from here; the rule that fired is in the engine audit log, not established by this run' };
-  if (c.status === 412) return { code: 1, note: 'the conditional create answered 412: more than one Practitioner carries the synthetic identifier, so which one to map is not established' };
-  if (c.status !== 201 && c.status !== 200) return { code: 1, note: `the create answered ${c.status}; expected 201 (created) or 200 (an earlier run's Practitioner matched)` };
-  if (!c.id) return { code: 1, note: `the create answered ${c.status}, but no Location carried a Practitioner id` };
+  if (c.status === 412) return { code: 1, note: `the conditional create answered 412: more than one ${noun} carries the synthetic identifier, so which one to ${noun === 'Practitioner' ? 'map' : 'use'} is not established` };
+  if (c.status !== 201 && c.status !== 200) return { code: 1, note: `the create answered ${c.status}; expected 201 (created) or 200 (an earlier run's ${noun} matched)` };
+  if (!c.id) return { code: 1, note: `the create answered ${c.status}, but no Location carried a ${noun} id` };
   if (c.bare !== true) return { code: 1, note: 'the Location carries a partition segment: the bare-base reference would not resolve' };
   const r = p.read;
   if (!r) return { code: 2, note: 'no read-back line' };
   if (NO_ANSWER(r.status)) return { code: 2, note: 'no usable answer to the read-back' };
   if (r.status !== 200 || r.idMatch !== true) return { code: 1, note: `the read-back answered ${r.status} id_match=${r.idMatch === true}; expected 200 and the same id` };
   const kind = c.status === 201 ? 'created' : 'reused';
-  return { code: 0, kind, id: c.id, note: kind === 'created' ? 'a synthetic Practitioner was created and read back' : 'the conditional create matched the synthetic Practitioner an earlier run made; reused and read back' };
+  return { code: 0, kind, id: c.id, note: kind === 'created' ? `a synthetic ${noun} was created and read back` : `the conditional create matched the synthetic ${noun} an earlier run made; reused and read back` };
+}
+
+const SEED_LINE = /^SEED step=(create|read) status=(\d{3})(?: id=([A-Za-z0-9.-]{1,64}))?(?: id_match=(yes|no))?(?: bare=(yes|no))?$/;
+
+/** Only exact SEED lines are read (the Patient block). The last line per step wins. */
+export function parseSeedLogs(text) {
+  const out = {};
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const m = SEED_LINE.exec(raw.trim());
+    if (!m) continue;
+    out[m[1]] = { status: Number(m[2]), ...(m[3] ? { id: m[3] } : {}), ...(m[4] ? { idMatch: m[4] === 'yes' } : {}), ...(m[5] ? { bare: m[5] === 'yes' } : {}) };
+  }
+  return out;
+}
+
+/** The seeded Patient: { code, kind: created|reused, id, note }, as judgeMap's create path. */
+export const judgeSeed = (p) => judgeCreateRead(p, 'Patient');
+
+/** 1 (a defect) outranks 2 (unmeasured) outranks 0. */
+const worst = (...codes) => (codes.includes(1) ? 1 : codes.includes(2) ? 2 : 0);
+
+/**
+ * The role binding (--bind-group-id). Returns { code, state: BOUND|UNCHANGED, note }. Never drops a binding; refuses a
+ * v1Scopes true->false flip on a tenant with OTHER bindings unless setV2. Reads back the pair, the old pairs and v1Scopes.
+ */
+export async function bindGroup({ tenant, groupId, roleId, setV2 }, api, et) {
+  const path = `/api/health/auth/tenants/${encodeURIComponent(tenant)}/bindings`;
+  const pair = { groupId: groupId.toLowerCase(), roleId };
+  const key = (x) => `${String(x.groupId).toLowerCase()} ${x.roleId}`;
+  const g = await api('GET', path);
+  if (g.status !== 200 || !Array.isArray(g.json?.data?.bindings)) return { code: 2, note: `UNMEASURED: could not read the role bindings of ${tenant}: ${et(g)}. Nothing was changed` };
+  const raw = g.json.data.bindings;
+  const cur = raw.filter((x) => typeof x?.groupId === 'string' && typeof x?.roleId === 'string').map((x) => ({ groupId: x.groupId, roleId: x.roleId }));
+  if (cur.length !== raw.length) return { code: 1, note: `REFUSED: a binding entry of ${tenant} is not {groupId, roleId}; this tool does not rewrite a document it cannot read. Nothing was changed` };
+  // A tenant with NO binding doc answers v1Scopes:true (the schema default), so anything but an explicit false is true.
+  const v1 = g.json.data.v1Scopes !== false;
+  const present = cur.some((x) => key(x) === key(pair));
+  if (present && !v1) return { code: 0, state: 'UNCHANGED', note: `group ${pair.groupId} is already bound to ${roleId} with v1Scopes=false; nothing written` };
+  const others = cur.filter((x) => key(x) !== key(pair));
+  if (v1 && others.length > 0 && !setV2) {
+    return { code: 1, note: `REFUSED: the bindings of ${tenant} have v1Scopes=true and ${others.length} other binding(s). Writing v1Scopes=false changes scope parsing for EVERY SMART authorize on this tenant (v1 .read/.write/.* scopes stop being accepted) and drops permission-v1 from its smart-configuration, for every client, not only Inferno. Nothing was changed; dispatch again with set_v2_scopes=true to accept that` };
+  }
+  const next = present ? cur : [...cur, pair];
+  if (next.length > BINDINGS_MAX) return { code: 1, note: `REFUSED: ${tenant} already has ${cur.length} bindings; adding one exceeds the control plane cap of ${BINDINGS_MAX}. Nothing was changed` };
+  const p = await api('PUT', path, { bindings: next, v1Scopes: false });
+  if (p.status !== 200) return { code: p.status === 'network-error' || p.status === 503 ? 2 : 1, note: `FAIL: the bindings PUT was not confirmed: ${et(p)}` };
+  const back = await api('GET', path);
+  const got = Array.isArray(back.json?.data?.bindings) ? back.json.data.bindings.filter((x) => typeof x?.groupId === 'string' && typeof x?.roleId === 'string') : undefined;
+  if (back.status !== 200 || !got) return { code: 2, note: `UNMEASURED: the PUT answered 200 but the read-back failed: ${et(back)}` };
+  const have = new Set(got.map(key));
+  const lost = cur.filter((x) => !have.has(key(x)));
+  if (!have.has(key(pair)) || back.json.data.v1Scopes !== false || lost.length > 0) {
+    return { code: 1, note: `FAIL: the bindings read-back has pair=${have.has(key(pair))} v1Scopes=${back.json.data.v1Scopes === false ? 'false' : 'not false'} lost_prior=${lost.length}; expected the pair, v1Scopes=false and every prior binding (a concurrent writer can race the GET->PUT)` };
+  }
+  // A PUT was written (the pair, or only the v1Scopes flip of a present pair), so this is BOUND, never UNCHANGED.
+  return { code: 0, state: 'BOUND', note: `group ${pair.groupId} bound to ${roleId}${present ? ' (already present)' : ''}; ${others.length} other binding(s) kept${v1 ? '; v1Scopes switched true->false' : ''}; read back` };
 }
 
 const mkSay = (deps, secrets) => {
@@ -259,11 +402,12 @@ const errText = (r, secrets) => r.status === 'network-error' ? `network-error ${
   : `HTTP ${r.status} ${redact(scrub(r.json?.error?.code ?? '-', secrets), 60)}: ${redact(scrub(r.json?.error?.message ?? '(no body)', secrets), 200)}`;
 
 /** One in-cluster run; polls `az aks command result` while ARM reports a non-terminal state (as the CRUD probe does). */
-async function invokeInCluster(c, deps, say, dir, secrets) {
+async function invokeInCluster(c, deps, say, dir, secrets, seed = false) {
   const exec = deps.exec ?? defaultExec;
   const sleep = deps.sleep ?? ((ms) => new Promise((res) => setTimeout(res, ms)));
   const target = ['-g', c.aksRg, '-n', c.aksName, ...(c.aksSub ? ['--subscription', c.aksSub] : [])];
-  let r = await exec('az', ['aks', 'command', 'invoke', ...target, '--command', 'sh map.sh', '--file', 'map.sh', '--file', 'hdr', '--file', 'practitioner.json', '-o', 'json'], { cwd: dir });
+  const files = ['map.sh', 'hdr', 'practitioner.json', ...(seed ? ['patient.json'] : [])].flatMap((f) => ['--file', f]);
+  let r = await exec('az', ['aks', 'command', 'invoke', ...target, '--command', 'sh map.sh', ...files, '-o', 'json'], { cwd: dir });
   let logs = ''; let state = ''; let sub = 'invoke';
   const read = (o) => { try { const j = JSON.parse(o.stdout); logs = String(j.logs ?? ''); state = String(j.provisioningState ?? ''); return j; } catch { logs = ''; state = 'unparseable'; return undefined; } };
   const first = read(r);
@@ -303,6 +447,11 @@ export async function phaseMap(c, deps = {}) {
   const oid = c.oid.toLowerCase();
   const replaceMissing = c.replaceMissing === 'true';
   const fu = `/api/health/auth/tenants/${encodeURIComponent(c.tenant)}/fhir-users/${encodeURIComponent(oid)}`;
+  const seed = c.seedPatient === 'true';
+  const grant = grantFor(seed);
+  // What each part did, for the VERDICT line. A part that was not asked for is never run.
+  const parts = { map: 'not-run', bind: c.bindGroupId ? 'not-run' : 'not-requested', seed: seed ? 'not-run' : 'not-requested' };
+  const label = (n) => (n === 1 ? 'FAIL' : 'UNMEASURED');
   let clientId;
   let dir;
   let code = 0;
@@ -339,47 +488,74 @@ export async function phaseMap(c, deps = {}) {
       return (code = 2);
     } else say(`no fhirUser mapping for this oid on ${c.tenant} yet`);
 
+    if (c.bindGroupId) {
+      // BEFORE the mint: a refusal here (e.g. the v1Scopes guard) leaves nothing created anywhere.
+      const b = await bindGroup({ tenant: c.tenant, groupId: c.bindGroupId, roleId: c.bindRole, setV2: c.setV2Scopes === 'true' }, api, et);
+      say(`bind: ${redact(scrub(b.note, secrets), 600)}`);
+      if (b.code !== 0) { parts.bind = label(b.code); return (code = b.code); }
+      parts.bind = b.state;
+    }
+
     process.once('SIGTERM', onSig);
     process.once('SIGINT', onSig);
     recordClient(c, 'pending');
-    const tok = await mintTenantToken({ ...deps, cpUrl: c.cpUrl, cpToken: c.cpToken, tenant: c.tenant, issuerPath: c.issuerPath, ...GRANT });
+    const tok = await mintTenantToken({ ...deps, cpUrl: c.cpUrl, cpToken: c.cpToken, tenant: c.tenant, issuerPath: c.issuerPath, ...grant });
     clientId = tok.clientId;
     recordClient(c, clientId);
     secrets.push(tok.accessToken);
     const granted = new Set(tok.scope.split(' ').filter(Boolean));
-    if (granted.size !== 1 || !granted.has(GRANT.scope)) { say(`REFUSED: the minted token carries scope "${redact(scrub(tok.scope, secrets), 120)}", not exactly ${GRANT.scope}. The engine was not contacted.`); return (code = 1); }
-    say(`temporary client ${clientId} minted scope=${GRANT.scope} role=${GRANT.roleIds[0]}`);
+    if (granted.size !== grant.allowedScopes.length || !grant.allowedScopes.every((x) => granted.has(x))) { say(`REFUSED: the minted token carries scope "${redact(scrub(tok.scope, secrets), 120)}", not exactly ${grant.scope}. The engine was not contacted.`); return (code = 1); }
+    say(`temporary client ${clientId} minted scope=${grant.scope} role=${grant.roleIds[0]}`);
 
     dir = mkdtempSync(join(deps.tmpRoot ?? process.env.RUNNER_TEMP ?? tmpdir(), 'lhds-fumap-'));
     try { chmodSync(dir, 0o700); } catch { /* best effort on filesystems without modes */ }
     const put = (name, text) => { writeFileSync(join(dir, name), text, { mode: 0o600 }); try { chmodSync(join(dir, name), 0o600); } catch { /* as above */ } };
-    put('map.sh', renderMapScript({ tenant: c.tenant, existingId, replaceMissing }));
+    put('map.sh', renderMapScript({ tenant: c.tenant, existingId, replaceMissing, seed }));
     put('hdr', `Authorization: Bearer ${tok.accessToken}\n`);
     put('practitioner.json', JSON.stringify(practitionerBody({ displayName: c.displayName, tenant: c.tenant })));
+    if (seed) put('patient.json', JSON.stringify(patientBody({ tenant: c.tenant })));
     say(`running in the aks-command pod of ${redact(c.aksName, 60)} against the bare base of ${c.tenant}`);
-    const logs = await invokeInCluster(c, deps, say, dir, secrets);
-    if (logs === undefined) return (code = 2);
+    const logs = await invokeInCluster(c, deps, say, dir, secrets, seed);
+    if (logs === undefined) { parts.map = 'UNMEASURED'; if (seed) parts.seed = 'UNMEASURED'; return (code = 2); }
+    let seedV = { code: 0 };
+    if (seed) {
+      // Judged on its own: the Patient block runs whatever the Practitioner block concluded.
+      seedV = judgeSeed(parseSeedLogs(logs));
+      say(`seed: ${seedV.code === 0 ? 'OK' : label(seedV.code)} ${redact(scrub(seedV.note, secrets), 400)}`);
+      parts.seed = seedV.code === 0 ? (seedV.kind === 'created' ? 'SEEDED' : 'UNCHANGED') : label(seedV.code);
+    }
     const v = judgeMap(parseMapLogs(logs), existingId, replaceMissing);
     say(`engine: ${v.code === 0 ? 'OK' : v.code === 1 ? 'FAIL' : 'UNMEASURED'} ${redact(scrub(v.note, secrets), 400)}`);
-    if (v.code !== 0) return (code = v.code);
+    if (v.code !== 0) { parts.map = label(v.code); return (code = worst(v.code, seedV.code)); }
     const ref = `Practitioner/${v.id}`;
 
     if (v.kind !== 'existing') {
       const p = await api('PUT', fu, { resource: ref });
       if (p.status !== 200 || p.json?.data?.resource !== ref) {
         say(`FAIL: the mapping PUT did not confirm ${ref}: ${p.status === 200 ? `data.resource=${redact(scrub(p.json?.data?.resource, secrets), 80)}` : et(p)}. ${ref} exists in the engine but is NOT mapped.`);
-        return (code = p.status === 'network-error' || p.status === 503 ? 2 : 1);
+        const pc = p.status === 'network-error' || p.status === 503 ? 2 : 1;
+        parts.map = label(pc);
+        return (code = worst(pc, seedV.code));
       }
     }
     const back = await api('GET', fu);
     const backOid = String(back.json?.data?.oid ?? '').toLowerCase();
     if (back.status !== 200 || back.json?.data?.resource !== ref || backOid !== oid) {
       say(`FAIL: the mapping read-back does not equal ${ref} for this oid: ${back.status === 200 ? `data.resource=${redact(scrub(back.json?.data?.resource, secrets), 80)} oid_matches=${backOid === oid}` : et(back)}`);
+      parts.map = 'FAIL';
       return (code = 1);
     }
+    parts.map = v.kind === 'existing' ? 'UNCHANGED' : 'MAPPED';
     say(`mapping ${v.kind === 'existing' ? 'already present and verified' : 'written and read back'}: ${ref}; sign-in will carry fhirUser=${redact(scrub(back.json.data.fhirUser, secrets), 200)}`);
-    if (c.summaryFile) appendFileSync(c.summaryFile, `## lhds fhirUser map\n\n- tenant: ${c.tenant}\n- fhirUser: ${ref}\n- mapping=ok (${v.kind})\n`);
-    return (code = 0);
+    if (c.summaryFile) {
+      const extra = [
+        ...(c.bindGroupId ? [`- binding: group ${c.bindGroupId.toLowerCase()} -> ${c.bindRole} (${parts.bind}, v1Scopes=false)`] : []),
+        ...(seed ? [seedV.code === 0 ? `- Patient: Patient/${seedV.id} (${parts.seed})` : `- Patient: ${parts.seed}`] : []),
+      ];
+      appendFileSync(c.summaryFile, `## lhds fhirUser map\n\n- tenant: ${c.tenant}\n- fhirUser: ${ref}\n- mapping=ok (${v.kind})\n${extra.map((x) => `${x}\n`).join('')}`);
+    }
+    if (seed && seedV.code === 0) say(`seeded patient: Patient/${seedV.id} (${parts.seed})`);
+    return (code = seedV.code);
   } catch (e) {
     if (e instanceof MintError) { say(`mint failed class=${e.cls}: ${redact(scrub(e.message, secrets), 500)}`); return (code = e.exit); }
     say(`unexpected ${redact(e?.name ?? 'error', 40)}: ${redact(scrub(e?.message ?? '', secrets), 200)}`);
@@ -392,7 +568,7 @@ export async function phaseMap(c, deps = {}) {
       const ok = await disableClient({ ...deps, cpUrl: c.cpUrl, cpToken: c.cpToken }, clientId).catch(() => false);
       say(`cleanup client ${clientId} disabled=${ok}${ok ? '' : ' (NOT confirmed: the always() cleanup step retries it)'}`);
     }
-    say(`VERDICT ${code === 0 ? 'MAPPED' : code === 1 ? 'FAIL' : 'UNMEASURED'}`);
+    say(`VERDICT ${code === 0 ? 'OK' : code === 1 ? 'FAIL' : 'UNMEASURED'} map=${parts.map} bind=${parts.bind} seed=${parts.seed}`);
   }
 }
 
