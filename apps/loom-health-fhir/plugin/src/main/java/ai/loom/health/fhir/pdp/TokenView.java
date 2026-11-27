@@ -12,10 +12,12 @@ import java.util.Base64;
  * never call it on a denied or unevaluated token for anything but a best-effort audit label.
  *
  * @param fhirUser the SMART {@code fhirUser} claim (absolute URL), empty when absent
+ * @param subType the {@code sub_type} claim ({@code user} or {@code system}), empty when absent
  */
-public record TokenView(String scope, String patient, String subject, String clientId, String fhirUser) {
+public record TokenView(String scope, String patient, String subject, String clientId, String fhirUser,
+    String subType) {
   private static final ObjectMapper JSON = new ObjectMapper();
-  public static final TokenView EMPTY = new TokenView("", "", "", "", "");
+  public static final TokenView EMPTY = new TokenView("", "", "", "", "", "");
 
   public static TokenView of(String jwt) {
     try {
@@ -29,7 +31,8 @@ public record TokenView(String scope, String patient, String subject, String cli
           p.path("patient").asText(""),
           p.path("sub").asText(""),
           p.path("client_id").asText(""),
-          p.path("fhirUser").isTextual() ? p.path("fhirUser").asText() : "");
+          p.path("fhirUser").isTextual() ? p.path("fhirUser").asText() : "",
+          p.path("sub_type").asText(""));
     } catch (Exception e) {
       return EMPTY;
     }

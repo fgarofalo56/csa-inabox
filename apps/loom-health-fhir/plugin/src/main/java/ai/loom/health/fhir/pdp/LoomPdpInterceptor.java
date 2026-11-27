@@ -1,5 +1,6 @@
 package ai.loom.health.fhir.pdp;
 
+import ai.loom.health.fhir.partition.LoomTenantIdentificationStrategy;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.interceptor.api.Hook;
 import ca.uhn.fhir.interceptor.api.Interceptor;
@@ -140,6 +141,10 @@ public class LoomPdpInterceptor {
     request.put("resource_type", type);
     if (!idPart.isEmpty()) {
       request.put("resource_id", idPart); // the PDP's fhirUser self-read rule matches it against the token claim
+    }
+    if (rd.getTenantId() != null && !rd.getTenantId().isEmpty()) {
+      // The HAPI partition (DEFAULT at the bare base, #5489). The fhirUser rule denies when it is absent.
+      request.put("partition", rd.getTenantId());
     }
     if (!op.isEmpty()) {
       request.put("op", op);
@@ -390,23 +395,36 @@ public class LoomPdpInterceptor {
 
   /**
    * Mirrors the PDP's fhirUser self-read rule (authz.rego fhir_user_self_read) for the response filter: a single
-   * resource returned by a read/vread passes when it IS the token's fhirUser, i.e. the claim equals exactly
-   * {@code <request.base>/<type>/<id>} of the returned resource and the token was granted the {@code fhirUser} scope.
+   * resource returned by a read/vread passes when it IS the token's fhirUser: a USER token granted the
+   * {@code fhirUser} scope, the returned resource's type/id EQUAL the authorized request's resource_type/resource_id,
+   * the request's partition is DEFAULT, and the claim equals exactly {@code <request.base>/<type>/<id>}.
    * request.base is the pinned public base the PDP already matched against aud; an empty base never matches.
-   * Search and history bundles never reach here, so the fhirUser resource is never revealed through them.
+   * DEFAULT only, as in the rego (partition_address): the bare base serves DEFAULT (#5489), the AS mints bare-base
+   * claims only, and the same id in a facility partition can be a different resource. An absent partition (an engine
+   * that does not partition) never matches.
+   *
+   * <p>The read/vread test below is a near-EQUIVALENT mutant, disclosed rather than counted: filterResponse already
+   * returns before this for every interaction but read/vread/history/search, and history and search always answer
+   * with a Bundle, which takes the bundle branch and never calls this. It stays as a guard for a future caller.
    */
   private static boolean isOwnFhirUser(RequestDetails rd, FhirContext ctx, IBaseResource r, TokenView tv, String ix) {
-    if (!(ix.equals("read") || ix.equals("vread")) || tv.fhirUser().isEmpty()
+    if (!(ix.equals("read") || ix.equals("vread")) || tv.fhirUser().isEmpty() || !"user".equals(tv.subType())
         || !List.of(tv.scope().trim().split("\\s+")).contains("fhirUser")) {
       return false;
     }
     Authorized a = (Authorized) rd.getUserData().get(STATE_KEY);
-    Object base = a == null ? null : a.request().get("base");
-    String id = r.getIdElement() == null ? null : r.getIdElement().getIdPart();
-    if (!(base instanceof String b) || b.isEmpty() || id == null || id.isEmpty()) {
+    if (a == null) {
       return false;
     }
-    return tv.fhirUser().equals(b + "/" + ctx.getResourceType(r) + "/" + id);
+    Map<String, Object> req = a.request();
+    String type = ctx.getResourceType(r);
+    String id = r.getIdElement() == null ? null : r.getIdElement().getIdPart();
+    if (!(req.get("base") instanceof String b) || b.isEmpty() || id == null || id.isEmpty()
+        || !LoomTenantIdentificationStrategy.DEFAULT_PARTITION.equals(req.get("partition"))
+        || !type.equals(req.get("resource_type")) || !id.equals(req.get("resource_id"))) {
+      return false;
+    }
+    return tv.fhirUser().equals(b + "/" + type + "/" + id);
   }
 
   private static boolean visible(FhirContext ctx, SmartScopes scopes, IBaseResource r, TokenView tv) {

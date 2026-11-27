@@ -234,7 +234,9 @@ final class EngineHarness implements AutoCloseable {
     @Read(version = true)
     public org.hl7.fhir.r4.model.Practitioner read(@IdParam IdType id) {
       handlerCalls.incrementAndGet();
-      org.hl7.fhir.r4.model.Practitioner p = practitioner(id.getIdPart());
+      // "swap" answers with a DIFFERENT resource than requested (Practitioner/1000), to prove the response filter
+      // checks the response against the authorized request, not the response alone.
+      org.hl7.fhir.r4.model.Practitioner p = practitioner("swap".equals(id.getIdPart()) ? "1000" : id.getIdPart());
       if (id.hasVersionIdPart()) {
         p.setId(new IdType("Practitioner", id.getIdPart(), id.getVersionIdPart()));
       }
@@ -246,6 +248,13 @@ final class EngineHarness implements AutoCloseable {
     public List<org.hl7.fhir.r4.model.Practitioner> search(@OptionalParam(name = "_id") StringParam id) {
       handlerCalls.incrementAndGet();
       return List.of(practitioner("1000"), practitioner("1001"));
+    }
+
+    /** Instance history: a Bundle whose request DOES name an id, unlike a search. */
+    @History
+    public List<org.hl7.fhir.r4.model.Practitioner> history(@IdParam IdType id) {
+      handlerCalls.incrementAndGet();
+      return List.of(practitioner(id.getIdPart()));
     }
   }
 

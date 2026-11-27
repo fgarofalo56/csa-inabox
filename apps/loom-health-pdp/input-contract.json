@@ -22,6 +22,7 @@
         "base": { "type": "string", "description": "The tenant public FHIR base (the engine configured server address, hapi.fhir.server_address = <stampBaseUrl>/<tenant>/fhir): no facility-partition segment, no trailing slash. NOT the URL as received. It is the audience the token must name. Must be one of the tenant's bases in data.lhds.stamp." },
         "resource_type": { "type": "string", "description": "fhir only, required: FHIR resource type of the target." },
         "resource_id": { "type": "string", "description": "fhir only, optional: the logical id the URL names (Type/{id}), absent when it names none. Used ONLY by the SMART fhirUser self-read rule: a read/vread whose base/resource_type/resource_id equal the token's fhirUser claim is permitted when the token holds the fhirUser scope." },
+        "partition": { "type": "string", "description": "fhir only, optional: the HAPI request partition (rd.getTenantId()): DEFAULT at the bare base (#5489, also an explicit /DEFAULT), else the facility name. Absent when the engine does not partition. Used ONLY by the fhirUser self-read rule, which matches a bare-base claim to DEFAULT only and denies when absent." },
         "op": { "type": "string", "description": "fhir interaction=operation only: e.g. $export. Gated by lhds_roles via the role-scope map." },
         "patient_compartment": {
           "type": "array",

@@ -46,9 +46,12 @@ Interceptor rules the PDP relies on:
 - SMART `fhirUser` self-read: a user token granted the `fhirUser` scope may `read`/`vread`
   exactly the resource its `fhirUser` claim names, with no data scope covering it (the AS
   puts the claim in the access token only when the scope is granted). The claim's base must
-  EQUAL `request.base` (already pinned to `aud` and the tenant's stamp bases), and its type
-  and id must equal `resource_type`/`resource_id`. Never search, history, a write, another
-  id or type, or another base. The FHIR plugin's response filter mirrors the same match.
+  EQUAL the address of the request's `partition`: only `DEFAULT` is defined, served at the
+  bare `request.base` (#5489; already pinned to `aud` and the tenant's stamp bases), because
+  the AS mints bare-base claims only and the same id can be another resource in a facility.
+  Its type and id must equal `resource_type`/`resource_id`. Never search, history, a write,
+  another id, type, base or partition, and never when `partition` is absent. The FHIR
+  plugin's response filter mirrors the same match.
 
 ## Bundle data supplied per stamp (not in git)
 
