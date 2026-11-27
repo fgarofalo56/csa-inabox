@@ -29,7 +29,7 @@ import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backe
 import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
-import { FederationError, GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
+import { FederationError, GraphConsentRequiredError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
@@ -63,6 +63,26 @@ function federationFailure(e: unknown): Record<string, string | number> {
     };
   }
   return { reason: 'exchange_error', ...classifyError(e) };
+}
+
+/**
+ * Log fields for a failed membership check. `cause` separates the AS app's Graph token not being acquired
+ * (`token_acquisition`, with the sanitised token-endpoint reason) from Graph refusing the call (`graph_refused`,
+ * the consent gate): before this split both read as `consent:1` and sent a consent hunt after a token failure.
+ */
+export function membershipFailure(e: unknown): Record<string, string | number> {
+  if (e instanceof GraphTokenError) {
+    return {
+      error: e.name,
+      cause: 'token_acquisition',
+      consent: 0,
+      reason: e.reason,
+      ...(e.entraError ? { entraError: e.entraError } : {}),
+      ...(e.entraErrorCode !== undefined ? { entraErrorCode: e.entraErrorCode } : {}),
+    };
+  }
+  if (e instanceof GraphConsentRequiredError) return { error: e.name, cause: 'graph_refused', consent: 1 };
+  return { error: e instanceof Error ? classifyError(e).name : 'unknown', cause: 'other', consent: 0 };
 }
 
 export interface AuthServerDeps {
@@ -517,7 +537,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     try {
       roleIds = await rolesForUser(ar.tenant, identity.oid);
     } catch (e) {
-      deps.log('auth.membership_error', { error: e instanceof Error ? e.name : 'unknown', consent: e instanceof GraphConsentRequiredError ? 1 : 0 });
+      deps.log('auth.membership_error', membershipFailure(e));
       return back({ error: 'server_error', error_description: 'role membership could not be established' });
     }
 
@@ -708,7 +728,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     try {
       return await rolesForUser(doc.tenant, doc.oid as string);
     } catch (e) {
-      deps.log('auth.membership_error', { error: e instanceof Error ? e.name : 'unknown', consent: e instanceof GraphConsentRequiredError ? 1 : 0 });
+      deps.log('auth.membership_error', membershipFailure(e));
       return undefined;
     }
   }
@@ -1319,7 +1339,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       try {
         roles = await rolesForUser(slug, oid);
       } catch (e) {
-        deps.log('auth.membership_error', { error: e instanceof Error ? e.name : 'unknown', consent: e instanceof GraphConsentRequiredError ? 1 : 0 });
+        deps.log('auth.membership_error', membershipFailure(e));
         return ok({ unavailable: true, reason: 'role membership could not be established' });
       }
       if (pickerScope(roles).length === 0) return ok({ notPermitted: true, patients: [] });

@@ -1,7 +1,9 @@
 // Production wiring for the Authorization Server: Key Vault signer, Entra
 // federation, Graph membership, Cosmos stores. Everything reaches Azure with
-// the managed identity. compose() adds the control-plane authenticator, the
-// tenant collection and the logger.
+// the managed identity, EXCEPT Graph: that is called as the AS app
+// (loom-health-cp-as) with the MI federated in as its client assertion.
+// compose() adds the control-plane authenticator, the tenant collection and
+// the logger.
 
 import { DefaultAzureCredential } from '@azure/identity';
 import { createRemoteJWKSet } from 'jose';
@@ -11,10 +13,38 @@ import { cachingJwksFetcher, httpsJwksFetcher } from './backend-auth.js';
 import { TOKEN_EXCHANGE_SCOPE_BY_CLOUD } from './clouds.js';
 import type { AuthServerConfig } from './config.js';
 import { createCosmosAuthStores } from './cosmos.js';
-import { createEntraFederation, createGraphMembership } from './federation.js';
+import { createAppTokenProvider, createEntraFederation, createGraphMembership, type GraphMembership } from './federation.js';
 import { createFhirUserResolver } from './fhir-user.js';
 import type { AuthServerInit } from './server.js';
 import { KeyVaultRsaSigner, KeyVaultSigner, idTokenKeyUrlFrom } from './signer.js';
+
+export interface AsAppGraphOptions {
+  cloud: Config['cloud'];
+  authorityHost: string;
+  entraTenantId: string;
+  /** loom-health-cp-as: the app the bootstrap declares User.ReadBasic.All + GroupMember.Read.All on. */
+  asClientId: string;
+  /** The managed identity's token getter; used ONLY to mint the federated client assertion. */
+  getToken: (scope: string) => Promise<string>;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Graph membership AS the AS app, not as the managed identity. The Graph application permissions and their
+ * admin consent live on loom-health-cp-as; the managed identity holds none, so a Graph token minted for the
+ * managed identity is refused (401/403) - the live `consent:1` on 2026-11-27. The AS app's token comes from
+ * the client-credentials grant with the same federated MI assertion the Entra sign-in already uses.
+ */
+export function graphMembershipAsApp(o: AsAppGraphOptions): GraphMembership {
+  const asAppToken = createAppTokenProvider({
+    authorityHost: o.authorityHost,
+    entraTenantId: o.entraTenantId,
+    clientId: o.asClientId,
+    getClientAssertion: () => o.getToken(TOKEN_EXCHANGE_SCOPE_BY_CLOUD[o.cloud]),
+    ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}),
+  });
+  return createGraphMembership({ cloud: o.cloud, getToken: asAppToken, ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}) });
+}
 
 export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): AuthServerInit {
   const credential = new DefaultAzureCredential({ authorityHost: `https://${cfg.authorityHost}` });
@@ -39,7 +69,13 @@ export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): Auth
         timeoutDuration: 5_000,
       }),
     }),
-    graph: createGraphMembership({ cloud: cfg.cloud, getToken }),
+    graph: graphMembershipAsApp({
+      cloud: cfg.cloud,
+      authorityHost: cfg.authorityHost,
+      entraTenantId: cfg.entraTenantId,
+      asClientId: a.asClientId,
+      getToken,
+    }),
     fhirBaseFor,
     // SMART fhirUser from the operator-managed mapping (#5454 A4); same base as the token audience.
     resolveFhirUser: createFhirUserResolver(stores.fhirUsers, fhirBaseFor),
