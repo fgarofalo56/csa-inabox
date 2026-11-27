@@ -108,6 +108,20 @@ describe('ensureIngressCertificate', () => {
     expect(msg).not.toContain(CERTIFICATES_OFFICER_ROLE);
   });
 
+  it('hands the PUBLIC cer of the version it kept or issued to onCertificate (the stamp-trust pin source)', async () => {
+    // Breaks if onCertificate is not called on the valid path, is handed the STALE version's cer on the issued
+    // path (OLD instead of NEW), or is called when no valid version was established (the fail-closed case).
+    const seen: Array<string | undefined> = [];
+    const onCertificate = (c: string | undefined) => seen.push(c);
+    const go = (v: ReturnType<typeof vault>) =>
+      ensureIngressCertificate({ cfg, getToken: async () => 't', fetchImpl: v.fetchImpl, now: () => NOW, sleep: async () => {}, pollAttempts: 3, onCertificate });
+    expect(await go(vault([{ status: 200, body: { ...(certJson() as object), cer: 'KEPT' } }]))).toBe('valid');
+    expect(await go(vault([{ status: 200, body: { ...(certJson({ exp: nowSec - DAY }) as object), cer: 'OLD' } }, { status: 200, body: { ...(certJson() as object), cer: 'NEW' } }]))).toBe('issued');
+    expect(await go(vault([{ status: 200, body: certJson() }]))).toBe('valid'); // a vault body with no cer
+    await go(vault([{ status: 404 }], { status: 202, body: {} })).catch(() => undefined);
+    expect(seen).toEqual(['KEPT', 'NEW', undefined]);
+  });
+
   it('fails closed when the new certificate never becomes valid', async () => {
     const v = vault([{ status: 404 }], { status: 202, body: {} });
     await expect(run(v)).rejects.toThrow(/not enabled and valid after 3 checks/);

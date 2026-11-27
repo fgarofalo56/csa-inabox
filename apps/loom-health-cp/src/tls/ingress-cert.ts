@@ -69,6 +69,8 @@ interface CertState {
   expiresMs: number | undefined;
   subject: string;
   dnsNames: string[];
+  /** The vault's `cer`: base64 DER of the PUBLIC certificate (metadata, not the secret). */
+  cer: string | undefined;
 }
 
 export interface IngressCertDeps {
@@ -80,6 +82,12 @@ export interface IngressCertDeps {
   /** Polls waiting for a new certificate to become enabled. */
   pollAttempts?: number;
   pollIntervalMs?: number;
+  /**
+   * Called with the public certificate (`cer`) of the version found valid or just issued, on every run. The
+   * AS patient search pins it for the stamp ingress origin (tls/stamp-trust.ts); undefined when the vault
+   * returned none.
+   */
+  onCertificate?: (cer: string | undefined) => void;
 }
 
 /** Why the existing certificate cannot be kept, or undefined when it can. */
@@ -162,11 +170,15 @@ export async function ensureIngressCertificate(d: IngressCertDeps): Promise<Ensu
       expiresMs: typeof attrs.exp === 'number' ? attrs.exp * 1000 : undefined,
       subject: typeof x509.subject === 'string' ? x509.subject : '',
       dnsNames: Array.isArray(sans.dns_names) ? sans.dns_names.map(String) : [],
+      cer: typeof r.body.cer === 'string' ? r.body.cer : undefined,
     };
   };
 
   const current = await read();
-  if (current && staleReason(current, cfg, now()) === undefined) return 'valid';
+  if (current && staleReason(current, cfg, now()) === undefined) {
+    d.onCertificate?.(current.cer);
+    return 'valid';
+  }
 
   const r = await call('/create', { method: 'POST', body: JSON.stringify({ policy: policy(cfg) }) });
   // 409 = a creation is already pending (another replica): fall through to polling for it.
@@ -177,7 +189,10 @@ export async function ensureIngressCertificate(d: IngressCertDeps): Promise<Ensu
   const interval = d.pollIntervalMs ?? 2000;
   for (let i = 0; i < attempts; i++) {
     const c = await read();
-    if (c && staleReason(c, cfg, now()) === undefined) return 'issued';
+    if (c && staleReason(c, cfg, now()) === undefined) {
+      d.onCertificate?.(c.cer);
+      return 'issued';
+    }
     await sleep(interval);
   }
   throw new IngressCertError(`certificate ${cfg.certName} was requested but is not enabled and valid after ${attempts} checks`);
