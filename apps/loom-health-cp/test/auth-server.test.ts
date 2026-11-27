@@ -912,6 +912,20 @@ describe('Graph membership AS the AS app, through the callback (live consent:1, 
     expect(r.redirect.searchParams.get('error')).toBe('server_error');
     expect(r.membership).toEqual([{ error: 'GraphConsentRequiredError', cause: 'graph_refused', consent: 1 }]); // breaks if it reads as a token failure
   });
+
+  // Readiness probes the all-zero object id: a CONSENTED app gets 404 (authorized, object absent), so 404 must read ok.
+  async function readinessWith(graphStatus: number) {
+    const fetchImpl = (async (u: string) =>
+      String(u) === TOKEN_URL ? json({ access_token: 'as-app-token', expires_in: 3599 }) : json({ error: { code: 'x' } }, graphStatus)) as unknown as typeof fetch;
+    const membership = graphMembershipAsApp({ cloud: 'gcc-high', authorityHost: 'entra.test', entraTenantId: TENANT, asClientId: AS_APP, getToken: async (s) => `mi:${s}`, fetchImpl });
+    const c = await boot({ graph: membership });
+    return (await c.admin('GET', '/api/health/auth/readiness')).json.data.status;
+  }
+  it('readiness: Graph 404 on the probe id reads ok (the permission works), 403 needs-consent, 500 unknown', async () => {
+    expect(await readinessWith(404)).toBe('ok'); // breaks on the old behaviour: 404 fell through to `unknown` for ever
+    expect(await readinessWith(403)).toBe('needs-consent'); // breaks if 404 handling swallows the consent gate
+    expect(await readinessWith(500)).toBe('unknown'); // breaks if every non-403 failure reads ok
+  });
 });
 
 describe('token endpoint 500 is diagnosable from the log (#5410)', () => {

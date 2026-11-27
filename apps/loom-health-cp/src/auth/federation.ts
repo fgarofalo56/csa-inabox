@@ -34,13 +34,31 @@ export class GraphConsentRequiredError extends Error {
 }
 
 /**
+ * Graph answered 404 for the directory object: the call was AUTHORIZED (an unpermitted caller gets 403
+ * before the object is resolved) but no such object exists. Not a membership answer and not a consent gate.
+ */
+export class GraphObjectNotFoundError extends Error {
+  constructor() {
+    super('graph directory object not found');
+    this.name = 'GraphObjectNotFoundError';
+  }
+}
+
+/** The fixed reason classes of a GraphTokenError; `token_endpoint_<status>` carries the HTTP status. */
+export type GraphTokenReason =
+  | 'client_assertion_failed'
+  | 'token_endpoint_unreachable'
+  | 'access_token_missing'
+  | `token_endpoint_${number}`;
+
+/**
  * The AS app's Graph token could not be acquired, so Graph was never asked. Carries ONLY a fixed reason
  * class and, for a token-endpoint refusal, Entra's `error` token and first `error_codes` number (the #5504
  * pattern): never the response body, the client assertion, or a token. Distinct from the consent gate.
  */
 export class GraphTokenError extends Error {
   constructor(
-    readonly reason: string,
+    readonly reason: GraphTokenReason,
     readonly entraError?: string,
     readonly entraErrorCode?: number,
   ) {
@@ -193,13 +211,22 @@ export interface AppTokenProviderOptions {
 
 /** Refresh this long before Entra's `expires_in` so a token is never presented at the edge of its life. */
 export const APP_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
+/** Upper bound on a cached lifetime: an absurd `expires_in` (e.g. 1e12) must not pin one token for ever. */
+export const APP_TOKEN_MAX_LIFETIME_S = 86_400;
+
+/** A per-scope token getter whose cached token can be dropped (e.g. after Graph refuses it). */
+export interface AppTokenProvider {
+  (scope: string): Promise<string>;
+  /** Forget the cached token for `scope`; the next call fetches a fresh one. */
+  invalidate(scope: string): void;
+}
 
 /**
  * Client-credentials tokens AS the AS app, authenticated by the federated managed-identity assertion.
  * Per scope: cached until `expires_in` minus the skew, single-flight while a fetch is in progress, and a
  * failed fetch is NEVER cached (the in-flight slot is cleared on settle, so the next call retries; #5416).
  */
-export function createAppTokenProvider(o: AppTokenProviderOptions): (scope: string) => Promise<string> {
+export function createAppTokenProvider(o: AppTokenProviderOptions): AppTokenProvider {
   const f = o.fetchImpl ?? fetch;
   const now = o.now ?? Date.now;
   const url = `https://${o.authorityHost}/${o.entraTenantId}/oauth2/v2.0/token`;
@@ -244,12 +271,13 @@ export function createAppTokenProvider(o: AppTokenProviderOptions): (scope: stri
     if (typeof body?.access_token !== 'string' || body.access_token === '') throw new GraphTokenError('access_token_missing');
     const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : Number(body.expires_in);
     if (Number.isFinite(expiresIn) && expiresIn > 0) {
-      cache.set(scope, { token: body.access_token, refreshAt: now() + expiresIn * 1000 - APP_TOKEN_REFRESH_SKEW_MS });
+      const lifetimeS = Math.min(expiresIn, APP_TOKEN_MAX_LIFETIME_S);
+      cache.set(scope, { token: body.access_token, refreshAt: now() + lifetimeS * 1000 - APP_TOKEN_REFRESH_SKEW_MS });
     }
     return body.access_token;
   }
 
-  return (scope) => {
+  const get = (scope: string): Promise<string> => {
     const hit = cache.get(scope);
     if (hit && now() < hit.refreshAt) return Promise.resolve(hit.token);
     const pending = inflight.get(scope);
@@ -258,18 +286,23 @@ export function createAppTokenProvider(o: AppTokenProviderOptions): (scope: stri
     inflight.set(scope, p);
     return p;
   };
+  return Object.assign(get, { invalidate: (scope: string) => void cache.delete(scope) });
 }
 
 export interface GraphMembershipOptions {
   cloud: Cloud;
   getToken: (scope: string) => Promise<string>;
+  /** Drops the cached token for a scope; called on a Graph 401/403 so a just-granted consent applies next call. */
+  invalidateToken?: (scope: string) => void;
   fetchImpl?: typeof fetch;
 }
 
 /**
  * Graph `checkMemberGroups` (<= 20 ids per call). UNVERIFIED as the minimum
  * least-privilege call/permission (security.md Q7); a 401/403 maps to the
- * consent gate rather than to "no membership".
+ * consent gate rather than to "no membership", and evicts the cached token (an
+ * app token minted before admin consent carries no roles until it is re-minted).
+ * A 404 is GraphObjectNotFoundError: the call was authorized, the object absent.
  */
 export function createGraphMembership(o: GraphMembershipOptions): GraphMembership {
   const f = o.fetchImpl ?? fetch;
@@ -279,14 +312,19 @@ export function createGraphMembership(o: GraphMembershipOptions): GraphMembershi
       const out: string[] = [];
       for (let i = 0; i < groupIds.length; i += 20) {
         const chunk = groupIds.slice(i, i + 20);
+        const scope = graphScope(o.cloud);
         const res = await f(`https://${GRAPH_BY_CLOUD[o.cloud]}/v1.0/directoryObjects/${oid}/checkMemberGroups`, {
           method: 'POST',
           redirect: 'error',
           signal: AbortSignal.timeout(8000),
-          headers: { authorization: `Bearer ${await o.getToken(graphScope(o.cloud))}`, 'content-type': 'application/json' },
+          headers: { authorization: `Bearer ${await o.getToken(scope)}`, 'content-type': 'application/json' },
           body: JSON.stringify({ groupIds: chunk }),
         });
-        if (res.status === 401 || res.status === 403) throw new GraphConsentRequiredError();
+        if (res.status === 401 || res.status === 403) {
+          o.invalidateToken?.(scope);
+          throw new GraphConsentRequiredError();
+        }
+        if (res.status === 404) throw new GraphObjectNotFoundError();
         if (!res.ok) throw new Error(`graph returned ${res.status}`);
         const body = (await res.json()) as { value?: unknown };
         if (!Array.isArray(body.value)) throw new Error('graph response has no value array');

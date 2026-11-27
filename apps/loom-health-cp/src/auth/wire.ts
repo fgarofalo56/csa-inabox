@@ -43,7 +43,12 @@ export function graphMembershipAsApp(o: AsAppGraphOptions): GraphMembership {
     getClientAssertion: () => o.getToken(TOKEN_EXCHANGE_SCOPE_BY_CLOUD[o.cloud]),
     ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}),
   });
-  return createGraphMembership({ cloud: o.cloud, getToken: asAppToken, ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}) });
+  return createGraphMembership({
+    cloud: o.cloud,
+    getToken: asAppToken,
+    invalidateToken: asAppToken.invalidate,
+    ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}),
+  });
 }
 
 export function authServerInitFromConfig(cfg: Config, a: AuthServerConfig): AuthServerInit {

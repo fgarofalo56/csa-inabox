@@ -102,6 +102,57 @@ describe('the AS-app token cache', () => {
     expect(await get('s')).toBe('tok'); // breaks if the rejected promise is cached (every later call re-throws)
     expect(net.tokenCalls()).toHaveLength(2);
   });
+
+  it('is keyed per scope: two scopes are two fetches, and each scope keeps its own token', async () => {
+    const net = fakeNet(() => json({ access_token: `tok-${net.tokenCalls().length}`, expires_in: 3600 }), () => json({}));
+    const get = createAppTokenProvider({ authorityHost: AUTH, entraTenantId: TID, clientId: AS_APP, getClientAssertion: async () => 'a', fetchImpl: net.fetchImpl });
+    expect(await get('scope-a')).toBe('tok-1');
+    expect(await get('scope-b')).toBe('tok-2'); // breaks if the cache ignores the scope (scope-b would get tok-1)
+    expect(await get('scope-a')).toBe('tok-1'); // breaks if scope-b's token overwrote scope-a's
+    expect(net.tokenCalls().map((c) => new URLSearchParams(c.body).get('scope'))).toEqual(['scope-a', 'scope-b']);
+  });
+
+  it('a response with no expires_in is not cached: the next call fetches again', async () => {
+    const net = fakeNet(() => json({ access_token: 'tok' }), () => json({}));
+    const get = createAppTokenProvider({ authorityHost: AUTH, entraTenantId: TID, clientId: AS_APP, getClientAssertion: async () => 'a', fetchImpl: net.fetchImpl });
+    await get('s');
+    await get('s');
+    expect(net.tokenCalls()).toHaveLength(2); // breaks if a token of unknown lifetime is cached (e.g. for ever)
+  });
+
+  it('clamps an absurd expires_in (1e12) to one day', async () => {
+    let t = 0;
+    const net = fakeNet(() => json({ access_token: 'tok', expires_in: 1e12 }), () => json({}));
+    const get = createAppTokenProvider({ authorityHost: AUTH, entraTenantId: TID, clientId: AS_APP, getClientAssertion: async () => 'a', fetchImpl: net.fetchImpl, now: () => t });
+    await get('s');
+    t = 86_400_000 - 5 * 60_000 - 1;
+    await get('s');
+    expect(net.tokenCalls()).toHaveLength(1); // paired control: still cached just inside the clamped lifetime
+    t += 1;
+    await get('s');
+    expect(net.tokenCalls()).toHaveLength(2); // breaks without the clamp: the token would be cached for ~31,700 years
+  });
+
+  it('a Graph 403 evicts the cached app token, so the next call mints a fresh one (just-granted consent applies)', async () => {
+    let graphStatus = 403;
+    let n = 0;
+    const net = fakeNet(() => json({ access_token: `tok-${++n}`, expires_in: 3600 }), () => (graphStatus === 200 ? json({ value: [] }) : json({}, graphStatus)));
+    const g = graphMembershipAsApp({ cloud: 'commercial', authorityHost: AUTH, entraTenantId: TID, asClientId: AS_APP, getToken: async () => 'a', fetchImpl: net.fetchImpl });
+    await expect(g.memberOf(OID, [GID])).rejects.toBeInstanceOf(GraphConsentRequiredError);
+    graphStatus = 200;
+    await g.memberOf(OID, [GID]);
+    // Breaks without the eviction: the second Graph call would reuse `tok-1` (cached ~55 min) and stay refused.
+    expect(net.graphCalls().map((c) => c.auth)).toEqual(['Bearer tok-1', 'Bearer tok-2']);
+    expect(net.tokenCalls()).toHaveLength(2);
+  });
+
+  it('a Graph 200 keeps the cached token (eviction is only on 401/403)', async () => {
+    const net = fakeNet(() => json({ access_token: 'tok', expires_in: 3600 }), () => json({ value: [] }));
+    const g = graphMembershipAsApp({ cloud: 'commercial', authorityHost: AUTH, entraTenantId: TID, asClientId: AS_APP, getToken: async () => 'a', fetchImpl: net.fetchImpl });
+    await g.memberOf(OID, [GID]);
+    await g.memberOf(OID, [GID]);
+    expect(net.tokenCalls()).toHaveLength(1); // breaks if every Graph response evicts the token
+  });
 });
 
 describe('failure classes are distinct and sanitised', () => {
