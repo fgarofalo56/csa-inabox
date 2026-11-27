@@ -6,7 +6,7 @@ import { constants, createHash, generateKeyPairSync, privateEncrypt, randomBytes
 import { calculateJwkThumbprint, createLocalJWKSet, generateKeyPair, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { GRAPH_BY_CLOUD, KEYVAULT_SUFFIX_BY_CLOUD } from '../src/auth/clouds.js';
-import { createEntraFederation, createGraphMembership, GraphConsentRequiredError } from '../src/auth/federation.js';
+import { createEntraFederation, createGraphMembership, FederationError, GraphConsentRequiredError } from '../src/auth/federation.js';
 import { computeGrant } from '../src/auth/grant.js';
 import { ROLES, ROLE_IDS, ceilingsFor } from '../src/auth/role-map.js';
 import { intersectWithCeilings, parseDataScope, parseRequest, serializeScope } from '../src/auth/scopes.js';
@@ -474,8 +474,72 @@ describe('Entra federation exchange', () => {
     expect(url.host).toBe(AUTH);
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
   });
+  it('asks Entra for exactly "openid profile" on the authorize URL and the token request', async () => {
+    // Breaks on scope "openid" alone: Entra then omits `oid` from the id_token (Learn, id-token-claims-reference)
+    // and every real sign-in fails the requiredClaims check, which is what happened live on 2026-11-27.
+    const { fed, sent } = await setup({});
+    const url = new URL(fed.authorizeUrl({ state: 's', nonce: 'n', codeChallenge: 'ch', redirectUri: 'https://as/cb' }));
+    expect(url.searchParams.get('scope')).toBe('openid profile');
+    await fed.exchange({ code: 'c', codeVerifier: 'v', redirectUri: 'https://as/cb', nonce: 'n1' });
+    expect(new URLSearchParams(sent[1]).get('scope')).toBe('openid profile'); // breaks if the token request drifts from the authorize scope
+  });
   it('refuses a nonce mismatch and a foreign audience', async () => {
-    await expect((await setup({})).fed.exchange({ code: 'c', codeVerifier: 'v', redirectUri: 'r', nonce: 'other' })).rejects.toThrow('nonce'); // breaks if nonce is unchecked
+    await expect((await setup({})).fed.exchange({ code: 'c', codeVerifier: 'v', redirectUri: 'r', nonce: 'other' })).rejects.toMatchObject({ reason: 'nonce_mismatch' }); // breaks if nonce is unchecked
     await expect((await setup({}, 'someone-else')).fed.exchange({ code: 'c', codeVerifier: 'v', redirectUri: 'r', nonce: 'n1' })).rejects.toThrow();
+  });
+});
+
+describe('Entra federation failure reasons (FederationError)', () => {
+  const AUTH = 'login.microsoftonline.com';
+  const TID = '11111111-1111-1111-1111-111111111111';
+  const CLIENT = 'cccccccc-0000-0000-0000-000000000001';
+  async function fedWith(respond: (idToken: string) => Response, claims: Record<string, unknown>) {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const idToken = await new SignJWT(claims)
+      .setProtectedHeader({ alg: 'RS256', kid: 'k' })
+      .setIssuer(`https://${AUTH}/${TID}/v2.0`)
+      .setAudience(CLIENT)
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    return createEntraFederation({
+      authorityHost: AUTH, entraTenantId: TID, clientId: CLIENT, getClientAssertion: async () => 'assertion-value', keyResolver: async () => publicKey,
+      fetchImpl: (async () => respond(idToken)) as unknown as typeof fetch,
+    });
+  }
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
+  const caught = async (fed: Awaited<ReturnType<typeof fedWith>>, nonce = 'n1') => {
+    try {
+      await fed.exchange({ code: 'the-auth-code', codeVerifier: 'v', redirectUri: 'https://as/cb', nonce });
+    } catch (e) {
+      return e as FederationError;
+    }
+    throw new Error('exchange did not throw');
+  };
+
+  it('an openid-only id_token (no oid) is id_token_invalid naming the claim, not a bare throw', async () => {
+    // The live 2026-11-27 failure: tid + nonce present, oid absent. Breaks if oid is not required, or if the
+    // reason loses the jose code or the claim NAME.
+    const e = await caught(await fedWith((t) => json({ id_token: t }), { tid: TID, nonce: 'n1' }));
+    expect(e).toBeInstanceOf(FederationError);
+    expect(e.reason).toBe('id_token_invalid:ERR_JWT_CLAIM_VALIDATION_FAILED:oid');
+  });
+  it('a token-endpoint 400 carries status, Entra error token and first error code, and nothing from the body', async () => {
+    const body = { error: 'invalid_grant', error_description: 'AADSTS70008: secret-trace-xyz', error_codes: [70008, 1], trace_id: 'trace-123' };
+    const e = await caught(await fedWith(() => json(body, 400), {}));
+    expect([e.reason, e.entraError, e.entraErrorCode]).toEqual(['token_endpoint_400', 'invalid_grant', 70008]); // breaks on the old untyped Error
+    expect(JSON.stringify({ ...e, m: e.message })).not.toMatch(/secret-trace-xyz|trace-123|the-auth-code/); // breaks if the body or the code is copied in
+  });
+  it('a non-JSON token-endpoint 502 is the status class with no Entra fields; a bad Entra error token is dropped', async () => {
+    const e = await caught(await fedWith(() => new Response('<html>gateway</html>', { status: 502 }), {}));
+    expect([e.reason, e.entraError, e.entraErrorCode]).toEqual(['token_endpoint_502', undefined, undefined]);
+    const e2 = await caught(await fedWith(() => json({ error: 'Not An OAuth <token>', error_codes: ['70008'] }, 400), {}));
+    expect([e2.reason, e2.entraError, e2.entraErrorCode]).toEqual(['token_endpoint_400', undefined, undefined]); // breaks if free text or a string code is logged
+  });
+  it('id_token_missing, nonce_mismatch and a signature failure each get their own class', async () => {
+    expect((await caught(await fedWith(() => json({ access_token: 'x' }), {}))).reason).toBe('id_token_missing');
+    const good = { oid: 'o-1', tid: TID, nonce: 'n1' };
+    expect((await caught(await fedWith((t) => json({ id_token: t }), good), 'other'))).toMatchObject({ reason: 'nonce_mismatch' });
+    // Tamper the signature: ERR_JWS_SIGNATURE_VERIFICATION_FAILED, no claim suffix.
+    expect((await caught(await fedWith((t) => json({ id_token: `${t.slice(0, -4)}AAAA` }), good))).reason).toBe('id_token_invalid:ERR_JWS_SIGNATURE_VERIFICATION_FAILED');
   });
 });
