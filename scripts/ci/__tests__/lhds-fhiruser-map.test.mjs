@@ -17,12 +17,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   FHIR_ID, GRANT, GUID_RE, SYNTHETIC_IDENTIFIER_SYSTEM, SYNTHETIC_TAG, judgeMap, main, parseArgs, parseMapLogs, phaseCleanup,
-  phaseMap, practitionerBody, renderMapScript, scrub, validate,
+  phaseMap, practitionerBody, renderMapScript, scrub, validate, CLIENT_LIST_CAP, readClientFile, syntheticIdentifierValue,
 } from '../../measure/health/lhds-fhiruser-map.mjs';
 import { engineBase } from '../../measure/health/lhds-fhir-crud-probe-run.mjs';
 
 const ROOT = new URL('../../../', import.meta.url);
-const src = (p) => readFileSync(new URL(p, ROOT), 'utf8');
+// CRLF-normalised, so a source-lifting assertion reads the same on a Windows autocrlf checkout.
+const src = (p) => readFileSync(new URL(p, ROOT), 'utf8').replace(/\r\n/g, '\n');
 const ISSUER = 'https://issuer-front-door.example.test/auth';
 // A synthetic oid, built so no literal GUID sits in the file. Lower-case hex letters make an UPPER-case echo differ from it.
 const OID = ['abcdef01', 'abcd', '4bcd', '8bcd', 'abcdefabcdef'].join('-');
@@ -99,7 +100,7 @@ function azStub(logs, { code = 0, stderr = '' } = {}) {
 
 const base = (over = {}) => ({
   phase: 'map', cpUrl: 'https://cp.example.test', tenant: TENANT, stamp: 'dev01', displayName: 'LHDS Inferno Practitioner (synthetic)',
-  runRef: '12345', issuerPath: '/auth', aksRg: 'rg-csa-loom-health-dev01-centralus', aksName: 'aks-lhds-dev01', aksSub: '', summaryFile: '',
+  replaceMissing: 'false', issuerPath: '/auth', aksRg: 'rg-csa-loom-health-dev01-centralus', aksName: 'aks-lhds-dev01', aksSub: '', summaryFile: '', clientFile: '',
   cpToken: CP_TOKEN, oid: OID, ...over,
 });
 
@@ -164,11 +165,24 @@ test('already mapped and the Practitioner resolves: exit 0, NO PUT, the script w
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('already mapped but the Practitioner is gone (404): a new one is created and the mapping is REPLACED with it (breaks if a stale mapping is reported ok)', async () => {
+test('mapped Practitioner is gone (404), DEFAULT: REFUSED exit 1, no PUT, the script was told not to create (breaks if a missing target is replaced without replace_missing)', async () => {
   const cp = cpFake({ mapping: 'Practitioner/900' });
+  // Even if the pod (wrongly) printed a create, the judge must refuse without the flag.
   const az = azStub(`MAP step=verify status=404 id_match=no\n${CREATED}`);
   const r = await run((out) => phaseMap(base(), { ...cp.deps, exec: az.exec, out, tmpRoot: tmpdir() }));
+  assert.equal(r.code, 1, r.text);
+  assert.deepEqual(cp.st.puts, []);
+  assert.equal(cp.st.mapping, 'Practitioner/900', 'the mapping is unchanged');
+  assert.match(az.seen.script, /^REPLACE_MISSING='no'$/m);
+  assert.match(r.text, /REFUSED: the mapping points at Practitioner\/900, which answers 404[\s\S]*replace_missing=true/);
+});
+
+test('mapped Practitioner is gone (404), replace_missing=true: a new one is created and the mapping is REPLACED with it (positive control for the refusal above)', async () => {
+  const cp = cpFake({ mapping: 'Practitioner/900' });
+  const az = azStub(`MAP step=verify status=404 id_match=no\n${CREATED}`);
+  const r = await run((out) => phaseMap(base({ replaceMissing: 'true' }), { ...cp.deps, exec: az.exec, out, tmpRoot: tmpdir() }));
   assert.equal(r.code, 0, r.text);
+  assert.match(az.seen.script, /^REPLACE_MISSING='yes'$/m);
   assert.deepEqual(cp.st.puts, [{ resource: 'Practitioner/4711' }]);
 });
 
@@ -218,10 +232,12 @@ test('the Practitioner is SYNTHETIC: HTEST meta.tag, the synthetic identifier sy
   assert.deepEqual(az.seen.body.meta.tag, [{ system: 'http://terminology.hl7.org/CodeSystem/v3-ActReason', code: 'HTEST', display: 'test health data' }]);
   assert.deepEqual(SYNTHETIC_TAG.code, 'HTEST');
   assert.equal(az.seen.body.identifier[0].system, SYNTHETIC_IDENTIFIER_SYSTEM);
-  assert.equal(az.seen.body.identifier[0].value, 'fhiruser-map-12345');
+  // STABLE per tenant (no run id): a re-run's conditional create must match it.
+  assert.equal(az.seen.body.identifier[0].value, `fhiruser-map-${TENANT}`);
+  assert.ok(az.seen.script.includes(`INE='If-None-Exist: identifier=${SYNTHETIC_IDENTIFIER_SYSTEM}|fhiruser-map-${TENANT}'`), 'the create is conditional on that identifier');
   assert.equal(az.seen.body.name[0].text, 'Dr Test (synthetic)');
   assert.deepEqual(Object.keys(az.seen.body).sort(), ['active', 'identifier', 'meta', 'name', 'resourceType']);
-  assert.throws(() => practitionerBody({ displayName: 'x"};', runRef: '1' }), /allowed set/);
+  assert.throws(() => practitionerBody({ displayName: 'x"};', tenant: TENANT }), /allowed set/);
 });
 
 test('a mapping read-back that differs from the PUT reference FAILS exit 1 (breaks if the read-back is not compared)', async () => {
@@ -273,22 +289,101 @@ test('client disabled on failure: an exception thrown by az still disables the c
   assert.equal(spawnSync('node', ['-e', `process.exit(require('fs').existsSync(${JSON.stringify(cwd)})?1:0)`]).status, 0, 'temp dir must be deleted');
 });
 
-test('cleanup phase: disables ONLY active fu-<tenant>- clients of THIS tenant; ep- clients, other tenants and already-disabled ones are untouched (breaks if the filter is dropped)', async () => {
-  const mk = (clientId, tenant, status = 'active') => [clientId, { clientId, tenant, status }];
-  const cp = cpFake({ clients: [mk(`fu-${TENANT}-aaaa0001`, TENANT), mk(`fu-${TENANT}-aaaa0002`, TENANT, 'disabled'), mk(`ep-${TENANT}-aaaa0003`, TENANT), mk('fu-other-tenant-aaaa0004', 'other-tenant')] });
-  const r = await run((out) => phaseCleanup(base({ phase: 'cleanup' }), { ...cp.deps, out }));
-  assert.equal(r.code, 0, r.text);
-  assert.deepEqual(cp.st.patches, [`fu-${TENANT}-aaaa0001`]);
+const mkClient = (clientId, tenant, status = 'active') => [clientId, { clientId, tenant, status }];
+const clientFile = (lines) => { const d = mkdtempSync(join(tmpdir(), 'fum-cf-')); const f = join(d, 'clients.txt'); if (lines) writeFileSync(f, lines.map((x) => `${x}\n`).join('')); return { f, d }; };
+
+test('the map phase records `pending` BEFORE the mint and the client id right after it (breaks if the id is only known in memory, so a killed run leaves cleanup nothing to disable)', async () => {
+  const cp = cpFake();
+  const { f, d } = clientFile();
+  let atExec;
+  try {
+    const exec = async (cmd, args, o) => { atExec = readFileSync(f, 'utf8'); return azStub(CREATED).exec(cmd, args, o); };
+    const r = await run((out) => phaseMap(base({ clientFile: f }), { ...cp.deps, exec, out, tmpRoot: d }));
+    assert.equal(r.code, 0, r.text);
+    assert.equal(atExec, `pending\n${cp.st.regs[0].clientId}\n`, 'the id is on disk before the engine is contacted');
+    assert.deepEqual(readClientFile(f), { pending: true, ids: [cp.st.regs[0].clientId] });
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('cleanup phase: a list failure or a disable the CP does not confirm is exit 1 and says a writer client may be active (breaks if either is swallowed)', async () => {
-  const a = await run((out) => phaseCleanup(base({ phase: 'cleanup' }), { ...cpFake({ listFail: true }).deps, out }));
-  assert.equal(a.code, 1);
-  assert.match(a.text, /may still be ACTIVE/);
-  const cp = cpFake({ patchFail: true, clients: [[`fu-${TENANT}-aaaa0001`, { clientId: `fu-${TENANT}-aaaa0001`, tenant: TENANT, status: 'active' }]] });
-  const b = await run((out) => phaseCleanup(base({ phase: 'cleanup' }), { ...cp.deps, out }));
-  assert.equal(b.code, 1);
-  assert.match(b.text, /INCOMPLETE/);
+test('cleanup phase: PATCH-disables exactly the RECORDED id(s) and never lists, even with 600 older clients (breaks if cleanup goes back to a list sweep that the 500 cap hides fu- behind)', async () => {
+  const id = `fu-${TENANT}-aaaa0001`;
+  const older = Array.from({ length: 600 }, (_, i) => mkClient(`ep-x-${String(i).padStart(4, '0')}`, 'x', 'disabled'));
+  const cp = cpFake({ clients: [...older, mkClient(id, TENANT)] });
+  let listed = 0;
+  const fetchImpl = async (u, init) => { if (new URL(u).pathname === '/api/health/auth/clients' && (init?.method ?? 'GET') === 'GET') listed += 1; return cp.deps.fetchImpl(u, init); };
+  const { f, d } = clientFile(['pending', id]);
+  try {
+    const r = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cp.deps, fetchImpl, out }));
+    assert.equal(r.code, 0, r.text);
+    assert.deepEqual(cp.st.patches, [id]);
+    assert.equal(cp.st.clients.get(id).status, 'disabled');
+    assert.equal(listed, 0);
+    assert.match(r.text, /confirmed disabled/);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('cleanup phase: a recorded id the CP does not confirm disabled is exit 1 and says it may be ACTIVE (breaks if the PATCH answer is not checked)', async () => {
+  const id = `fu-${TENANT}-aaaa0001`;
+  const cp = cpFake({ patchFail: true, clients: [mkClient(id, TENANT)] });
+  const { f, d } = clientFile([id]);
+  try {
+    const r = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cp.deps, out }));
+    assert.equal(r.code, 1);
+    assert.match(r.text, /NOT confirmed: the client may still be ACTIVE[\s\S]*INCOMPLETE/);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('cleanup phase: `pending` with no id + a TRUNCATED 500-entry list is UNMEASURED exit 1, never "complete" (breaks if a capped page reads as proof no fu- client is active)', async () => {
+  const page = Array.from({ length: CLIENT_LIST_CAP }, (_, i) => mkClient(`ep-x-${String(i).padStart(4, '0')}`, 'x', 'disabled'));
+  const cp = cpFake({ clients: page });
+  const { f, d } = clientFile(['pending']);
+  try {
+    const r = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cp.deps, out }));
+    assert.equal(r.code, 1, r.text);
+    assert.match(r.text, /UNMEASURED: the client list returned 500 entries/);
+    assert.equal(/cleanup complete/.test(r.text), false);
+    // Positive control: the SAME pending record over a 499-entry page (one fewer) is a full list and exits 0.
+    const r2 = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cpFake({ clients: page.slice(1) }).deps, out }));
+    assert.equal(r2.code, 0, r2.text);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('cleanup phase: `pending` with no id + a full (<500) list disables ONLY active fu-<tenant>- clients of this tenant (breaks if the fallback filter is dropped)', async () => {
+  const cp = cpFake({ clients: [mkClient(`fu-${TENANT}-aaaa0001`, TENANT), mkClient(`fu-${TENANT}-aaaa0002`, TENANT, 'disabled'), mkClient(`ep-${TENANT}-aaaa0003`, TENANT), mkClient('fu-other-tenant-aaaa0004', 'other-tenant')] });
+  const { f, d } = clientFile(['pending']);
+  try {
+    const r = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cp.deps, out }));
+    assert.equal(r.code, 0, r.text);
+    assert.deepEqual(cp.st.patches, [`fu-${TENANT}-aaaa0001`]);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('cleanup phase: no record at all = nothing requested, exit 0 with no call; a list failure in the fallback is exit 1 (breaks if either is swallowed or inverted)', async () => {
+  let calls = 0;
+  const none = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: join(tmpdir(), 'fum-absent-file.txt') }), { fetchImpl: async () => { calls += 1; throw new Error('x'); }, out }));
+  assert.equal(none.code, 0);
+  assert.equal(calls, 0);
+  const { f, d } = clientFile(['pending']);
+  try {
+    const a = await run((out) => phaseCleanup(base({ phase: 'cleanup', clientFile: f }), { ...cpFake({ listFail: true }).deps, out }));
+    assert.equal(a.code, 1);
+    assert.match(a.text, /may still be ACTIVE/);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('SIGTERM during the engine call: the client is disabled BEFORE exit(143) (breaks if onSig exits without the bounded disable; the finally does not run on process.exit)', async () => {
+  const cp = cpFake();
+  let exited;
+  let patchedAtExit;
+  const exec = async () => {
+    process.emit('SIGTERM');
+    await new Promise((r) => setTimeout(r, 50)); // let the async handler finish its PATCH
+    return { code: 0, stdout: JSON.stringify({ id: 'cmd-1', provisioningState: 'Succeeded', logs: CREATED }), stderr: '' };
+  };
+  const r = await run((out) => phaseMap(base(), { ...cp.deps, exec, out, tmpRoot: tmpdir(), exit: (n) => { exited = n; patchedAtExit = [...cp.st.patches]; } }));
+  assert.equal(exited, 143);
+  assert.deepEqual(patchedAtExit, [cp.st.regs[0].clientId], 'the PATCH happened before exit was called');
+  assert.match(r.text, /signal: client fu-[^ ]+ disabled=true/);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -322,6 +417,28 @@ test('oid never in output: az stderr carrying the oid and the bearer is printed 
   assert.equal(r.text.includes(CP_TOKEN), false);
 });
 
+test('oid never in output: an oid straddling the 200-char error cut leaves NO fragment, because errText scrubs BEFORE truncating (breaks if it truncates first: "abcdef01-a" would survive)', async () => {
+  // 190 chars of padding, then the oid: a truncate-first errText keeps chars 190..199 = the first 10 of the oid.
+  const pad = 'x'.repeat(190);
+  assert.equal(`${pad}${OID}`.slice(0, 200).slice(190), OID.slice(0, 10), 'fixture arithmetic: the cut falls inside the oid');
+  const cp = cpFake({ mappingGet: () => ({ status: 500, text: async () => JSON.stringify({ ok: false, error: { code: 'server_error', message: `${pad}${OID} trailing` } }) }) });
+  const r = await run((out) => phaseMap(base(), { ...cp.deps, out }));
+  assert.equal(r.code, 2);
+  assert.match(r.text, /x{190}<redacted>/, 'positive control: the message is printed, with the oid scrubbed');
+  assert.equal(r.text.toLowerCase().includes(OID.slice(0, 8)), false, 'no oid fragment may survive the cut');
+});
+
+// Found by this test on 2026-11-27: the refusal used redact(type, 20) BEFORE say() scrubbed, so 20 chars of the oid
+// printed. Every CP/ARM-supplied redact now scrubs first; say()'s own scrub is defence in depth (an equivalent mutant on
+// every current path: removing it turns nothing red, disclosed per assertion-design.md).
+test('oid never in output: a mapped resource whose TYPE segment is the oid (UPPER case) is refused with NO oid fragment (breaks if that site truncates before scrubbing: "ABCDEF01-ABCD-4BCD-8" leaks)', async () => {
+  const cp = cpFake({ mapping: `${OID.toUpperCase()}/1` });
+  const r = await run((out) => phaseMap(base(), { ...cp.deps, out }));
+  assert.equal(r.code, 1);
+  assert.match(r.text, /mapped on [^ ]+ to a <redacted>, not a Practitioner/, 'positive control: the refusal names the (scrubbed) type');
+  assert.equal(r.text.toLowerCase().includes(OID.toLowerCase()), false);
+});
+
 test('scrub removes a secret in every letter case and leaves other text (breaks on a case-sensitive split, input "ABCDEF01-...")', () => {
   assert.equal(scrub(`a ${OID.toUpperCase()} b ${OID} c`, [OID]), 'a <redacted> b <redacted> c');
   assert.equal(scrub('nothing here', [OID]), 'nothing here');
@@ -331,7 +448,7 @@ test('scrub removes a secret in every letter case and leaves other text (breaks 
 // judge + the generated script
 
 test('judgeMap: each outcome lands where its value says (201 bare=no FAIL, 403 FAIL without a claimed cause, 000 UNMEASURED, read id mismatch FAIL, all good created)', () => {
-  const j = (t, e = '') => judgeMap(parseMapLogs(t), e);
+  const j = (t, e = '', rm = false) => judgeMap(parseMapLogs(t), e, rm);
   assert.deepEqual([j(CREATED).code, j(CREATED).kind, j(CREATED).id], [0, 'created', '4711']);
   assert.equal(j('MAP step=create status=201 id=4711 bare=no\nMAP step=read status=200 id_match=yes').code, 1);
   assert.equal(j('MAP step=create status=403 bare=no').code, 1);
@@ -339,7 +456,10 @@ test('judgeMap: each outcome lands where its value says (201 bare=no FAIL, 403 F
   assert.equal(j('MAP step=create status=000 bare=no').code, 2);
   assert.equal(j('MAP step=create status=201 id=4711 bare=yes\nMAP step=read status=200 id_match=no').code, 1);
   assert.equal(j('Authorization: Bearer x\nMAP step=create status=201 id=4711 bare=yes').code, 2, 'no read line = unmeasured; a non-MAP line is ignored');
-  assert.equal(j('MAP step=verify status=410 id_match=no\n' + CREATED, '900').kind, 'created');
+  assert.equal(j('MAP step=verify status=410 id_match=no\n' + CREATED, '900', true).kind, 'created');
+  assert.equal(j('MAP step=verify status=410 id_match=no\n' + CREATED, '900').code, 1, 'without replaceMissing a 410 target is refused');
+  assert.equal(j('MAP step=create status=200 id=4711 bare=yes\nMAP step=read status=200 id_match=yes').kind, 'reused');
+  assert.equal(j('MAP step=create status=412 bare=no').code, 1);
   assert.equal(j('MAP step=verify status=200 id_match=no', '900').code, 1);
 });
 
@@ -355,9 +475,14 @@ test('renderMapScript: no secret in the text, token read from the header file, B
 
 const SH = spawnSync('sh', ['-c', 'command -v curl >/dev/null 2>&1 && echo ok']).stdout?.toString().trim() === 'ok';
 
-/** One loopback engine. `existing` = ids that GET 200; POST creates 4711 with a Location at the bare base unless `segment`. */
+/**
+ * One loopback engine with HAPI's conditional-create semantics: POST with `If-None-Exist: identifier=<sys>|<val>` answers
+ * 200 + the Location of the stored match, else stores a new Practitioner (4711, 4712, ...) and answers 201. `existing` =
+ * extra ids that GET 200. `segment` puts a partition segment in the Location. `deny` = 403 on everything.
+ */
 function engine({ existing = [], segment = false, deny = false } = {}) {
   return new Promise((r) => {
+    const store = new Map(); // id -> resource
     const srv = createServer((req, res) => {
       let body = '';
       req.on('data', (d) => { body += d; });
@@ -365,34 +490,56 @@ function engine({ existing = [], segment = false, deny = false } = {}) {
         const send = (c, h = {}, b = '') => { res.writeHead(c, h); res.end(b); };
         if (req.headers.authorization !== 'Bearer tok') return send(401);
         if (deny) return send(403);
+        const loc = (id) => ({ location: `http://x/fhir/${segment ? 'DEFAULT/' : ''}Practitioner/${id}/_history/1` });
         if (req.method === 'POST' && req.url === '/fhir/Practitioner') {
-          srv.posted = JSON.parse(body);
-          return send(201, { location: `http://x/fhir/${segment ? 'DEFAULT/' : ''}Practitioner/4711/_history/1` }, '{}');
+          const p = JSON.parse(body);
+          srv.posts = (srv.posts ?? 0) + 1;
+          const want = /^identifier=([^|]+)\|(.+)$/.exec(String(req.headers['if-none-exist'] ?? ''));
+          const hit = want && [...store].find(([, x]) => x.identifier?.some((i) => i.system === want[1] && i.value === want[2]));
+          if (hit) return send(200, loc(hit[0]), '{}');
+          const id = String(4711 + store.size);
+          store.set(id, p);
+          return send(201, loc(id), '{}');
         }
         const m = /^\/fhir\/Practitioner\/([^/]+)$/.exec(req.url);
-        if (req.method === 'GET' && m && (m[1] === '4711' && srv.posted || existing.includes(m[1]))) return send(200, {}, `{"resourceType":"Practitioner","id":"${m[1]}"}`);
+        if (req.method === 'GET' && m && (store.has(m[1]) || existing.includes(m[1]))) return send(200, {}, `{"resourceType":"Practitioner","id":"${m[1]}"}`);
         return send(404);
       });
-    }).listen(0, '127.0.0.1', () => r(srv));
+    }).listen(0, '127.0.0.1', () => { srv.store = store; r(srv); });
   });
 }
 
-async function runScript(engineOpts, existingId = '') {
-  const srv = await engine(engineOpts);
+async function runScript(engineOpts, existingId = '', { srv: shared, replaceMissing = false } = {}) {
+  const srv = shared ?? await engine(engineOpts);
   const dir = mkdtempSync(join(tmpdir(), 'fum-sh-'));
   try {
-    writeFileSync(join(dir, 'map.sh'), renderMapScript({ tenant: TENANT, existingId }).replace(engineBase(TENANT), `http://127.0.0.1:${srv.address().port}/fhir`));
+    writeFileSync(join(dir, 'map.sh'), renderMapScript({ tenant: TENANT, existingId, replaceMissing }).replace(engineBase(TENANT), `http://127.0.0.1:${srv.address().port}/fhir`));
     writeFileSync(join(dir, 'hdr'), 'Authorization: Bearer tok\n');
-    writeFileSync(join(dir, 'practitioner.json'), JSON.stringify(practitionerBody({ displayName: 'LHDS Inferno Practitioner (synthetic)', runRef: '1' })));
+    writeFileSync(join(dir, 'practitioner.json'), JSON.stringify(practitionerBody({ displayName: 'LHDS Inferno Practitioner (synthetic)', tenant: TENANT })));
     const out = await new Promise((resolve) => {
       const p = spawn('sh', ['map.sh'], { cwd: dir });
       let o = '';
       p.stdout.on('data', (x) => { o += x; });
       p.on('close', () => resolve(o));
     });
-    return { out, posted: srv.posted };
-  } finally { srv.close(); rmSync(dir, { recursive: true, force: true }); }
+    return { out, posts: srv.posts ?? 0, posted: srv.store.get('4711') };
+  } finally { if (!shared) srv.close(); rmSync(dir, { recursive: true, force: true }); }
 }
+
+test('under sh+curl: a SECOND run reuses the SAME Practitioner (conditional create answers 200), so the engine holds exactly one (breaks if the identifier is per-run or If-None-Exist is dropped: the second run makes 4712)', { skip: !SH && 'sh or curl is not available' }, async () => {
+  const srv = await engine({});
+  try {
+    const first = await runScript({}, '', { srv });
+    const v1 = judgeMap(parseMapLogs(first.out));
+    assert.deepEqual([v1.code, v1.kind, v1.id], [0, 'created', '4711'], first.out);
+    const second = await runScript({}, '', { srv });
+    const v2 = judgeMap(parseMapLogs(second.out));
+    assert.deepEqual([v2.code, v2.kind, v2.id], [0, 'reused', '4711'], second.out);
+    assert.equal(srv.posts, 2, 'positive control: the second run DID post (so the reuse is the conditional create, not a skip)');
+    assert.equal(srv.store.size, 1, 'exactly one synthetic Practitioner');
+    assert.equal(srv.store.get('4711').identifier[0].value, syntheticIdentifierValue(TENANT));
+  } finally { srv.close(); }
+});
 
 test('under sh+curl: not mapped creates 4711 at the bare base and reads it back; ONLY MAP lines print (breaks if the script misparses Location or prints a body)', { skip: !SH && 'sh or curl is not available' }, async () => {
   const r = await runScript({});
@@ -402,16 +549,20 @@ test('under sh+curl: not mapped creates 4711 at the bare base and reads it back;
   assert.equal(r.posted.name[0].text, 'LHDS Inferno Practitioner (synthetic)');
 });
 
-test('under sh+curl: an existing resolving id posts NOTHING; a stale one (404) creates; a Location with a partition segment FAILS; a 403 engine FAILS (breaks if the verify branch falls through to create)', { skip: !SH && 'sh or curl is not available' }, async () => {
+test('under sh+curl: an existing resolving id posts NOTHING; a stale one (404) posts NOTHING by default and creates only with replaceMissing; a partition-segment Location FAILS; a 403 engine FAILS (breaks if the verify branch falls through to create)', { skip: !SH && 'sh or curl is not available' }, async () => {
   const a = await runScript({ existing: ['900'] }, '900');
-  assert.equal(a.posted, undefined, a.out);
+  assert.equal(a.posts, 0, a.out);
   assert.equal(judgeMap(parseMapLogs(a.out), '900').kind, 'existing');
-  const b = await runScript({}, '900');
-  assert.equal(judgeMap(parseMapLogs(b.out), '900').kind, 'created', b.out);
+  const stale = await runScript({}, '900');
+  assert.equal(stale.posts, 0, `a missing target must not be replaced without the flag: ${stale.out}`);
+  assert.equal(judgeMap(parseMapLogs(stale.out), '900').code, 1);
+  const b = await runScript({}, '900', { replaceMissing: true });
+  assert.equal(b.posts, 1, b.out);
+  assert.equal(judgeMap(parseMapLogs(b.out), '900', true).kind, 'created', b.out);
   assert.equal(judgeMap(parseMapLogs((await runScript({ segment: true })).out)).code, 1);
-  const d = await runScript({ deny: true }, '900');
-  assert.equal(judgeMap(parseMapLogs(d.out), '900').code, 1);
-  assert.equal(d.posted, undefined, 'a 403 verify must not fall through to a create');
+  const d = await runScript({ deny: true }, '900', { replaceMissing: true });
+  assert.equal(judgeMap(parseMapLogs(d.out), '900', true).code, 1);
+  assert.equal(d.posts, 0, 'a 403 verify must not fall through to a create');
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -422,14 +573,26 @@ test('workflow: the oid comes ONLY from secrets.LHDS_FHIRUSER_OID, no input carr
   const inputs = /workflow_dispatch:\n {4}inputs:\n([\s\S]*?)\n\npermissions:/.exec(wf)?.[1] ?? '';
   assert.match(inputs, /tenant_id:/, 'positive control: the inputs block was found');
   assert.equal(/oid/i.test(inputs), false, 'no dispatch input may carry the oid');
+  // The secret is bound in EXACTLY the two steps that need it, by name, and nowhere else.
+  const steps = wf.split(/\n {6}- (?=name: |uses: )/).slice(1);
+  const withOid = steps.filter((s) => /LHDS_FHIRUSER_OID: \$\{\{/.test(s)).map((s) => /^name: ([^\n]+)/.exec(s)?.[1]);
+  assert.deepEqual(withOid, [
+    'Validate inputs and the oid secret (the oid is never printed)',
+    'Create (or verify) the synthetic Practitioner and map the oid to it',
+  ]);
   const refs = wf.match(/LHDS_FHIRUSER_OID: \$\{\{[^}]*\}\}/g) ?? [];
-  assert.ok(refs.length >= 2);
+  assert.equal(refs.length, 2);
   assert.ok(refs.every((x) => x === 'LHDS_FHIRUSER_OID: ${{ secrets.LHDS_FHIRUSER_OID }}'), refs.join(' | '));
+  const cleanupStep = steps.find((s) => s.startsWith('name: Cleanup'));
+  assert.ok(cleanupStep && !cleanupStep.includes('LHDS_FHIRUSER_OID'), 'the cleanup step needs no oid');
+  // replace_missing is a boolean input defaulting to false, and both phases share the recorded client file.
+  assert.match(inputs, / {6}replace_missing:\n[^\n]*\n {8}type: boolean\n {8}default: false/);
+  assert.equal((wf.match(/--client-file "\$RUNNER_TEMP\/lhds-fhiruser-map-clients\.txt"/g) ?? []).length, 2);
   assert.ok(wf.includes('[[ "$LHDS_FHIRUSER_OID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]'));
   assert.equal(GUID_RE.source, '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', 'the workflow and the module check the same shape');
   assert.match(wf, /- name: Cleanup[^\n]*\n {8}if: always\(\) && steps\.require\.outcome == 'success'\n[\s\S]*--phase cleanup/);
   assert.equal(/echo[^\n]*\$\{?LHDS_FHIRUSER_OID/.test(wf), false, 'the oid is never echoed');
-  assert.equal(/\$\{\{\s*inputs\./.test(wf.split('\njobs:')[1].replace(/^ {6}(TENANT|DISPLAY_NAME): \$\{\{ inputs\.[a-z_]+ \}\}$/gm, '')), false, 'inputs reach run: blocks only through env');
+  assert.equal(/\$\{\{\s*inputs\./.test(wf.split('\njobs:')[1].replace(/^ {6}(TENANT|DISPLAY_NAME|REPLACE_MISSING): \$\{\{ inputs\.[a-z_]+ \}\}$/gm, '')), false, 'inputs reach run: blocks only through env');
   assert.equal(/2>\/dev\/null/.test(wf), false);
   assert.equal(/az deployment/.test(wf), false);
   assert.match(wf, /^ {2}workflow_dispatch:/m);

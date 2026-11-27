@@ -10,11 +10,15 @@ name: lhds fhiruser map
 #      generated sh+curl script talks to the tenant engine's ClusterIP Service at the BARE base (the DEFAULT partition
 #      since #5496). Token and Practitioner body cross ARM as --file attachments, never on a command line;
 #   3. already mapped and the Practitioner answers GET 200 with the same id: stops, nothing created (idempotent).
-#      Otherwise (not mapped, or the mapped Practitioner answers 404/410) creates ONE synthetic Practitioner
-#      (meta.tag v3-ActReason HTEST, identifier system urn:loom:lhds:synthetic-practitioner, name.text =
-#      display_name) and reads it back;
-#   4. PUT /api/health/auth/tenants/{t}/fhir-users/{oid} {resource: Practitioner/<id>} and reads it back;
-#   5. (always) disables every still-active fu-<tenant>- client, in addition to the in-process disable.
+#      Mapped to a Practitioner that answers 404/410: REFUSES, nothing changed, unless replace_missing is ticked.
+#      Not mapped (or replacing): a CONDITIONAL create (If-None-Exist on the stable identifier
+#      urn:loom:lhds:synthetic-practitioner|fhiruser-map-<tenant>) of ONE synthetic Practitioner (meta.tag
+#      v3-ActReason HTEST, name.text = display_name); a re-run reuses the one an earlier run made. Then a read-back;
+#   4. PUT /api/health/auth/tenants/{t}/fhir-users/{oid} {resource: Practitioner/<id>} and reads it back. The route
+#      takes no If-Match, so a concurrent writer of the same mapping can race the GET->PUT; the read-back detects it;
+#   5. the client id is recorded to a runner-temp file as soon as the mint returns; the (always) cleanup step
+#      PATCH-disables each recorded id and checks the answer, in addition to the in-process disable. A lost runner
+#      runs neither: the client then stays active until disabled by hand (PATCH .../clients/<id> status=disabled).
 #
 # THE OID IS A SECRET INPUT. The Entra object id comes ONLY from the repo secret LHDS_FHIRUSER_OID (this repo is public
 # and dispatch inputs are visible). It is masked by Actions, scrubbed from every line the script prints in every letter
@@ -37,6 +41,10 @@ on:
         description: name.text of the synthetic Practitioner (letters, digits, space and ().,_- only)
         type: string
         default: LHDS Inferno Practitioner (synthetic)
+      replace_missing:
+        description: Replace an EXISTING mapping whose Practitioner answers 404/410 (it may be one this tool did not make)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,7 +63,7 @@ jobs:
       REGION: centralus
       TENANT: ${{ inputs.tenant_id }}
       DISPLAY_NAME: ${{ inputs.display_name }}
-      RUN_REF: ${{ github.run_id }}
+      REPLACE_MISSING: ${{ inputs.replace_missing }}
       SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -74,8 +82,9 @@ jobs:
           [[ "$DISPLAY_NAME" =~ $NAME_RE ]] || { echo "::error::display_name must be 1-100 chars of letters, digits, space and ().,_-"; exit 1; }
           if [ -z "$LHDS_FHIRUSER_OID" ]; then echo "::error::the LHDS_FHIRUSER_OID repo secret is empty or not set. Nothing was contacted."; exit 1; fi
           [[ "$LHDS_FHIRUSER_OID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "::error::the LHDS_FHIRUSER_OID repo secret is not a GUID (value withheld). Nothing was contacted."; exit 1; }
+          [[ "$REPLACE_MISSING" =~ ^(true|false)$ ]] || { echo "::error::replace_missing must be true or false"; exit 1; }
           if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
-          echo "inputs valid: tenant $TENANT; oid secret present and GUID-shaped (value withheld)"
+          echo "inputs valid: tenant $TENANT; replace_missing $REPLACE_MISSING; oid secret present and GUID-shaped (value withheld)"
 
       - name: Azure login (Commercial - limitlessdata_deploy SP)
         uses: azure/login@v2
@@ -154,21 +163,22 @@ jobs:
           set +e
           LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhiruser-map.mjs --phase map \
             --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID" --display-name "$DISPLAY_NAME" \
-            --run-ref "$RUN_REF" --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
-            --summary-file "$GITHUB_STEP_SUMMARY"
+            --replace-missing "$REPLACE_MISSING" --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
+            --summary-file "$GITHUB_STEP_SUMMARY" --client-file "$RUNNER_TEMP/lhds-fhiruser-map-clients.txt"
           rc=$?
           set -e
           echo "exit code: $rc (0 = mapped, 1 = defect/refused, 2 = UNMEASURED: nothing here is a claim the engine or control plane is broken)"
           exit "$rc"
 
-      - name: Cleanup - disable every still-active temporary fu- client of the tenant
+      - name: Cleanup - disable the temporary client(s) this run recorded, by id
         if: always() && steps.require.outcome == 'success'
         run: |
           set -euo pipefail
           # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
           # unset-var-ok: LOOM_HEALTH_CP_URL
           TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
-          if [ -z "$TOKEN" ]; then echo "::error::empty access token; temporary fu-$TENANT- clients were NOT checked and may still be active"; exit 1; fi
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token; the temporary clients recorded in $RUNNER_TEMP/lhds-fhiruser-map-clients.txt were NOT disabled and may still be active"; exit 1; fi
           echo "::add-mask::$TOKEN"
           LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhiruser-map.mjs --phase cleanup \
-            --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID"
+            --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID" \
+            --client-file "$RUNNER_TEMP/lhds-fhiruser-map-clients.txt"
