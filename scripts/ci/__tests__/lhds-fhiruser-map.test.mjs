@@ -487,7 +487,8 @@ function engine({ existing = [], segment = false, deny = false } = {}) {
       let body = '';
       req.on('data', (d) => { body += d; });
       req.on('end', () => {
-        const send = (c, h = {}, b = '') => { res.writeHead(c, h); res.end(b); };
+        // Loopback-only HAPI stand-in. Every response is typed FHIR JSON (never HTML), as a real engine's is.
+        const send = (c, h = {}, b = '') => { res.writeHead(c, { 'content-type': 'application/fhir+json', ...h }); res.end(b); };
         if (req.headers.authorization !== 'Bearer tok') return send(401);
         if (deny) return send(403);
         const loc = (id) => ({ location: `http://x/fhir/${segment ? 'DEFAULT/' : ''}Practitioner/${id}/_history/1` });
