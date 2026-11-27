@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import {
   FHIR_ID, GRANT, GUID_RE, SYNTHETIC_IDENTIFIER_SYSTEM, SYNTHETIC_TAG, judgeMap, main, parseArgs, parseMapLogs, phaseCleanup,
   phaseMap, practitionerBody, renderMapScript, scrub, validate, CLIENT_LIST_CAP, readClientFile, syntheticIdentifierValue,
-  SEED_GRANT, SYNTHETIC_PATIENT_IDENTIFIER_SYSTEM, judgeSeed, parseSeedLogs, patientBody, roleIdsFrom,
+  SEED_GRANT, SYNTHETIC_PATIENT_IDENTIFIER_SYSTEM, BINDABLE_ROLES, judgeSeed, parseSeedLogs, patientBody, roleIdsFrom,
 } from '../../measure/health/lhds-fhiruser-map.mjs';
 import { engineBase } from '../../measure/health/lhds-fhir-crud-probe-run.mjs';
 
@@ -636,14 +636,17 @@ test('workflow: the oid comes ONLY from secrets.LHDS_FHIRUSER_OID, no input carr
   assert.equal(GRANT.scope, 'system/Practitioner.cr');
 });
 
-test('workflow: bind_group_id / bind_role / set_v2_scopes / seed_patient are inputs with safe defaults and reach the script as args (breaks if seed or set_v2_scopes default true, or an input is not passed)', () => {
+test('workflow: bind_group_id / bind_role / set_v2_scopes / seed_patient are inputs with safe defaults and reach the script as args; bind_role is a CHOICE of exactly the two read-only roles; the group==oid refusal precedes the echo (breaks if a writer/admin role is offered, a flag defaults true, or an input is not passed)', () => {
   const wf = src('.github/workflows/lhds-fhiruser-map.yml');
   const inputs = /workflow_dispatch:\n {4}inputs:\n([\s\S]*?)\n\npermissions:/.exec(wf)?.[1] ?? '';
   assert.match(inputs, / {6}bind_group_id:\n[^\n]*\n {8}type: string\n {8}default: ''/);
-  assert.match(inputs, / {6}bind_role:\n[^\n]*\n {8}type: string\n {8}default: fhir-smart-user/);
+  assert.match(inputs, / {6}bind_role:\n[^\n]*\n {8}type: choice\n {8}options:\n {10}- fhir-smart-user\n {10}- fhir-data-reader\n {8}default: fhir-smart-user\n/);
+  assert.deepEqual([...BINDABLE_ROLES], ['fhir-smart-user', 'fhir-data-reader'], 'the choice offers exactly the script allow-list');
   assert.match(inputs, / {6}set_v2_scopes:\n[^\n]*\n {8}type: boolean\n {8}default: false/);
   assert.match(inputs, / {6}seed_patient:\n[^\n]*\n {8}type: boolean\n {8}default: false/);
   assert.ok(wf.includes('--bind-group-id "$BIND_GROUP_ID" --bind-role "$BIND_ROLE" --set-v2-scopes "$SET_V2_SCOPES" --seed-patient "$SEED_PATIENT"'));
+  const eq = wf.indexOf('if [ "${BIND_GROUP_ID,,}" = "${LHDS_FHIRUSER_OID,,}" ]; then echo "::error::bind_group_id equals the LHDS_FHIRUSER_OID secret');
+  assert.ok(eq > 0 && eq < wf.indexOf('echo "inputs valid:'), 'the equality refusal must run before the line that echoes the group id');
   assert.equal(parseArgs([], {}).bindRole, 'fhir-smart-user', 'the module default matches the input default');
 });
 
@@ -652,77 +655,113 @@ test('workflow: bind_group_id / bind_role / set_v2_scopes / seed_patient are inp
 
 const PRIOR = Object.freeze({ groupId: OTHER_GROUP, roleId: 'fhir-data-reader' });
 const SEEDED = 'SEED step=create status=201 id=9001 bare=yes\nSEED step=read status=200 id_match=yes\n';
+/** A STORED binding doc: it carries its id. The GET of a tenant with no doc answers without one (see cpFake). */
+const storedDoc = (bindings, v1Scopes) => ({ id: `binding-${TENANT}`, kind: 'binding', tenant: TENANT, bindings, v1Scopes });
+const MAIN_ARGS = ['--phase', 'map', '--cp-url', 'https://cp.example.test', '--tenant', TENANT, '--stamp', 'dev01', '--aks-rg', 'rg', '--aks-name', 'aks'];
+const MAIN_ENV = { LHDS_CP_TOKEN: CP_TOKEN, LHDS_FHIRUSER_OID: OID };
 /** Records the order of CP calls, so "before the mint" is a fact the test reads, not an assumption. */
 const traced = (cp) => { const calls = []; return { calls, deps: { ...cp.deps, fetchImpl: async (u, init) => { calls.push(`${init?.method ?? 'GET'} ${new URL(u).pathname}`); return cp.deps.fetchImpl(u, init); } } }; };
 
-test('bind role is validated FROM role-scope-map.v1.json: a role only a temp map names passes, a real role that map lacks is refused (breaks if validate checks a transcribed list)', () => {
+test('bind role allow-list: break-glass, health-tenant-admin and fhir-data-writer (REAL roles in the file) are refused with NOTHING contacted; fhir-smart-user and fhir-data-reader pass (breaks if the allow-list is widened to the file list)', async () => {
+  const real = new Set(JSON.parse(src('apps/loom-health-cp/src/auth/role-scope-map.v1.json')).roles.map((r) => r.id));
+  for (const role of ['break-glass', 'health-tenant-admin', 'fhir-data-writer']) {
+    assert.ok(real.has(role), `fixture: ${role} must be a real role, or this proves nothing`);
+    assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: role }))), /is not bindable by this workflow/, role);
+    let calls = 0;
+    const r = await run((out) => main([...MAIN_ARGS, '--bind-group-id', GROUP, '--bind-role', role], MAIN_ENV, { out, fetchImpl: async () => { calls += 1; throw new Error('contacted'); } }));
+    assert.equal(r.code, 2, `${role}: ${r.text}`);
+    assert.equal(calls, 0, `${role}: nothing may be contacted, so nothing is written`);
+  }
+  assert.equal(validate(base({ bindGroupId: GROUP })), null, 'fhir-smart-user passes');
+  assert.equal(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-data-reader' })), null, 'fhir-data-reader passes');
+});
+
+test('bind role is intersected with the ids READ from role-scope-map.v1.json: a temp map without fhir-smart-user refuses it (fails closed) and a map with break-glass still refuses that (breaks if the allow-list is applied without the file)', () => {
   const d = mkdtempSync(join(tmpdir(), 'fum-roles-'));
   try {
     const f = join(d, 'roles.json');
-    writeFileSync(f, JSON.stringify({ version: 'test', roles: [{ id: 'zz-only-in-this-file' }] }));
-    assert.equal(validate(base({ bindGroupId: GROUP, bindRole: 'zz-only-in-this-file', roleMap: f })), null, 'a role ONLY the file names must pass');
-    assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-smart-user', roleMap: f }))), /not a role id in role-scope-map/);
+    writeFileSync(f, JSON.stringify({ version: 'test', roles: [{ id: 'fhir-data-reader' }, { id: 'break-glass' }] }));
+    assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-smart-user', roleMap: f }))), /not bindable/, 'removed from the file = refused');
+    assert.equal(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-data-reader', roleMap: f })), null, 'positive control: the other bindable role in the file passes');
+    assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: 'break-glass', roleMap: f }))), /not bindable/, 'in the file but not bindable');
     assert.match(String(validate(base({ bindGroupId: GROUP, roleMap: join(d, 'absent.json') }))), /could not read the role map/, 'an unreadable map refuses, never passes');
   } finally { rmSync(d, { recursive: true, force: true }); }
   const real = JSON.parse(src('apps/loom-health-cp/src/auth/role-scope-map.v1.json')).roles.map((r) => r.id);
   assert.deepEqual([...roleIdsFrom()].sort(), [...real].sort(), 'the default path reads the control plane file');
-  assert.equal(validate(base({ bindGroupId: GROUP })), null, 'fhir-smart-user is in the real file');
-  assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-smart-userx' }))), /not a role id/);
+  assert.match(String(validate(base({ bindGroupId: GROUP, bindRole: 'fhir-smart-userx' }))), /not bindable/);
   assert.match(String(validate(base({ bindGroupId: `{${GROUP}}` }))), /bind-group-id must be a GUID/);
-  assert.equal(validate(base({ bindRole: 'fhir-smart-userx' })), null, 'no group = no binding requested, the role is not consulted');
+  assert.equal(validate(base({ bindRole: 'break-glass' })), null, 'no group = no binding requested, the role is not consulted');
 });
 
-test('bind MERGES, never replaces: the prior {OTHER_GROUP, fhir-data-reader} is kept, the pair appended (group lower-cased), v1Scopes:false, BEFORE the mint (breaks if the PUT sends only the new pair: OTHER_GROUP is dropped)', async () => {
-  const cp = cpFake({ bindings: { tenant: TENANT, bindings: [PRIOR], v1Scopes: false } });
+test('bind-group-id EQUAL to the oid (upper case) is refused, nothing contacted, neither value printed (breaks if the equality check is removed: the oid would print as the group)', async () => {
+  assert.match(String(validate(base({ bindGroupId: OID.toUpperCase() }))), /equals the LHDS_FHIRUSER_OID secret/);
+  let calls = 0;
+  const r = await run((out) => main([...MAIN_ARGS, '--bind-group-id', OID.toUpperCase()], MAIN_ENV, { out, fetchImpl: async () => { calls += 1; throw new Error('contacted'); } }));
+  assert.equal(r.code, 2, r.text);
+  assert.equal(calls, 0);
+  assert.match(r.text, /REFUSED \(input\): bind-group-id equals the LHDS_FHIRUSER_OID secret/);
+  assert.equal(r.text.toLowerCase().includes(OID.toLowerCase()), false);
+  assert.equal(validate(base({ bindGroupId: GROUP })), null, 'positive control: a different group passes');
+});
+
+test('bind MERGES, never replaces: the prior {OTHER_GROUP, fhir-data-reader} is kept, the pair appended (lower-cased), v1Scopes:false; preflight BEFORE the mint, written only AFTER the mapping (breaks if the PUT sends only the new pair: OTHER_GROUP is dropped)', async () => {
+  const cp = cpFake({ bindings: storedDoc([PRIOR], false) });
   const t = traced(cp);
   const { file, d } = withSummary();
   try {
     const r = await run((out) => phaseMap(base({ bindGroupId: GROUP.toUpperCase(), summaryFile: file }), { ...t.deps, exec: azStub(CREATED).exec, out, tmpRoot: d }));
     assert.equal(r.code, 0, r.text);
     assert.deepEqual(cp.st.bindingPuts, [{ bindings: [PRIOR, { groupId: GROUP, roleId: 'fhir-smart-user' }], v1Scopes: false }]);
-    assert.ok(t.calls.indexOf(`PUT ${BIND_PATH}`) < t.calls.indexOf('POST /api/health/auth/clients'), t.calls.join(' | '));
-    assert.equal(t.calls.filter((x) => x === `GET ${BIND_PATH}`).length, 2, 'read once, read back once');
+    assert.ok(t.calls.indexOf(`GET ${BIND_PATH}`) < t.calls.indexOf('POST /api/health/auth/clients'), `preflight before the mint: ${t.calls.join(' | ')}`);
+    assert.ok(t.calls.indexOf(`PUT ${FU_PATH}`) < t.calls.indexOf(`PUT ${BIND_PATH}`), `written after the mapping: ${t.calls.join(' | ')}`);
+    assert.equal(t.calls.filter((x) => x === `GET ${BIND_PATH}`).length, 3, 'preflight, write-time re-read, read-back');
     assert.match(r.text, /VERDICT OK map=MAPPED bind=BOUND seed=not-requested/);
     assert.match(readFileSync(file, 'utf8'), new RegExp(`- binding: group ${GROUP} -> fhir-smart-user \\(BOUND, v1Scopes=false\\)\\n$`));
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
 test('bind: the pair already present with v1Scopes:false is UNCHANGED, no PUT (breaks if it is appended again: a 3-entry PUT)', async () => {
-  const cp = cpFake({ mapping: 'Practitioner/900', bindings: { tenant: TENANT, bindings: [PRIOR, { groupId: GROUP, roleId: 'fhir-smart-user' }], v1Scopes: false } });
+  const cp = cpFake({ mapping: 'Practitioner/900', bindings: storedDoc([PRIOR, { groupId: GROUP, roleId: 'fhir-smart-user' }], false) });
   const r = await run((out) => phaseMap(base({ bindGroupId: GROUP.toUpperCase() }), { ...cp.deps, exec: azStub('MAP step=verify status=200 id_match=yes\n').exec, out, tmpRoot: tmpdir() }));
   assert.equal(r.code, 0, r.text);
   assert.deepEqual(cp.st.bindingPuts, []);
   assert.match(r.text, /VERDICT OK map=UNCHANGED bind=UNCHANGED seed=not-requested/);
 });
 
-test('bind: v1Scopes:true + OTHER bindings is REFUSED before any client or PUT; set_v2_scopes=true performs the flip (breaks if v1 is flipped silently)', async () => {
-  const doc = () => ({ tenant: TENANT, bindings: [PRIOR], v1Scopes: true });
-  const cp = cpFake({ bindings: doc() });
+test('bind: a STORED doc with v1Scopes:true + OTHER bindings is REFUSED before any client or PUT and says nothing was created; set_v2_scopes=true performs the flip and says "switched" (breaks if v1 is flipped silently, or the preflight writes)', async () => {
+  const cp = cpFake({ bindings: storedDoc([PRIOR], true) });
   const r = await run((out) => phaseMap(base({ bindGroupId: GROUP }), { ...cp.deps, exec: async () => { throw new Error('must not run'); }, out }));
   assert.equal(r.code, 1, r.text);
   assert.deepEqual(cp.st.bindingPuts, []);
   assert.equal(cp.st.regs.length, 0, 'nothing minted');
   assert.match(r.text, /REFUSED: the bindings of [^ ]+ have v1Scopes=true and 1 other binding\(s\)[\s\S]*EVERY SMART authorize[\s\S]*set_v2_scopes=true/);
+  assert.match(r.text, /nothing was created: no client, no Practitioner, no Patient, no mapping, no binding/);
   assert.match(r.text, /VERDICT FAIL map=not-run bind=FAIL seed=not-requested/);
-  // Positive control: the same doc with the flag is written, the prior kept, v1Scopes false.
-  const cp2 = cpFake({ bindings: doc() });
+  const cp2 = cpFake({ bindings: storedDoc([PRIOR], true) });
   const r2 = await run((out) => phaseMap(base({ bindGroupId: GROUP, setV2Scopes: 'true' }), { ...cp2.deps, exec: azStub(CREATED).exec, out, tmpRoot: tmpdir() }));
   assert.equal(r2.code, 0, r2.text);
   assert.deepEqual(cp2.st.bindingPuts, [{ bindings: [PRIOR, { groupId: GROUP, roleId: 'fhir-smart-user' }], v1Scopes: false }]);
   assert.match(r2.text, /v1Scopes switched true->false/);
 });
 
-test('bind: a tenant with NO binding doc (GET answers v1Scopes:true, []) is written with v1Scopes:FALSE and no refusal (breaks if the GET value is echoed back: v1 would turn ON)', async () => {
+test('bind: a tenant with NO binding doc (GET answers v1Scopes:true, [] and no id) is written with v1Scopes:FALSE, no refusal, and is NOT reported as "switched" (auth reads a missing doc as off); a stored v1:true doc with only this pair IS (breaks if the id-less GET value counts as v1 on)', async () => {
   const cp = cpFake();
   const r = await run((out) => phaseMap(base({ bindGroupId: GROUP }), { ...cp.deps, exec: azStub(CREATED).exec, out, tmpRoot: tmpdir() }));
   assert.equal(r.code, 0, r.text);
   assert.deepEqual(cp.st.bindingPuts, [{ bindings: [{ groupId: GROUP, roleId: 'fhir-smart-user' }], v1Scopes: false }]);
+  assert.equal(/switched/.test(r.text), false, r.text);
+  assert.match(r.text, /first binding doc created with v1Scopes=false \(a missing doc already read as v1 off\)/);
+  const cp2 = cpFake({ bindings: storedDoc([{ groupId: GROUP, roleId: 'fhir-smart-user' }], true) });
+  const r2 = await run((out) => phaseMap(base({ bindGroupId: GROUP }), { ...cp2.deps, exec: azStub(CREATED).exec, out, tmpRoot: tmpdir() }));
+  assert.equal(r2.code, 0, r2.text);
+  assert.equal(cp2.st.bindingPuts.length, 1, 'the flip of a present pair is a write');
+  assert.match(r2.text, /\(already present\); 0 other binding\(s\) kept; v1Scopes switched true->false/);
 });
 
 test('bind: a read-back that lost a prior binding (a concurrent writer) FAILS; a bindings GET 500 is UNMEASURED before any mint (breaks if the read-back checks only the new pair)', async () => {
-  const cp = cpFake({ bindings: { tenant: TENANT, bindings: [PRIOR], v1Scopes: false } });
+  const cp = cpFake({ bindings: storedDoc([PRIOR], false) });
   const deps = { ...cp.deps, fetchImpl: async (u, init) => { const x = await cp.deps.fetchImpl(u, init); if ((init?.method ?? 'GET') === 'PUT' && new URL(u).pathname === BIND_PATH) cp.st.bindings = { ...cp.st.bindings, bindings: cp.st.bindings.bindings.slice(1) }; return x; } };
-  const r = await run((out) => phaseMap(base({ bindGroupId: GROUP }), { ...deps, exec: async () => { throw new Error('must not run'); }, out }));
+  const r = await run((out) => phaseMap(base({ bindGroupId: GROUP }), { ...deps, exec: azStub(CREATED).exec, out, tmpRoot: tmpdir() }));
   assert.equal(r.code, 1, r.text);
   assert.equal(cp.st.bindingPuts.length, 1, 'positive control: the PUT happened');
   assert.match(r.text, /pair=true v1Scopes=false lost_prior=1/);
@@ -731,6 +770,31 @@ test('bind: a read-back that lost a prior binding (a concurrent writer) FAILS; a
   assert.equal(r2.code, 2, r2.text);
   assert.equal(cp2.st.regs.length, 0);
   assert.match(r2.text, /VERDICT UNMEASURED map=not-run bind=UNMEASURED/);
+});
+
+test('map REFUSAL (mapped Practitioner answers 404, no replace_missing) with seed + bind: no Patient is judged or reported, the binding is NOT written, and the message says exactly that (breaks if the seed runs or is reported after a refusal, or the bind is written before the mapping)', async () => {
+  const cp = cpFake({ mapping: 'Practitioner/900', bindings: storedDoc([PRIOR], false) });
+  // Even if a pod printed SEED lines, a refused map must not report a seed.
+  const r = await run((out) => phaseMap(base({ bindGroupId: GROUP, seedPatient: 'true' }), { ...cp.deps, exec: azStub(`MAP step=verify status=404 id_match=no\n${SEEDED}`).exec, out, tmpRoot: tmpdir() }));
+  assert.equal(r.code, 1, r.text);
+  assert.deepEqual(cp.st.bindingPuts, [], 'the binding must not be written');
+  assert.deepEqual(cp.st.puts, [], 'the mapping must not be changed');
+  assert.match(r.text, /REFUSED: the mapping points at Practitioner\/900, which answers 404\. It may be a mapping this tool did not make, so no Practitioner was created and the mapping was not changed/);
+  assert.match(r.text, /also: the binding was NOT written \(preflight only\); the Patient seed was SKIPPED/);
+  assert.equal(/seeded patient|seed: OK/.test(r.text), false, r.text);
+  assert.match(r.text, /VERDICT FAIL map=FAIL bind=not-written seed=skipped/);
+});
+
+test('under sh+curl: a refused map (stale id, no replaceMissing) posts NO Patient even with seed; with replaceMissing the Patient is posted (breaks if the Patient block ignores STOPPED)', { skip: !SH && 'sh or curl is not available' }, async () => {
+  const srv = await engine({});
+  try {
+    const a = await runScript({}, '900', { srv, seed: true });
+    assert.equal(srv.pposts ?? 0, 0, `no Patient after a refusal: ${a.out}`);
+    assert.equal(srv.posts ?? 0, 0, 'no Practitioner either');
+    assert.equal(/^SEED /m.test(a.out), false, a.out);
+    const b = await runScript({}, '900', { srv, seed: true, replaceMissing: true });
+    assert.equal(srv.pposts, 1, `positive control: past the verify the seed runs: ${b.out}`);
+  } finally { srv.close(); }
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

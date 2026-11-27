@@ -22,24 +22,30 @@
  *               GET->PUT race with a concurrent writer of the SAME mapping (the console, #5472); the read-back after the
  *               PUT is what detects a lost race, nothing here makes the write exclusive.
  *            OPTIONAL, additive (each off unless asked for; the map part above runs exactly as without them):
- *   bind     --bind-group-id <GUID> [--bind-role fhir-smart-user]: after the mapping checks and BEFORE the mint, GET
- *            /api/health/auth/tenants/{t}/bindings, MERGE {groupId, roleId} into the existing list (never dropping one,
- *            adding nothing when the pair is present) and PUT it back with v1Scopes:false, then read it back and assert
- *            the pair, every pre-existing pair, and v1Scopes:false. The role must be an id in
- *            apps/loom-health-cp/src/auth/role-scope-map.v1.json, read from that file at run time (the control plane's
- *            ROLE_IDS is built from it). Why v1Scopes:false: the GET of a tenant with NO binding doc answers
- *            v1Scopes:true (server.ts BindingsSchema default), so echoing it back would switch v1 grammar ON. Why the
- *            flip is guarded: v1Scopes is read by EVERY SMART authorize on the tenant (parseRequest {v1}) and by its
- *            smart-configuration (`permission-v1`); turning it off makes v1 scopes (.read/.write/.*) unacceptable to
- *            every client on the tenant, not only Inferno. So when the doc has v1Scopes:true AND bindings other than
- *            this pair, the run REFUSES before anything is created unless --set-v2-scopes true. The PUT takes no
- *            If-Match: a concurrent writer can race the GET->PUT; the read-back detects a lost pair, not prevention.
+ *   bind     --bind-group-id <GUID> [--bind-role fhir-smart-user|fhir-data-reader]: a PREFLIGHT after the mapping
+ *            checks and BEFORE the mint GETs /api/health/auth/tenants/{t}/bindings and decides (refusals here create
+ *            nothing). Only AFTER the mapping succeeds is it re-read, the pair MERGED into the existing list (never
+ *            dropping one, nothing added when present), PUT back with v1Scopes:false, and read back (the pair, every
+ *            prior pair, v1Scopes:false). So a map refusal or failure leaves the bindings unwritten. The role must be
+ *            one of BINDABLE_ROLES (read-only SMART ceilings: the job has no environment approval, so no writer,
+ *            exporter, tenant-admin or break-glass role is one dispatch away) AND an id in
+ *            apps/loom-health-cp/src/auth/role-scope-map.v1.json, read from that file at run time (fails closed if
+ *            removed). The group id must not equal the oid secret (it is printed; the oid is not).
+ *            Why v1Scopes:false: parseDataScope accepts v2 permissions (.rs) whatever the flag, so v1 does NOT block
+ *            Inferno's scopes. false KEEPS the effective state of a tenant with no doc (auth reads a missing doc as
+ *            `b?.v1Scopes ?? false`, although the GET of a missing doc answers v1Scopes:true, which is why that value is
+ *            never echoed back), and stops advertising `permission-v1`. Why a flip is guarded: on an EXISTING doc with
+ *            v1Scopes:true, false stops v1 scopes (.read/.write/.*) being accepted on every SMART authorize of the
+ *            tenant, for every client. So such a doc with bindings other than this pair is REFUSED unless
+ *            --set-v2-scopes true. The PUT takes no If-Match: a concurrent writer can race the GET->PUT; the read-back
+ *            detects a lost pair, it does not prevent one.
  *   seed     --seed-patient true: the same temporary client, its scope widened to system/Practitioner.cr
  *            system/Patient.cr (ONLY then), and the same pod run does a CONDITIONAL create (If-None-Exist on
  *            urn:loom:lhds:synthetic-patient|fhiruser-map-<tenant>) of ONE synthetic Patient (HTEST meta.tag, name
- *            "Synthetic InfernoPatient", no PHI) at the bare base, then reads it back. 201 SEEDED, 200 UNCHANGED.
+ *            "Synthetic InfernoPatient", no PHI) at the bare base, then reads it back. 201 SEEDED, 200 UNCHANGED. It
+ *            is SKIPPED when the mapped Practitioner did not resolve (a refusal creates nothing).
  *            The VERDICT line names each part: map=MAPPED|UNCHANGED, bind=BOUND|UNCHANGED, seed=SEEDED|UNCHANGED
- *            (or not-requested / not-run / FAIL / UNMEASURED).
+ *            (or not-requested / not-run / not-written / skipped / FAIL / UNMEASURED).
  *            The minted client is DISABLED in a finally on the normal and error paths. On SIGTERM/SIGINT a bounded
  *            (SIGNAL_DISABLE_MS) best-effort disable runs before exit 143. A SIGKILL or a lost runner skips both:
  *            that is what the cleanup phase is for.
@@ -89,6 +95,13 @@ export const SYNTHETIC_PATIENT_NAME = Object.freeze({ use: 'official', text: 'Sy
 export const DEFAULT_BIND_ROLE = 'fhir-smart-user';
 /** The control plane's role list source (role-map.ts imports it; ROLE_IDS = its roles[].id). Read, never transcribed. */
 export const ROLE_MAP_URL = new URL('../../../apps/loom-health-cp/src/auth/role-scope-map.v1.json', import.meta.url);
+/**
+ * The ONLY roles a dispatch input may bind: read-only SMART ceilings. The job has no environment approval, so a writer,
+ * exporter, tenant-admin or break-glass role must never be one dispatch away. Intersected with the ids READ from the
+ * role map, so a role removed from the file fails closed and the file stays the source of what exists.
+ */
+export const BINDABLE_ROLES = Object.freeze(['fhir-smart-user', 'fhir-data-reader']);
+export const bindableRoles = (fileRoles) => new Set(BINDABLE_ROLES.filter((r) => fileRoles.has(r)));
 /** server.ts BindingsSchema: bindings .max(100). */
 export const BINDINGS_MAX = 100;
 
@@ -147,10 +160,13 @@ export function validate(c) {
   if (!['true', 'false'].includes(c.setV2Scopes ?? 'false')) return 'set-v2-scopes must be true or false';
   if (c.bindGroupId) {
     if (!GUID_RE.test(c.bindGroupId)) return 'bind-group-id must be a GUID (the Entra group object id)';
+    // The user's oid is a secret; a group id is printed. Equal = the operator pasted the oid: refuse, echo neither.
+    if (c.oid && c.bindGroupId.toLowerCase() === c.oid.toLowerCase()) return 'bind-group-id equals the LHDS_FHIRUSER_OID secret (a user object id, not a group); neither value is printed';
     if (!/^[a-z0-9-]{1,64}$/.test(c.bindRole)) return 'bind-role must be 1-64 chars of a-z, 0-9 and hyphen';
     let roles;
     try { roles = roleIdsFrom(c.roleMap || ROLE_MAP_URL); } catch (e) { return `could not read the role map (${redact(e?.message ?? 'error', 120)}), so bind-role is not validated`; }
-    if (!roles.has(c.bindRole)) return `bind-role ${c.bindRole} is not a role id in role-scope-map.v1.json (${[...roles].join(', ')})`;
+    const allowed = bindableRoles(roles);
+    if (!allowed.has(c.bindRole)) return `bind-role ${c.bindRole} is not bindable by this workflow: allowed are ${[...allowed].join(', ') || '(none: the role map has neither)'} (the read-only SMART roles present in role-scope-map.v1.json)`;
   }
   return null;
 }
@@ -263,19 +279,22 @@ create_read() {
   fi
 }
 
+# STOPPED=yes when the mapped Practitioner did not resolve and nothing was created for it (a refusal or a wrong
+# answer): the seed is then SKIPPED, so a refused run creates nothing anywhere.
+STOPPED=no
 practitioner() {
   if [ -n "$EXISTING" ]; then
     req GET "$BASE/Practitioner/$EXISTING"
     if [ "$CODE" = "200" ] && body_is "$EXISTING"; then echo "MAP step=verify status=$CODE id_match=yes"; return 0; fi
     echo "MAP step=verify status=$CODE id_match=no"
-    case "$CODE" in 404|410) ;; *) return 0 ;; esac
-    [ "$REPLACE_MISSING" = "yes" ] || return 0
+    case "$CODE" in 404|410) ;; *) STOPPED=yes; return 0 ;; esac
+    [ "$REPLACE_MISSING" = "yes" ] || { STOPPED=yes; return 0; }
   fi
   create_read MAP practitioner.json
 }
 
 practitioner
-if [ "$SEED" = "yes" ]; then
+if [ "$SEED" = "yes" ] && [ "$STOPPED" = "no" ]; then
   RT=Patient
   INE="$PINE"
   create_read SEED patient.json
@@ -309,11 +328,11 @@ export function judgeMap(p, existingId = '', replaceMissing = false) {
     const v = p.verify;
     if (!v) return { code: 2, note: 'no verify line for the mapped Practitioner' };
     if (v.status === 200 && v.idMatch === true) return { code: 0, kind: 'existing', id: existingId, note: 'the mapped Practitioner resolves (GET 200, same id)' };
-    if (v.status === 200) return { code: 1, note: 'the mapped Practitioner answered 200 with a body that is not that Practitioner' };
-    if (NO_ANSWER(v.status)) return { code: 2, note: v.status === 0 ? 'curl got no HTTP answer from the engine' : 'the engine answered 503 for the mapped Practitioner' };
-    if (v.status !== 404 && v.status !== 410) return { code: 1, note: `the mapped Practitioner answered ${v.status}; expected 200 (or 404/410). Nothing was created` };
+    if (v.status === 200) return { code: 1, stopped: true, note: 'the mapped Practitioner answered 200 with a body that is not that Practitioner' };
+    if (NO_ANSWER(v.status)) return { code: 2, stopped: true, note: v.status === 0 ? 'curl got no HTTP answer from the engine' : 'the engine answered 503 for the mapped Practitioner' };
+    if (v.status !== 404 && v.status !== 410) return { code: 1, stopped: true, note: `the mapped Practitioner answered ${v.status}; expected 200 (or 404/410). Nothing was created` };
     if (!replaceMissing) {
-      return { code: 1, note: `REFUSED: the mapping points at Practitioner/${existingId}, which answers ${v.status}. It may be a mapping this tool did not make, so nothing was created or changed; dispatch again with replace_missing=true to replace it` };
+      return { code: 1, stopped: true, note: `REFUSED: the mapping points at Practitioner/${existingId}, which answers ${v.status}. It may be a mapping this tool did not make, so no Practitioner was created and the mapping was not changed; dispatch again with replace_missing=true to replace it` };
     }
   }
   return judgeCreateRead(p, 'Practitioner');
@@ -357,30 +376,36 @@ export const judgeSeed = (p) => judgeCreateRead(p, 'Patient');
 const worst = (...codes) => (codes.includes(1) ? 1 : codes.includes(2) ? 2 : 0);
 
 /**
- * The role binding (--bind-group-id). Returns { code, state: BOUND|UNCHANGED, note }. Never drops a binding; refuses a
- * v1Scopes true->false flip on a tenant with OTHER bindings unless setV2. Reads back the pair, the old pairs and v1Scopes.
+ * The role binding (--bind-group-id). Returns { code, state: BOUND|UNCHANGED|PLANNED, note }. Never drops a binding;
+ * refuses a v1Scopes true->false flip on a tenant with OTHER bindings unless setV2. Reads back the pair, the old pairs
+ * and v1Scopes. `dryRun` reads and decides only (the preflight before the mint): it never PUTs. Every refusal note says
+ * only that the BINDINGS were not changed; what else the run did is the caller's to state.
  */
-export async function bindGroup({ tenant, groupId, roleId, setV2 }, api, et) {
+export async function bindGroup({ tenant, groupId, roleId, setV2, dryRun = false }, api, et) {
   const path = `/api/health/auth/tenants/${encodeURIComponent(tenant)}/bindings`;
   const pair = { groupId: groupId.toLowerCase(), roleId };
   const key = (x) => `${String(x.groupId).toLowerCase()} ${x.roleId}`;
   const g = await api('GET', path);
-  if (g.status !== 200 || !Array.isArray(g.json?.data?.bindings)) return { code: 2, note: `UNMEASURED: could not read the role bindings of ${tenant}: ${et(g)}. Nothing was changed` };
+  if (g.status !== 200 || !Array.isArray(g.json?.data?.bindings)) return { code: 2, note: `UNMEASURED: could not read the role bindings of ${tenant}: ${et(g)}. The bindings were not changed` };
   const raw = g.json.data.bindings;
   const cur = raw.filter((x) => typeof x?.groupId === 'string' && typeof x?.roleId === 'string').map((x) => ({ groupId: x.groupId, roleId: x.roleId }));
-  if (cur.length !== raw.length) return { code: 1, note: `REFUSED: a binding entry of ${tenant} is not {groupId, roleId}; this tool does not rewrite a document it cannot read. Nothing was changed` };
-  // A tenant with NO binding doc answers v1Scopes:true (the schema default), so anything but an explicit false is true.
-  const v1 = g.json.data.v1Scopes !== false;
+  if (cur.length !== raw.length) return { code: 1, note: `REFUSED: a binding entry of ${tenant} is not {groupId, roleId}; this tool does not rewrite a document it cannot read. The bindings were not changed` };
+  // A stored doc carries its id (binding-<tenant>); the GET of a tenant with NO doc answers { tenant, bindings: [],
+  // v1Scopes: true } with no id. Auth reads a missing doc as v1 OFF (server.ts `b?.v1Scopes ?? false`), so the
+  // EFFECTIVE v1 state is true only for an existing doc that says true.
+  const docExists = typeof g.json.data.id === 'string' && g.json.data.id.length > 0;
+  const v1 = docExists && g.json.data.v1Scopes !== false;
   const present = cur.some((x) => key(x) === key(pair));
   if (present && !v1) return { code: 0, state: 'UNCHANGED', note: `group ${pair.groupId} is already bound to ${roleId} with v1Scopes=false; nothing written` };
   const others = cur.filter((x) => key(x) !== key(pair));
   if (v1 && others.length > 0 && !setV2) {
-    return { code: 1, note: `REFUSED: the bindings of ${tenant} have v1Scopes=true and ${others.length} other binding(s). Writing v1Scopes=false changes scope parsing for EVERY SMART authorize on this tenant (v1 .read/.write/.* scopes stop being accepted) and drops permission-v1 from its smart-configuration, for every client, not only Inferno. Nothing was changed; dispatch again with set_v2_scopes=true to accept that` };
+    return { code: 1, note: `REFUSED: the bindings of ${tenant} have v1Scopes=true and ${others.length} other binding(s). Writing v1Scopes=false means v1 .read/.write/.* scopes stop being accepted on EVERY SMART authorize on this tenant and permission-v1 is no longer advertised in its smart-configuration, for every client, not only Inferno. The bindings were not changed; dispatch again with set_v2_scopes=true to accept that` };
   }
   const next = present ? cur : [...cur, pair];
-  if (next.length > BINDINGS_MAX) return { code: 1, note: `REFUSED: ${tenant} already has ${cur.length} bindings; adding one exceeds the control plane cap of ${BINDINGS_MAX}. Nothing was changed` };
+  if (next.length > BINDINGS_MAX) return { code: 1, note: `REFUSED: ${tenant} already has ${cur.length} bindings; adding one exceeds the control plane cap of ${BINDINGS_MAX}. The bindings were not changed` };
+  if (dryRun) return { code: 0, state: 'PLANNED', note: `preflight: group ${pair.groupId} -> ${roleId} will be written after the mapping succeeds (${others.length} other binding(s) kept${v1 ? ', v1Scopes true->false' : ''})` };
   const p = await api('PUT', path, { bindings: next, v1Scopes: false });
-  if (p.status !== 200) return { code: p.status === 'network-error' || p.status === 503 ? 2 : 1, note: `FAIL: the bindings PUT was not confirmed: ${et(p)}` };
+  if (p.status !== 200) return { code: p.status === 'network-error' || p.status === 503 ? 2 : 1, note: `FAIL: the bindings PUT was not confirmed (whether it landed is not established): ${et(p)}` };
   const back = await api('GET', path);
   const got = Array.isArray(back.json?.data?.bindings) ? back.json.data.bindings.filter((x) => typeof x?.groupId === 'string' && typeof x?.roleId === 'string') : undefined;
   if (back.status !== 200 || !got) return { code: 2, note: `UNMEASURED: the PUT answered 200 but the read-back failed: ${et(back)}` };
@@ -390,7 +415,7 @@ export async function bindGroup({ tenant, groupId, roleId, setV2 }, api, et) {
     return { code: 1, note: `FAIL: the bindings read-back has pair=${have.has(key(pair))} v1Scopes=${back.json.data.v1Scopes === false ? 'false' : 'not false'} lost_prior=${lost.length}; expected the pair, v1Scopes=false and every prior binding (a concurrent writer can race the GET->PUT)` };
   }
   // A PUT was written (the pair, or only the v1Scopes flip of a present pair), so this is BOUND, never UNCHANGED.
-  return { code: 0, state: 'BOUND', note: `group ${pair.groupId} bound to ${roleId}${present ? ' (already present)' : ''}; ${others.length} other binding(s) kept${v1 ? '; v1Scopes switched true->false' : ''}; read back` };
+  return { code: 0, state: 'BOUND', note: `group ${pair.groupId} bound to ${roleId}${present ? ' (already present)' : ''}; ${others.length} other binding(s) kept${v1 ? '; v1Scopes switched true->false' : docExists ? '' : '; first binding doc created with v1Scopes=false (a missing doc already read as v1 off)'}; read back` };
 }
 
 const mkSay = (deps, secrets) => {
@@ -488,12 +513,14 @@ export async function phaseMap(c, deps = {}) {
       return (code = 2);
     } else say(`no fhirUser mapping for this oid on ${c.tenant} yet`);
 
+    const bindArgs = { tenant: c.tenant, groupId: c.bindGroupId, roleId: c.bindRole, setV2: c.setV2Scopes === 'true' };
     if (c.bindGroupId) {
-      // BEFORE the mint: a refusal here (e.g. the v1Scopes guard) leaves nothing created anywhere.
-      const b = await bindGroup({ tenant: c.tenant, groupId: c.bindGroupId, roleId: c.bindRole, setV2: c.setV2Scopes === 'true' }, api, et);
+      // PREFLIGHT only, BEFORE the mint: a refusal here (e.g. the v1Scopes guard) leaves nothing created anywhere. The
+      // bindings are WRITTEN only after the mapping succeeds, so a later refusal or failure has not changed them either.
+      const b = await bindGroup({ ...bindArgs, dryRun: true }, api, et);
       say(`bind: ${redact(scrub(b.note, secrets), 600)}`);
-      if (b.code !== 0) { parts.bind = label(b.code); return (code = b.code); }
-      parts.bind = b.state;
+      if (b.code !== 0) { parts.bind = label(b.code); say('nothing was created: no client, no Practitioner, no Patient, no mapping, no binding'); return (code = b.code); }
+      parts.bind = b.state === 'UNCHANGED' ? 'UNCHANGED' : 'not-written';
     }
 
     process.once('SIGTERM', onSig);
@@ -517,16 +544,25 @@ export async function phaseMap(c, deps = {}) {
     say(`running in the aks-command pod of ${redact(c.aksName, 60)} against the bare base of ${c.tenant}`);
     const logs = await invokeInCluster(c, deps, say, dir, secrets, seed);
     if (logs === undefined) { parts.map = 'UNMEASURED'; if (seed) parts.seed = 'UNMEASURED'; return (code = 2); }
+    const v = judgeMap(parseMapLogs(logs), existingId, replaceMissing);
     let seedV = { code: 0 };
-    if (seed) {
-      // Judged on its own: the Patient block runs whatever the Practitioner block concluded.
+    if (seed && v.stopped) {
+      // The pod skips the Patient block when the mapped Practitioner did not resolve (STOPPED=yes); any SEED line is
+      // not read, so a refused run reports no seed.
+      parts.seed = 'skipped';
+    } else if (seed) {
+      // Judged on its own: past the verify, the Patient block runs whatever the Practitioner create concluded.
       seedV = judgeSeed(parseSeedLogs(logs));
       say(`seed: ${seedV.code === 0 ? 'OK' : label(seedV.code)} ${redact(scrub(seedV.note, secrets), 400)}`);
       parts.seed = seedV.code === 0 ? (seedV.kind === 'created' ? 'SEEDED' : 'UNCHANGED') : label(seedV.code);
     }
-    const v = judgeMap(parseMapLogs(logs), existingId, replaceMissing);
     say(`engine: ${v.code === 0 ? 'OK' : v.code === 1 ? 'FAIL' : 'UNMEASURED'} ${redact(scrub(v.note, secrets), 400)}`);
-    if (v.code !== 0) { parts.map = label(v.code); return (code = worst(v.code, seedV.code)); }
+    if (v.code !== 0) {
+      parts.map = label(v.code);
+      if (v.stopped) say(`also: ${c.bindGroupId ? 'the binding was NOT written (preflight only)' : 'no binding was requested'}; ${seed ? 'the Patient seed was SKIPPED' : 'no seed was requested'}`);
+      else if (c.bindGroupId && parts.bind !== 'UNCHANGED') say('also: the binding was NOT written (it is written only after the mapping succeeds)');
+      return (code = worst(v.code, seedV.code));
+    }
     const ref = `Practitioner/${v.id}`;
 
     if (v.kind !== 'existing') {
@@ -547,15 +583,23 @@ export async function phaseMap(c, deps = {}) {
     }
     parts.map = v.kind === 'existing' ? 'UNCHANGED' : 'MAPPED';
     say(`mapping ${v.kind === 'existing' ? 'already present and verified' : 'written and read back'}: ${ref}; sign-in will carry fhirUser=${redact(scrub(back.json.data.fhirUser, secrets), 200)}`);
+    let bindCode = 0;
+    if (c.bindGroupId && parts.bind !== 'UNCHANGED') {
+      // Re-read and re-decide at write time (the preflight's view may be stale); a refusal here is stated as such.
+      const b = await bindGroup(bindArgs, api, et);
+      say(`bind: ${redact(scrub(b.note, secrets), 600)}`);
+      parts.bind = b.code === 0 ? b.state : label(b.code);
+      bindCode = b.code;
+    }
     if (c.summaryFile) {
       const extra = [
-        ...(c.bindGroupId ? [`- binding: group ${c.bindGroupId.toLowerCase()} -> ${c.bindRole} (${parts.bind}, v1Scopes=false)`] : []),
+        ...(c.bindGroupId ? [`- binding: group ${c.bindGroupId.toLowerCase()} -> ${c.bindRole} (${parts.bind}${bindCode === 0 ? ', v1Scopes=false' : ''})`] : []),
         ...(seed ? [seedV.code === 0 ? `- Patient: Patient/${seedV.id} (${parts.seed})` : `- Patient: ${parts.seed}`] : []),
       ];
       appendFileSync(c.summaryFile, `## lhds fhirUser map\n\n- tenant: ${c.tenant}\n- fhirUser: ${ref}\n- mapping=ok (${v.kind})\n${extra.map((x) => `${x}\n`).join('')}`);
     }
     if (seed && seedV.code === 0) say(`seeded patient: Patient/${seedV.id} (${parts.seed})`);
-    return (code = seedV.code);
+    return (code = worst(seedV.code, bindCode));
   } catch (e) {
     if (e instanceof MintError) { say(`mint failed class=${e.cls}: ${redact(scrub(e.message, secrets), 500)}`); return (code = e.exit); }
     say(`unexpected ${redact(e?.name ?? 'error', 40)}: ${redact(scrub(e?.message ?? '', secrets), 200)}`);
