@@ -1,5 +1,7 @@
 // Server-rendered HTML for the standalone patient picker (#5454 A5). No
 // JavaScript, no external assets: the CSP sent with every page forbids both.
+// The picker is the only HTML this AS serves: there is no user consent page
+// (the grant is role-bounded) and the EHR launch redirects with no interstitial.
 // Every interpolated value goes through escapeHtml, including values the
 // platform itself produced, so no caller has to remember which are safe.
 
@@ -12,16 +14,64 @@ export function escapeHtml(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] as string);
 }
 
-/** Response headers for every picker page: nothing may run, frame it, or leak its URL (which carries the pick id). */
-export const PICKER_HEADERS: Readonly<Record<string, string>> = {
-  'content-type': 'text/html; charset=utf-8',
-  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-  'x-frame-options': 'DENY',
-  'cache-control': 'no-store',
-  pragma: 'no-cache',
-  'referrer-policy': 'no-referrer',
-  'x-content-type-options': 'nosniff',
-};
+/**
+ * The picker page's CSP, with `form-action` naming where its forms may navigate.
+ *
+ * `form-action` also governs the REDIRECT that follows a form submission in Chromium-based browsers (MDN,
+ * "Content-Security-Policy: form-action": "Chrome 63 does [block the redirects]", w3c/webappsec-csp#8). The
+ * picker's Continue / Cancel / Continue-without-a-patient POSTs answer 302 to the client's redirect_uri, so with
+ * `form-action 'self'` alone Chromium silently blocks that redirect and the user stays on /pick (measured live
+ * 2026-11-27 on Commercial dev01: `auth.pick_issued` logged, 302 sent, the browser never left the page). The page
+ * for ONE pick therefore also allows the ORIGIN (never the path or query, never a wildcard) of that pick's stored,
+ * registration-validated redirect_uri. A page with no pick context passes nothing and keeps `'self'` only.
+ */
+export function pickerCsp(formTargetOrigin?: string): string {
+  const formAction = formTargetOrigin ? `'self' ${formTargetOrigin}` : "'self'";
+  return `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`;
+}
+
+/**
+ * A CSP host-source for the origin: scheme, dot-separated LDH labels (ASCII after IDNA, which `URL` already applied),
+ * optional port. This is deliberately NARROWER than what `new URL()` accepts: the WHATWG URL parser keeps `;`, `,`,
+ * `'`, `"`, `*` and `$` in a host (`new URL('https://a;b.com/').origin === 'https://a;b.com'`), and a `;` would end the
+ * form-action directive and start an attacker-chosen one. IPv6 literals are refused too: CSP host-source has no
+ * bracketed-host production.
+ */
+const CSP_HOST_SOURCE = /^https?:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?$/;
+
+/** Why a redirect_uri yields no form-action source. */
+export type FormActionRefusal = 'unparseable' | 'not-serializable';
+
+/**
+ * The `form-action` source for a stored redirect_uri: its serialized origin, or a refusal (the caller logs it and the
+ * page keeps `'self'` only). Never call this with a value from the request: only with the pick grant's stored
+ * redirectUri, which was matched exactly against the client's registered list at /authorize.
+ */
+export function formActionSource(redirectUri: string): { source: string } | { refused: FormActionRefusal } {
+  let origin: string;
+  try {
+    origin = new URL(redirectUri).origin;
+  } catch {
+    return { refused: 'unparseable' };
+  }
+  return CSP_HOST_SOURCE.test(origin) ? { source: origin } : { refused: 'not-serializable' };
+}
+
+/** Response headers for a picker page: nothing may run, frame it, or leak its URL (which carries the pick id). */
+export function pickerHeaders(formTargetOrigin?: string): Readonly<Record<string, string>> {
+  return {
+    'content-type': 'text/html; charset=utf-8',
+    'content-security-policy': pickerCsp(formTargetOrigin),
+    'x-frame-options': 'DENY',
+    'cache-control': 'no-store',
+    pragma: 'no-cache',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+  };
+}
+
+/** Headers for a picker page with no pick context (the dead-end refusal and error pages): `form-action 'self'` only. */
+export const PICKER_HEADERS: Readonly<Record<string, string>> = pickerHeaders();
 
 // Fluent-like neutral palette with the Loom brand blue, light and dark. One const, inline (CSP allows inline style only).
 const CSS = `
