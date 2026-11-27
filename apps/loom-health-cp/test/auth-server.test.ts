@@ -17,6 +17,7 @@ import { createFhirUserResolver } from '../src/auth/fhir-user.js';
 import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.js';
 import { PatientSearchUnavailableError, type PatientQuery, type PatientSearch, type PatientSummary } from '../src/auth/patient-search.js';
 import type { TenantDoc } from '../src/registry/types.js';
+import { graphMembershipAsApp } from '../src/auth/wire.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
 
 const ISSUER = 'https://cp.test/auth';
@@ -100,6 +101,7 @@ async function boot(over: {
   log?: (event: string, f: Record<string, string | number>) => void;
   patientSearch?: PatientSearch;
   fetchFhir?: typeof fetch;
+  graph?: GraphMembership;
 } = {}): Promise<Ctx> {
   const tenants = new MemoryCollection<TenantDoc>();
   const base = { stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' };
@@ -127,7 +129,7 @@ async function boot(over: {
     signer,
     idTokenSigner,
     federation: over.federation ?? fed,
-    graph,
+    graph: over.graph ?? graph,
     fhirBaseFor: fhir,
     // The production resolver over the fake store, exactly as wire.ts builds it (#5454 A4).
     resolveFhirUser: createFhirUserResolver(stores.fhirUsers, fhir),
@@ -860,6 +862,55 @@ describe('client registry, bindings and gate (admin API)', () => {
     await c.bind({ [G_READER]: 'fhir-data-reader' });
     c.graph.consent = true;
     expect((await flow(c, 'user/*.rs')).redirect.searchParams.get('error')).toBe('server_error');
+  });
+});
+
+describe('Graph membership AS the AS app, through the callback (live consent:1, 2026-11-27)', () => {
+  // The production graphMembershipAsApp at the seam; only Entra's token endpoint and Graph are faked.
+  const AS_APP = 'cccccccc-0000-0000-0000-00000000000a';
+  const TOKEN_URL = `https://entra.test/${TENANT}/oauth2/v2.0/token`;
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
+  async function signIn(token: () => Response, graph: () => Response) {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const graphAuth: string[] = [];
+    const fetchImpl = (async (u: string, init: RequestInit) => {
+      if (String(u) === TOKEN_URL) return token();
+      graphAuth.push((init.headers as Record<string, string>).authorization ?? '');
+      return graph();
+    }) as unknown as typeof fetch;
+    const membership = graphMembershipAsApp({
+      cloud: 'gcc-high', authorityHost: 'entra.test', entraTenantId: TENANT, asClientId: AS_APP, getToken: async (s) => `mi-token-for:${s}`, fetchImpl,
+    });
+    const c = await boot({ graph: membership, log: (event, f) => logs.push({ event, f }) });
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    const { redirect } = await c.authorizeAndLogin({ scope: 'user/*.rs' });
+    return { redirect, graphAuth, logs, membership: logs.filter((l) => l.event === 'auth.membership_error').map((l) => l.f) };
+  }
+
+  it('happy path: checkMemberGroups is called with the AS-app token and a code is issued', async () => {
+    const r = await signIn(() => json({ access_token: 'as-app-token', expires_in: 3599 }), () => json({ value: [G_READER] }));
+    expect(r.redirect.searchParams.get('error')).toBeNull();
+    expect(r.redirect.searchParams.get('code')).toMatch(/.+/); // breaks if membership fails on the AS-app path
+    expect(r.graphAuth).toEqual(['Bearer as-app-token']); // breaks if Graph is called with the MI's own token
+    expect(r.membership).toEqual([]);
+  });
+  it('a token-endpoint 400 invalid_client/700016 logs token_acquisition (not consent), with no body', async () => {
+    const r = await signIn(
+      () => json({ error: 'invalid_client', error_description: 'AADSTS700016 Trace ID: trace-q-1', error_codes: [700016] }, 400),
+      () => json({ value: [G_READER] }),
+    );
+    expect(r.redirect.searchParams.get('error')).toBe('server_error');
+    expect(r.graphAuth).toEqual([]); // Graph is never asked without a token
+    // Breaks on the old `{error:'Error', consent:1}` shape, or on consent:1 for a token failure.
+    expect(r.membership).toEqual([{ error: 'GraphTokenError', cause: 'token_acquisition', consent: 0, reason: 'token_endpoint_400', entraError: 'invalid_client', entraErrorCode: 700016 }]);
+    expect(JSON.stringify(r.logs)).not.toContain('trace-q-1');
+    expect(JSON.stringify(r.logs)).not.toContain('mi-token-for'); // the assertion is never logged
+  });
+  it('a Graph 403 with a token logs the graph_refused consent class', async () => {
+    const r = await signIn(() => json({ access_token: 'as-app-token', expires_in: 3599 }), () => json({}, 403));
+    expect(r.redirect.searchParams.get('error')).toBe('server_error');
+    expect(r.membership).toEqual([{ error: 'GraphConsentRequiredError', cause: 'graph_refused', consent: 1 }]); // breaks if it reads as a token failure
   });
 });
 
