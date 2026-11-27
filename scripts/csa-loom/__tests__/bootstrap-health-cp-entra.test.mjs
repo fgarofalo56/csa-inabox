@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ensure, run, expectedFederatedCredential, mergeAllowlist, parseArgs,
   ROLE_READER, ROLE_ADMIN, FED_CRED_NAME, ALLOWLIST_ENV, GRAPH_PERMISSIONS, GRAPH_RESOURCE_APP_ID, withGraphPermission,
+  ISSUER_ENV, AS_CALLBACK_PATH, asCallbackUrl, withRedirectUri,
   EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PERMISSION, EXIT_UNSUPPORTED,
 } from '../bootstrap-health-cp-entra.mjs';
 import { GraphError } from '../ensure-estate-power-role.mjs';
@@ -20,6 +21,15 @@ const LEARN_USER_READBASIC_ALL = '97235f07-e226-4f63-ace3-39588e11d3a1';
 const LEARN_GROUPMEMBER_READ_ALL = '98830695-27a2-44f7-8c18-0c3ebc9698f6';
 const LEARN_DIRECTORY_READ_ALL = '7ab1d382-f21e-4acd-a863-ba3e13f7da61';
 
+// The AS redirect target, LIFTED from the AS source (server.ts `const callbackUrl = `${issuer}<path>``), never transcribed,
+// so a path change in the AS turns these tests red instead of leaving a stale reply URL registered.
+const AS_SERVER_SRC = readFileSync(fileURLToPath(new URL('../../../apps/loom-health-cp/src/auth/server.ts', import.meta.url)), 'utf8');
+const LIFTED_CALLBACK_PATH = (AS_SERVER_SRC.match(/const callbackUrl = `\$\{issuer\}([^`]+)`;/) ?? [])[1];
+// Fixture issuers: NOT the live dev01 host, and a Gov one, so a hard-coded or Commercial-assumed host is visible.
+const ISSUER = 'https://lhds-auth-test01-abc.z01.azurefd.net/auth';
+const GOV_ISSUER = 'https://lhds-auth-gov01-def.z01.azurefd.us/auth';
+const CALLBACK = `${ISSUER}${LIFTED_CALLBACK_PATH}`;
+
 const OPTS = {
   asClientId: AS_APP, cpAppClientId: CP_APP, tenantId: TENANT, cpIdentityPrincipalId: CP_IDENTITY,
   apimPrincipalId: APIM_SP, consoleClientId: CONSOLE_CLIENT, consolePrincipalId: CONSOLE_PRINCIPAL, ciClientId: CI_APP,
@@ -27,22 +37,26 @@ const OPTS = {
 };
 
 /** In-memory Graph + Container App. `calls` records every request; writes() filters non-GET. */
-function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = [], allow = '', cpSpExists = true, denyWrite = false, dropCredPost = false, rra = [], asSpExists = false, dropRraPatch = false } = {}) {
-  const st = { rra, asSpExists, creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
+function world({ cloud = 'AzureCloud', creds = [], appRoles = [], assignments = [], allow = '', cpSpExists = true, denyWrite = false, dropCredPost = false, rra = [], asSpExists = false, dropRraPatch = false, issuer = ISSUER, redirectUris = [], dropWebPatch = false } = {}) {
+  const st = { rra, asSpExists, redirectUris: [...redirectUris], webPatches: [], creds: [...creds], appRoles: [...appRoles], assignments: [...assignments], allow, envSets: [] };
   const log = [];
   const io = {
     cloud: () => cloud,
     log: (l) => log.push(l),
     sleep: async () => {},
     writeOutputs: () => {},
-    getAppEnv: () => [{ name: 'OTHER', value: 'x' }, ...(st.allow === null ? [] : [{ name: ALLOWLIST_ENV, value: st.allow }])],
+    getAppEnv: () => [{ name: 'OTHER', value: 'x' }, ...(issuer === null ? [] : [{ name: 'LOOM_HEALTH_CP_ISSUER_URL', value: issuer }]), ...(st.allow === null ? [] : [{ name: ALLOWLIST_ENV, value: st.allow }])],
     setAppEnv: (_o, name, value) => { st.envSets.push([name, value]); st.allow = value; },
     async graph(host, method, path, body) {
       log.push(`${method} ${path.split('?')[0]}`);
       if (method !== 'GET' && denyWrite) throw new GraphError(403, `${method} -> 403: Insufficient privileges`);
       const p = path.split('?')[0];
-      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP, requiredResourceAccess: st.rra } };
-      if (method === 'PATCH' && p === `/applications/${AS_OBJ}`) { if (!dropRraPatch) st.rra = body.requiredResourceAccess; return { json: {} }; }
+      if (method === 'GET' && p === `/applications(appId='${AS_APP}')`) return { json: { id: AS_OBJ, appId: AS_APP, requiredResourceAccess: st.rra, web: { redirectUris: [...st.redirectUris] } } };
+      if (method === 'PATCH' && p === `/applications/${AS_OBJ}`) {
+        if (body.requiredResourceAccess && !dropRraPatch) st.rra = body.requiredResourceAccess;
+        if (body.web) { st.webPatches.push(body); if (!dropWebPatch) st.redirectUris = body.web.redirectUris; }
+        return { json: {} };
+      }
       if (method === 'GET' && p === `/servicePrincipals(appId='${AS_APP}')`) {
         if (!st.asSpExists) throw new GraphError(404, 'not found');
         return { json: { id: G(9), appId: AS_APP } };
@@ -86,6 +100,7 @@ test('first run converges everything; the second run issues ZERO writes', async 
   const first = await ensure(OPTS, w.io);
   assert.deepEqual(w.writes(), [
     `PATCH /applications/${AS_OBJ}`,
+    `PATCH /applications/${AS_OBJ}`, // #AADSTS500113: the AS reply URL (web.redirectUris starts empty in this world)
     'POST /servicePrincipals',
     `POST /applications/${AS_OBJ}/federatedIdentityCredentials`,
     `PATCH /applications/${CP_OBJ}`,
@@ -94,7 +109,9 @@ test('first run converges everything; the second run issues ZERO writes', async 
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
     `POST /servicePrincipals/${CP_SP}/appRoleAssignedTo`,
   ]);
-  assert.equal(first.writes, 9, '8 Graph writes (AS requiredResourceAccess, AS SP, cred, CP roles, CP SP, 3 assignments) + 1 env update');
+  // 9 -> 10: the reply-URL PATCH is one more Graph write. Breaks if it is skipped, or issued twice.
+  assert.equal(first.writes, 10, '9 Graph writes (AS requiredResourceAccess, AS reply URL, AS SP, cred, CP roles, CP SP, 3 assignments) + 1 env update');
+  assert.deepEqual(w.st.redirectUris, [CALLBACK]);
   assert.deepEqual(w.st.assignments, [
     { principalId: APIM_SP, appRoleId: ROLE_READER.id },
     { principalId: CONSOLE_PRINCIPAL, appRoleId: ROLE_ADMIN.id },
@@ -201,6 +218,8 @@ test('--dry-run reads everything and writes NOTHING, listing what it would do', 
   assert.ok(r.would.some((l) => l.includes('federated credential')));
   assert.ok(r.would.some((l) => l.includes(`assign ${ROLE_READER.value}`)));
   assert.ok(r.would.some((l) => l.includes(ALLOWLIST_ENV)));
+  assert.ok(r.would.some((l) => l.includes(`reply URL ${CALLBACK}`)), 'Breaks if: the reply URL is not reported under --dry-run');
+  assert.deepEqual(w.st.webPatches, []);
 });
 
 test('a 403 on a write exits 3 and NAMES the Graph permissions; nothing is claimed done', async () => {
@@ -367,4 +386,78 @@ test('--pdp-principal-id without --pdp-client-id (or the reverse) exits 2 with z
     assert.equal(await run(argv, w.io), EXIT_USAGE);
     assert.equal(w.log.filter((l) => /^(GET|POST|PATCH) /.test(l)).length, 0, 'no Graph call before the usage error');
   }
+});
+
+// ---- AADSTS500113 (2026-11-27): the AS /callback reply URL on the AS app -------------------------------------------------
+const argvAll = ['--as-client-id', AS_APP, '--cp-app-client-id', CP_APP, '--tenant-id', TENANT, '--ci-client-id', CI_APP, '--cp-identity-principal-id', CP_IDENTITY,
+  '--apim-principal-id', APIM_SP, '--cp-app-name', 'loom-health-cp', '--cp-resource-group', 'rg-x', '--subscription', 'sub'];
+
+test('the derived reply URL is what the AS sends: issuer env + path, both LIFTED from the AS source', () => {
+  // Breaks if: the AS renames its issuer env, changes `callbackUrl` (e.g. to /auth/callback relative to the origin), or this
+  // script hard-codes a path / host; and if the trailing-slash handling differs from config.ts cleanHttps (`/auth/` -> `/auth`).
+  assert.equal(LIFTED_CALLBACK_PATH, '/callback', 'fixture arithmetic: the lift must find the AS callbackUrl template');
+  assert.equal(AS_CALLBACK_PATH, LIFTED_CALLBACK_PATH);
+  const cfg = readFileSync(fileURLToPath(new URL('../../../apps/loom-health-cp/src/auth/config.ts', import.meta.url)), 'utf8');
+  assert.ok(cfg.includes(`need('${ISSUER_ENV}')`), 'the AS reads its issuer from ISSUER_ENV');
+  const bicep = readFileSync(fileURLToPath(new URL('../../../platform/fiab/bicep/modules/health/control-plane.bicep', import.meta.url)), 'utf8');
+  assert.ok(bicep.includes(`{ name: '${ISSUER_ENV}', value: authIssuerUrl }`), 'the control-plane Container App carries it as a plain env value');
+  assert.equal(asCallbackUrl(ISSUER), `${ISSUER}${LIFTED_CALLBACK_PATH}`);
+  assert.equal(asCallbackUrl(`  ${ISSUER}//  `), `${ISSUER}${LIFTED_CALLBACK_PATH}`);
+  assert.equal(asCallbackUrl(GOV_ISSUER), `${GOV_ISSUER}${LIFTED_CALLBACK_PATH}`);
+  for (const bad of [undefined, '', 'http://h/auth', 'https://u:x@h/auth', 'https://h/auth?x=1', 'https://h/auth#f', 'not a url']) assert.equal(asCallbackUrl(bad), null, String(bad));
+});
+
+test('a missing reply URL is ADDED and every existing web redirect URI is preserved, in order', async () => {
+  // Breaks if: the PATCH replaces web.redirectUris with only the callback (the two existing URIs vanish), or adds it twice.
+  const keep = ['https://some-other-app.example/signin-oidc', 'http://localhost:5173/cb'];
+  const w = world({ redirectUris: keep });
+  const r = await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.webPatches, [{ web: { redirectUris: [...keep, CALLBACK] } }]);
+  assert.deepEqual(w.st.redirectUris, [...keep, CALLBACK]);
+  assert.equal(r.callback, CALLBACK);
+  assert.deepEqual(withRedirectUri(['a', 'b'], 'c'), ['a', 'b', 'c']);
+});
+
+test('a reply URL already present issues NO PATCH (idempotent)', async () => {
+  // Breaks if: the reply-URL PATCH is unconditional (webPatches would hold one entry).
+  const w = world({ redirectUris: ['https://x.example/cb', CALLBACK] });
+  await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.webPatches, []);
+  assert.deepEqual(w.st.redirectUris, ['https://x.example/cb', CALLBACK]);
+  assert.equal(withRedirectUri([CALLBACK], CALLBACK), null);
+});
+
+test('the read-back fails the run RED when the reply URL never appears', async () => {
+  // Breaks if: the PATCH status is trusted (exit 0) or the read-back omits web.redirectUris.
+  const w = world({ dropWebPatch: true });
+  const code = await run(argvAll, w.io);
+  assert.equal(code, EXIT_FAILED);
+  const out = w.log.join('\n');
+  assert.ok(out.includes(`read-back FAILED, these are not present after the writes: reply URL ${CALLBACK} in web.redirectUris`), out.slice(-600));
+  assert.doesNotMatch(out, /\bOK:/);
+  assert.equal(w.st.webPatches.length, 1, 'the write WAS attempted; only its effect is missing');
+});
+
+test('an unknown issuer fails RED with "could not determine the issuer" BEFORE any write; never a silent skip', async () => {
+  // Breaks if: an absent/invalid issuer is skipped (exit 0, the AS stays AADSTS500113), a guessed host is registered,
+  // or other writes happen first (the message says nothing was changed).
+  for (const issuer of [null, '', 'http://lhds-auth.example/auth']) {
+    const w = world({ issuer });
+    const code = await run(argvAll, w.io);
+    assert.equal(code, EXIT_FAILED, String(issuer));
+    const out = w.log.join('\n');
+    assert.match(out, /FAILED: could not determine the issuer: LOOM_HEALTH_CP_ISSUER_URL on the control-plane Container App loom-health-cp/);
+    assert.match(out, issuer === null ? /is not set\./ : /not an https URL/);
+    assert.deepEqual(w.writes(), []);
+    assert.deepEqual(w.st.envSets, []);
+    assert.doesNotMatch(out, /\bOK:/);
+  }
+});
+
+test('GCC-High: the reply URL is the Gov issuer read from the Gov Container App, not a Commercial host', async () => {
+  // Breaks if: the host is assumed (Commercial azurefd.net) instead of read per boundary from LOOM_HEALTH_CP_ISSUER_URL.
+  const w = world({ cloud: 'AzureUSGovernment', issuer: GOV_ISSUER });
+  await ensure(OPTS, w.io);
+  assert.deepEqual(w.st.redirectUris, [`${GOV_ISSUER}${LIFTED_CALLBACK_PATH}`]);
+  assert.notEqual(GOV_ISSUER, ISSUER, 'fixture: distinct issuers so a Commercial fallback is visible');
 });
