@@ -1,0 +1,174 @@
+name: lhds fhiruser map
+
+# Dispatch-only, in-VNet. Operator-approved one-off (2026-11-27) for the Inferno SMART run; the durable console surface
+# for fhirUser mappings is #5472. NOT yet exercised live: the first dispatch is the receipt.
+#
+# WHAT IT DOES (scripts/measure/health/lhds-fhiruser-map.mjs) on an EXISTING tenant of stamp dev01:
+#   1. reads the tenant (must exist, be active, and be on dev01) and the fhir-users mapping of the oid;
+#   2. registers a TEMPORARY backend client (fu-<tenant>-<hex>, scope system/Practitioner.cr, role fhir-data-writer),
+#      mints its token with private_key_jwt (mint-tenant-token.mjs), and runs ONE `az aks command invoke` whose
+#      generated sh+curl script talks to the tenant engine's ClusterIP Service at the BARE base (the DEFAULT partition
+#      since #5496). Token and Practitioner body cross ARM as --file attachments, never on a command line;
+#   3. already mapped and the Practitioner answers GET 200 with the same id: stops, nothing created (idempotent).
+#      Otherwise (not mapped, or the mapped Practitioner answers 404/410) creates ONE synthetic Practitioner
+#      (meta.tag v3-ActReason HTEST, identifier system urn:loom:lhds:synthetic-practitioner, name.text =
+#      display_name) and reads it back;
+#   4. PUT /api/health/auth/tenants/{t}/fhir-users/{oid} {resource: Practitioner/<id>} and reads it back;
+#   5. (always) disables every still-active fu-<tenant>- client, in addition to the in-process disable.
+#
+# THE OID IS A SECRET INPUT. The Entra object id comes ONLY from the repo secret LHDS_FHIRUSER_OID (this repo is public
+# and dispatch inputs are visible). It is masked by Actions, scrubbed from every line the script prints in every letter
+# case, and absent from the step summary, which carries only the tenant, Practitioner/<id> and mapping=ok.
+#
+# SCOPE: Commercial dev01 only (the in-VNet `loom-aca` fleet exists only there; Gov has no equivalent runner, a
+# disclosed gap per cloud-parity.md). Caller: the deploy SP (HealthCP.Admin + control plane allowlist, and rights to
+# `az aks command invoke` on aks-lhds-dev01). Control plane URL, audience and stamp are read from the deployed estate.
+#
+# WHY NO `push:` AND NO HOSTED FALLBACK: same reasons as lhds-tenant-destroy.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Existing LHDS tenant slug on stamp dev01 (e.g. demo-loom-hea-ab3844)
+        type: string
+        required: true
+      display_name:
+        description: name.text of the synthetic Practitioner (letters, digits, space and ().,_- only)
+        type: string
+        default: LHDS Inferno Practitioner (synthetic)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lhds-fhiruser-map
+  cancel-in-progress: false
+
+jobs:
+  map:
+    name: Map an Entra user to a synthetic Practitioner fhirUser (in-VNet, Commercial dev01)
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 45
+    env:
+      STAMP_ID: dev01
+      REGION: centralus
+      TENANT: ${{ inputs.tenant_id }}
+      DISPLAY_NAME: ${{ inputs.display_name }}
+      RUN_REF: ${{ github.run_id }}
+      SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Validate inputs and the oid secret (the oid is never printed)
+        env:
+          LHDS_FHIRUSER_OID: ${{ secrets.LHDS_FHIRUSER_OID }}
+        run: |
+          set -euo pipefail
+          [[ "$TENANT" =~ ^[a-z0-9][a-z0-9-]{1,19}$ ]] || { echo "::error::tenant_id must be a tenant slug (^[a-z0-9][a-z0-9-]{1,19}$)"; exit 1; }
+          NAME_RE='^[A-Za-z0-9 ().,_-]{1,100}$'
+          [[ "$DISPLAY_NAME" =~ $NAME_RE ]] || { echo "::error::display_name must be 1-100 chars of letters, digits, space and ().,_-"; exit 1; }
+          if [ -z "$LHDS_FHIRUSER_OID" ]; then echo "::error::the LHDS_FHIRUSER_OID repo secret is empty or not set. Nothing was contacted."; exit 1; fi
+          [[ "$LHDS_FHIRUSER_OID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "::error::the LHDS_FHIRUSER_OID repo secret is not a GUID (value withheld). Nothing was contacted."; exit 1; }
+          if [ -z "$SUB" ]; then echo "::error::AZURE_SUBSCRIPTION_ID secret is empty"; exit 1; fi
+          echo "inputs valid: tenant $TENANT; oid secret present and GUID-shaped (value withheld)"
+
+      - name: Azure login (Commercial - limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Locate the stamp resource group (subscription of record)
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-health-${STAMP_ID}-${REGION}"
+          FOUND=""
+          for s in $(az account list --query "[].id" -o tsv | tr -d '\r'); do
+            exists="$(az group exists --subscription "$s" -n "$RG" | tr -d '\r')"
+            if [ "$exists" = "true" ]; then FOUND="$s"; break; fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "::error::resource group $RG is not visible to the deploy SP in any of its subscriptions"
+            exit 1
+          fi
+          echo "::add-mask::$FOUND"
+          {
+            echo "STAMP_SUB=$FOUND"
+            echo "STAMP_RG=$RG"
+          } >> "$GITHUB_ENV"
+          echo "stamp RG $RG found (subscription id withheld from output)"
+
+      - name: Pre-install the containerapp CLI extension
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors -o none
+          echo "containerapp extension version: $(az extension show --name containerapp --query version -o tsv | tr -d '\r')"
+
+      - name: Resolve the control plane URL and audience from the deployed estate
+        id: binding
+        env:
+          HEALTH_CP_APP_CLIENT_ID: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: bash scripts/csa-loom/resolve-health-console-binding.sh --subscription "$STAMP_SUB"
+
+      - name: Require a resolved binding on stamp dev01
+        id: require
+        env:
+          BINDING: ${{ steps.binding.outputs.health_binding }}
+          BINDING_REASON: ${{ steps.binding.outputs.health_binding_reason }}
+        run: |
+          set -euo pipefail
+          if [ "$BINDING" != "resolved" ]; then
+            echo "::error::the control plane binding is '$BINDING', not 'resolved' ($BINDING_REASON). Nothing was created."
+            exit 1
+          fi
+          if [ "${LOOM_HEALTH_DEFAULT_STAMP_ID:-}" != "$STAMP_ID" ]; then
+            echo "::error::the control plane in this subscription serves stamp '${LOOM_HEALTH_DEFAULT_STAMP_ID:-}', not '$STAMP_ID'. Nothing was created."
+            exit 1
+          fi
+          case "${LOOM_HEALTH_CP_URL:-}" in https://*) ;; *) echo "::error::resolved control plane URL is not https. Nothing was created."; exit 1;; esac
+          echo "control plane resolved for stamp $STAMP_ID"
+
+      - name: Create (or verify) the synthetic Practitioner and map the oid to it
+        env:
+          LHDS_FHIRUSER_OID: ${{ secrets.LHDS_FHIRUSER_OID }}
+        run: |
+          set -euo pipefail
+          # LOOM_HEALTH_CP_* come from resolve-health-console-binding.sh via $GITHUB_ENV; the step above refuses to continue unless they resolved.
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          # unset-var-ok: STAMP_RG
+          # unset-var-ok: STAMP_SUB
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token for the control plane audience"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          set +e
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhiruser-map.mjs --phase map \
+            --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID" --display-name "$DISPLAY_NAME" \
+            --run-ref "$RUN_REF" --aks-rg "$STAMP_RG" --aks-name "aks-lhds-${STAMP_ID}" --aks-subscription "$STAMP_SUB" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          set -e
+          echo "exit code: $rc (0 = mapped, 1 = defect/refused, 2 = UNMEASURED: nothing here is a claim the engine or control plane is broken)"
+          exit "$rc"
+
+      - name: Cleanup - disable every still-active temporary fu- client of the tenant
+        if: always() && steps.require.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # unset-var-ok: LOOM_HEALTH_CP_AUDIENCE
+          # unset-var-ok: LOOM_HEALTH_CP_URL
+          TOKEN="$(az account get-access-token --resource "$LOOM_HEALTH_CP_AUDIENCE" --query accessToken -o tsv | tr -d '\r\n')"
+          if [ -z "$TOKEN" ]; then echo "::error::empty access token; temporary fu-$TENANT- clients were NOT checked and may still be active"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          LHDS_CP_TOKEN="$TOKEN" node scripts/measure/health/lhds-fhiruser-map.mjs --phase cleanup \
+            --cp-url "$LOOM_HEALTH_CP_URL" --tenant "$TENANT" --stamp "$STAMP_ID"
