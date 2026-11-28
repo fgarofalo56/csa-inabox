@@ -3,7 +3,7 @@
 // named after the negative-scope matrix in docs/fiab/health/security.md A9.
 // Every deny is paired with a permit control that differs by ONE variable.
 
-import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, createLocalJWKSet, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
@@ -863,6 +863,54 @@ describe('client registry, bindings and gate (admin API)', () => {
     await c.bind({ [G_READER]: 'fhir-data-reader' });
     c.graph.consent = true;
     expect((await flow(c, 'user/*.rs')).redirect.searchParams.get('error')).toBe('server_error');
+  });
+});
+
+describe('inline JWKS: the CP stores and verifies ONLY re-derived keys (#5518)', () => {
+  const reg = (c: Ctx, id: string, keys: unknown[]) => c.admin('POST', '/api/health/auth/clients', {
+    clientId: id, tenant: 'visn-01', clientType: 'backend', displayName: id, allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwks: { keys },
+  });
+  const assertFor = (id: string, privateKey: CryptoKey | import('node:crypto').KeyObject) =>
+    new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' }).setIssuer(id).setSubject(id).setAudience(`${ISSUER}/visn-01/token`)
+      .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+  const tokenFor = async (c: Ctx, id: string, privateKey: CryptoKey | import('node:crypto').KeyObject) =>
+    c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: await assertFor(id, privateKey) } });
+
+  it('a probe is 400 at the authority and nothing is stored; the Inferno shape registers with ext dropped and verifies', async () => {
+    const c = await boot();
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = publicKey.export({ format: 'jwk' }) as Record<string, string>;
+    // A raw JSON body, so "__proto__" reaches the server as an OWN member exactly as an attacker would send it.
+    const body = `{"clientId":"svc-p","tenant":"visn-01","clientType":"backend","displayName":"p","allowedScopes":["system/*.rs"],"roleIds":["fhir-data-exporter"],"jwks":{"keys":[{"__proto__":{"d":"x"},"kty":"EC","crv":"P-384","x":"${pub.x}","y":"${pub.y}","kid":"k1"}]}}`;
+    const res = await fetch(`${c.url}/api/health/auth/clients`, { method: 'POST', headers: { authorization: `Bearer ${await adminToken()}`, 'content-type': 'application/json' }, body });
+    // Breaks (201, stored without the member) if the schema goes back to z.looseObject, which DROPS "__proto__" silently.
+    expect([res.status, ((await res.json()) as any).error.message]).toEqual([400, 'jwks: key 1: member "__proto__" is not allowed on an EC public key']);
+    const probe = await reg(c, 'svc-d', [{ ...pub, kid: 'k1', D: 'x' }]);
+    expect([probe.status, probe.json.error.message]).toEqual([400, 'jwks: key 1: member "D" is not allowed on an EC public key']);
+    expect(c.stores.clients.docs.size).toBe(0);
+
+    const inferno = { ...pub, kid: 'k1', alg: 'ES384', key_ops: ['verify'], ext: true };
+    expect((await reg(c, 'svc-i', [inferno])).status).toBe(201);
+    // Exactly the createPublicKey re-export plus metadata. Breaks (ext present) if the input is stored as given.
+    expect((c.stores.clients.docs.get('client-svc-i') as any).jwks).toStrictEqual({
+      keys: [{ ...createPublicKey({ key: pub, format: 'jwk' }).export({ format: 'jwk' }), kid: 'k1', alg: 'ES384', key_ops: ['verify'] }],
+    });
+    expect((await tokenFor(c, 'svc-i', privateKey)).status).toBe(200);
+  });
+
+  it('a stored doc that no longer normalizes fails closed with auth.client_jwks_invalid (identifiers only)', async () => {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await boot({ log: (event, f) => logs.push({ event, f }) });
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = { ...(publicKey.export({ format: 'jwk' }) as Record<string, string>), kid: 'k1' };
+    expect((await reg(c, 'svc-old', [pub])).status).toBe(201);
+    expect((await tokenFor(c, 'svc-old', privateKey)).status).toBe(200); // paired permit: the clean stored doc
+    // A pre-#5518 doc: written as given, carrying a member the allowlist refuses (out-of-band, as old docs were).
+    const doc = c.stores.clients.docs.get('client-svc-old') as any;
+    doc.jwks = { keys: [{ ...pub, x5t: 'AAAA' }] };
+    const r = await tokenFor(c, 'svc-old', privateKey);
+    expect([r.status, r.json.error]).toEqual([401, 'invalid_client']); // breaks (200) if stored keys are used as read
+    expect(logs.filter((l) => l.event === 'auth.client_jwks_invalid')).toStrictEqual([{ event: 'auth.client_jwks_invalid', f: { clientId: 'svc-old' } }]);
   });
 });
 

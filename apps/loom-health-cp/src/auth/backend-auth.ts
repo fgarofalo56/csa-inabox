@@ -5,6 +5,7 @@
 import { decodeProtectedHeader, importJWK, jwtVerify, type JWK } from 'jose';
 import type { Collection } from '../store/types.js';
 import { StoreConflictError } from '../http/errors.js';
+import { normalizeJwk, normalizeJwks } from './jwk-normalize.js';
 import { OAuthError, sha256hex, type ClientDoc, type ReplayDoc } from './types.js';
 
 export const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
@@ -52,6 +53,30 @@ export interface AssertionDeps {
   replay: Collection<ReplayDoc>;
   fetchJwks: JwksFetcher;
   now: () => Date;
+  /** Identifiers only (#5518): never key material. */
+  log?: (event: string, fields: Record<string, string | number>) => void;
+}
+
+/**
+ * The keys an assertion may be verified with: ONLY re-derived key material (#5518), never the stored or fetched
+ * members as given. A stored inline JWKS is re-normalized on every read: one key that fails (a doc written before
+ * the CP normalized, or edited out of band) makes the WHOLE stored set absent, logged as auth.client_jwks_invalid,
+ * so the client fails closed. A fetched JWKS is a third party's document that may carry keys for other uses, so a
+ * key that fails is dropped on its own (logged as a count) and the rest stay usable.
+ */
+export function verificationKeys(client: ClientDoc, fetched: readonly unknown[] | undefined, log?: AssertionDeps['log']): JWK[] {
+  if (fetched) {
+    const keys = fetched.map((k) => normalizeJwk(k)).flatMap((r) => ('jwk' in r ? [r.jwk] : []));
+    if (keys.length < fetched.length) log?.('auth.client_jwks_keys_dropped', { clientId: client.clientId, dropped: fetched.length - keys.length });
+    return keys;
+  }
+  if (!client.jwks) return [];
+  const r = normalizeJwks(Array.isArray(client.jwks.keys) ? client.jwks.keys : []);
+  if ('error' in r || r.keys.length === 0) {
+    log?.('auth.client_jwks_invalid', { clientId: client.clientId });
+    return [];
+  }
+  return r.keys;
 }
 
 const refuse = (): OAuthError => new OAuthError('invalid_client', 'client authentication failed');
@@ -81,8 +106,8 @@ export async function verifyClientAssertion(
     if (header.jku !== undefined && header.jku !== client.jwksUrl) throw refuse();
     // 3/4. key source, then exactly one key with this kid and a kty consistent with alg
     let keys: JWK[];
-    if (client.jwksUrl) keys = (await deps.fetchJwks(client.jwksUrl)).keys;
-    else if (client.jwks) keys = client.jwks.keys;
+    if (client.jwksUrl) keys = verificationKeys(client, (await deps.fetchJwks(client.jwksUrl)).keys, deps.log);
+    else if (client.jwks) keys = verificationKeys(client, undefined, deps.log);
     else throw refuse();
     const matches = keys.filter((k) => k.kid === header.kid && keyMatchesAlg(k, header.alg as string));
     if (matches.length !== 1) throw refuse();

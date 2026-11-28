@@ -31,6 +31,7 @@ import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { INACTIVE, verifyAccessToken } from './introspect.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
+import { normalizeJwks } from './jwk-normalize.js';
 import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, formActionSource, pickerHeaders, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
@@ -238,12 +239,11 @@ const ClientCreateSchema = z.strictObject({
       }
     }, 'must be an https URL without credentials')
     .optional(),
+  // Each key is read AS PARSED (z.unknown keeps the JSON.parse object, own "__proto__" member included; a zod
+  // object schema would silently drop it) and then normalized by normalizeJwks in the handler (#5518).
   jwks: z
     .strictObject({
-      keys: z
-        .array(z.looseObject({ kty: z.string(), kid: z.string() }))
-        .min(1)
-        .max(20),
+      keys: z.array(z.unknown()).min(1).max(20),
     })
     .optional(),
   allowedScopes: z.array(z.string()).min(1).max(100),
@@ -373,7 +373,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     if (!assertion || p.get('client_assertion_type') !== ASSERTION_TYPE) {
       throw new OAuthError('invalid_client', 'client authentication failed');
     }
-    await verifyClientAssertion(assertion, client, tokenUrl, { replay: stores.replay, fetchJwks: deps.fetchJwks, now });
+    await verifyClientAssertion(assertion, client, tokenUrl, { replay: stores.replay, fetchJwks: deps.fetchJwks, now, log: deps.log });
   }
 
   // ---- discovery / jwks ----
@@ -1351,9 +1351,17 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (!!c.jwksUrl === !!c.jwks && (c.clientType === 'backend' || c.jwksUrl || c.jwks)) {
         throw badRequest('supply exactly one of jwksUrl or jwks (a backend client must have one)');
       }
-      for (const k of c.jwks?.keys ?? []) {
+      for (const raw of c.jwks?.keys ?? []) {
+        const k = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
         if (PRIVATE_JWK_MEMBERS.some((m) => m in k)) throw badRequest('jwks must contain public keys only');
         if (k.kty === 'RSA' && rsaModulusBits(k.n) < MIN_RSA_BITS) throw badRequest(`jwks: RSA keys must be at least ${MIN_RSA_BITS} bits`);
+      }
+      // Store ONLY re-derived key material (#5518): never the caller's members or bytes.
+      let jwks: ClientDoc['jwks'];
+      if (c.jwks) {
+        const n = normalizeJwks(c.jwks.keys);
+        if ('error' in n) throw badRequest(n.error);
+        jwks = { keys: n.keys };
       }
       if (c.jwksUrl && isPrivateHost(new URL(c.jwksUrl).hostname)) {
         throw badRequest('jwksUrl must point to a public host (loopback, private, link-local and internal names are refused)');
@@ -1380,7 +1388,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         updatedAt: now().toISOString(),
         updatedBy: who.id,
         ...(c.jwksUrl ? { jwksUrl: c.jwksUrl } : {}),
-        ...(c.jwks ? { jwks: c.jwks as ClientDoc['jwks'] } : {}),
+        ...(jwks ? { jwks } : {}),
         ...(c.launchUri ? { launchUri: c.launchUri } : {}),
         ...(c.introspect ? { introspect: true } : {}),
       };

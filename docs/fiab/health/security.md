@@ -429,6 +429,25 @@ Registration record, owned by `src/auth/`: `client_id`, LHDS `tenant`, either
 held by value (the spec requires servers to support both), allowed `system/`
 scopes, role ids, and status.
 
+**Key normalization (#5518; merged, not deployed).** The CP stores and
+verifies with ONLY key material it re-derived itself
+(`src/auth/jwk-normalize.ts`), whichever admin-API caller registered it. A
+key may carry only `kty kid alg use key_ops x5c x5t#S256` plus `crv x y` (EC)
+or `n e` (RSA); a boolean `ext` is accepted and dropped; anything else,
+including `x5t` (SHA-1) and an own `__proto__`, is `400`. EC is P-384 with
+48-byte `x`/`y`; RSA has `e` of at most 4 bytes and `n` of 2048 to 8192 bits;
+`alg` is ES384 / RS384, `use` is `sig`, `key_ops` is exactly `["verify"]`. The
+key is round-tripped through `createPublicKey` (an off-curve point is refused)
+and only its export is kept. Each `x5c` entry (at most 5) must be exactly one
+certificate's DER, so a certificate with bytes appended is refused; only the
+certificate is kept, `x5c[0]` must hold the JWK's key, and `x5t#S256` is
+recomputed. A stored by-value JWKS is re-normalized on every verification: if
+any key fails, the whole stored set is treated as absent and
+`auth.client_jwks_invalid {clientId}` is logged (fail closed). A fetched
+`jwksUrl` document is normalized per key: a key that fails is dropped and
+`auth.client_jwks_keys_dropped {clientId, dropped}` is logged. That includes a
+published key that carries `x5t`, so such a key is unusable here.
+
 Verification order on `POST token_endpoint` with
 `grant_type=client_credentials`,
 `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`,
