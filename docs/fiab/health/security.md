@@ -88,6 +88,32 @@ is its v2 form, so a client that asked in v1 syntax sees different strings
 from its token response; `need_patient_banner` and `fhirContext` are not in
 the access token, so they are not returned.
 
+Every introspection call emits one `auth.introspect` log event carrying
+`tenant`, `caller` (the authenticated client id, or `-` when refused),
+`outcome` (`active` / `inactive` / `refused` / `error`), `active` (1/0) and,
+only for an active token, `tokenClientId`. It never carries the token, a hash
+of it, or any `patient` / `fhirUser` value. The CORS preflight is not answered
+on this path, so a browser is never told it may send an `Authorization`
+header. The client id `lhds-patient-picker` is reserved at registration,
+because the picker's 60 s user tokens carry it.
+
+**Accepted risk (#5515 review).** ANY `client_credentials` access token of a
+flagged client is accepted as the caller credential, including one it also
+sends to the FHIR server. Whoever obtains that token (a FHIR-side log, a
+compromised proxy) can therefore introspect this tenant's tokens for up to the
+token's 300 s lifetime. Mitigations not taken yet: a dedicated introspection
+scope that the bearer must carry, or an introspection token whose `aud` is the
+introspection URL rather than the FHIR base. A follow-up issue tracks the
+choice.
+
+**Key rotation.** Introspection verifies against the AS's current ES384 key
+only. After a restart that picks up a rotated key, access tokens signed with
+the previous key read `{"active":false}` until they expire (at most 300 s).
+The PDP's view of the same tokens is governed separately. Refresh tokens are
+unaffected because they are looked up by hash. A refresh token's `iat` is its
+stored issue time; documents written before #5151 fall back to
+`exp - 30 days`.
+
 **Implemented discovery and protocol details (W1b-3a A1/A2, #5454; merged, not
 deployed).** The control plane serves `smart-configuration` both under the
 issuer path and at `/{tenant}/fhir/.well-known/smart-configuration`, the path a

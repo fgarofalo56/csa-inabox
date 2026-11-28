@@ -106,6 +106,8 @@ export interface GrantDoc extends Doc {
   /** code + refresh: id shared by every rotation of one sign-in; revoking it kills the chain (#5134). */
   family?: string;
   ttl: number;
+  /** refresh: ISO issue time, for introspection `iat` (#5151). Absent on documents written before it. */
+  issuedAt?: string;
   used?: boolean;
   tenant: string;
   clientId: string;

@@ -13,7 +13,7 @@
 //   POST {issuerPath}/{tenant}/pick                      (the picker's choice or cancel)
 //   POST {issuerPath}/{tenant}/token
 //   POST {issuerPath}/{tenant}/introspect                (RFC 7662; authenticated backend callers only, #5151)
-//   OPTIONS on the discovery, jwks, token and introspect paths answers the CORS preflight.
+//   OPTIONS on the discovery, jwks and token paths answers the CORS preflight (never on introspect).
 //   admin (control-plane bearer auth): /api/health/auth/{clients,clients/{id},tenants/{t}/bindings,
 //     tenants/{t}/fhir-users[/{oid}],tenants/{t}/patient-search,launch,readiness}
 
@@ -220,7 +220,9 @@ const redirectUri = z
   }, 'must be https (or loopback http) without credentials or fragment');
 
 const ClientCreateSchema = z.strictObject({
-  clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/),
+  // The picker's search tokens carry PICKER_CLIENT_ID; a registered client with that id would make them a
+  // credential of that client (e.g. an introspection Bearer, #5151). Reserved.
+  clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/).refine((v) => v !== PICKER_CLIENT_ID, 'is reserved'),
   tenant: z.string().regex(SLUG),
   clientType: z.enum(['backend', 'app']),
   displayName: z.string().trim().min(1).max(120),
@@ -976,6 +978,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         family: g.family ?? rand(16),
         ttl: REFRESH_TTL_S,
         expiresAt: expiry(REFRESH_TTL_S),
+        issuedAt: now().toISOString(),
         tenant: g.tenant,
         clientId: g.clientId,
         oid: g.oid,
@@ -1210,7 +1213,7 @@ export function createAuthServer(deps: AuthServerDeps) {
    *    introspection URL, so an assertion minted for the token endpoint is not accepted here.
    * Neither, both, a non-Bearer Authorization header, or any refusal: the same 401 invalid_client.
    */
-  async function introspectionCaller(tenantSlug: string, authz: string | undefined, p: URLSearchParams): Promise<void> {
+  async function introspectionCaller(tenantSlug: string, authz: string | undefined, p: URLSearchParams): Promise<string> {
     const refuse = (): OAuthError => new OAuthError('invalid_client', 'client authentication failed');
     const hasAuthz = !!authz;
     const assertion = p.get('client_assertion');
@@ -1229,6 +1232,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       throw refuse();
     }
     if (!hasAuthz) await authenticateClient(client, p, `${issuer}/${tenantSlug}/introspect`);
+    return client.clientId;
   }
 
   /**
@@ -1249,7 +1253,26 @@ export function createAuthServer(deps: AuthServerDeps) {
    */
   async function introspect(tenantSlug: string, authz: string | undefined, p: URLSearchParams): Promise<Record<string, unknown>> {
     await activeTenant(tenantSlug);
-    await introspectionCaller(tenantSlug, authz, p);
+    let caller = '';
+    let out: Record<string, unknown> | undefined;
+    try {
+      caller = await introspectionCaller(tenantSlug, authz, p);
+      out = await introspectToken(tenantSlug, p);
+      return out;
+    } finally {
+      // One audit event per call. Identifiers only: never the token, its hash, or patient / fhirUser values.
+      // `caller` is set only once authentication succeeded, so an unverified assertion iss is never logged.
+      deps.log('auth.introspect', {
+        tenant: tenantSlug,
+        caller: caller || '-',
+        outcome: out ? (out.active === true ? 'active' : 'inactive') : caller ? 'error' : 'refused',
+        active: out?.active === true ? 1 : 0,
+        ...(out?.active === true ? { tokenClientId: String(out.client_id) } : {}),
+      });
+    }
+  }
+
+  async function introspectToken(tenantSlug: string, p: URLSearchParams): Promise<Record<string, unknown>> {
     const tok = p.get('token') ?? '';
     if (!tok) throw new OAuthError('invalid_request', 'token is required');
     const clientActiveHere = async (clientId: string): Promise<boolean> => {
@@ -1290,7 +1313,8 @@ export function createAuthServer(deps: AuthServerDeps) {
           scope: (doc.grantedScope ?? []).map((s) => doc.echo?.[s] ?? s).join(' '),
           client_id: doc.clientId,
           exp,
-          iat: exp - REFRESH_TTL_S, // minted with expiry(REFRESH_TTL_S) at issue
+          // Stored at issue; documents written before #5151 have none, and were minted with expiry(REFRESH_TTL_S).
+          iat: doc.issuedAt ? Math.floor(Date.parse(doc.issuedAt) / 1000) : exp - REFRESH_TTL_S,
           sub: doc.oid,
           aud: doc.aud,
           iss: oidcIssuerFor(tenantSlug),
@@ -1594,7 +1618,8 @@ export function createAuthServer(deps: AuthServerDeps) {
         path === `${base}/jwks.json` || path === `${base}/.well-known/openid-configuration` ||
         leaf === '.well-known/smart-configuration' || leaf === '.well-known/openid-configuration';
       if (isDiscovery) cors = CORS_ANY;
-      if (method === 'OPTIONS' && (isDiscovery || leaf === 'token' || leaf === 'introspect')) {
+      // introspect is deliberately absent: no browser may call it, so it answers no preflight (#5151).
+      if (method === 'OPTIONS' && (isDiscovery || leaf === 'token')) {
         status = 204;
         preflight(res, isDiscovery ? 'GET' : 'POST');
         return true;

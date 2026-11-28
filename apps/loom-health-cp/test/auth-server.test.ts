@@ -18,7 +18,7 @@ import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.j
 import { PatientSearchUnavailableError, type PatientQuery, type PatientSearch, type PatientSummary } from '../src/auth/patient-search.js';
 import type { TenantDoc } from '../src/registry/types.js';
 import { graphMembershipAsApp } from '../src/auth/wire.js';
-import { mintAccessToken } from '../src/auth/tokens.js';
+import { mintAccessToken, signJwt } from '../src/auth/tokens.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
 
 const ISSUER = 'https://cp.test/auth';
@@ -2206,6 +2206,117 @@ describe('token introspection (RFC 7662, #5151)', () => {
     const c = await boot();
     const j = (await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).json;
     expect(j.introspection_endpoint).toBe(`${ISSUER}/visn-01/introspect`); // Inferno skips the whole group without it
-    expect((await c.call('OPTIONS', INTROSPECT())).status).toBe(204);
+    // No preflight: a browser must never be told it may send an Authorization header here. Breaks if introspect
+    // rejoins the preflight list (that answered 204 with access-control-allow-origin: *). Paired: token still does.
+    const pre = await c.call('OPTIONS', INTROSPECT());
+    expect([pre.status, pre.headers.get('access-control-allow-origin'), pre.headers.get('access-control-allow-headers')]).toEqual([405, null, null]);
+    const tokenPre = await c.call('OPTIONS', '/auth/visn-01/token');
+    expect([tokenPre.status, tokenPre.headers.get('access-control-allow-origin')]).toEqual([204, '*']);
+  });
+
+  it('a USER token naming a flagged backend client, or a system token whose sub is not its client, is not a caller credential', async () => {
+    const { c, rs } = await setup();
+    const tok = await mintAt(c);
+    // sub = client_id = rs-1 (backend, introspect:true, visn-01): ONLY the sub_type check refuses this one.
+    const userAsRs = await mintAccessToken(c.signer, {
+      issuer: ISSUER, audience: fhir('visn-01'), tenant: 'visn-01', subType: 'user', sub: 'rs-1', clientId: 'rs-1',
+      scope: ['user/*.rs'], roles: [], pou: ['TREAT'], now: new Date(),
+    });
+    expect((await introspect(c, tok, { bearer: userAsRs })).status).toBe(401);
+    // sub_type system, client_id rs-1, sub someone else: ONLY the sub === client_id check refuses this one.
+    const subMismatch = await mintAccessToken(c.signer, {
+      issuer: ISSUER, audience: fhir('visn-01'), tenant: 'visn-01', subType: 'system', sub: 'svc-other', clientId: 'rs-1',
+      scope: ['system/*.rs'], roles: [], pou: ['TREAT'], now: new Date(),
+    });
+    expect((await introspect(c, tok, { bearer: subMismatch })).status).toBe(401);
+    expect((await introspect(c, tok, { bearer: await rs.bearer() })).status).toBe(200); // paired permit
+  });
+
+  it('the picker client id is reserved, so its 60 s user tokens can never name a registered client', async () => {
+    const c = await boot();
+    const r = await c.admin('POST', '/api/health/auth/clients', {
+      clientId: 'lhds-patient-picker', tenant: 'visn-01', clientType: 'backend', displayName: 'x', allowedScopes: ['system/*.rs'],
+      roleIds: ['fhir-data-exporter'], jwksUrl: 'https://x.client.test/jwks.json', introspect: true,
+    });
+    expect([r.status, r.json.error.message]).toEqual([400, 'clientId: is reserved']);
+    expect(c.stores.clients.docs.size).toBe(0);
+    await backendClient(c, 'lhds-patient-picker2', { introspect: true }); // paired: a near-identical id is accepted
+  });
+
+  it('a disabled caller client is 401 even with a still-valid bearer', async () => {
+    const { c, rs } = await setup();
+    const tok = await mintAt(c);
+    const bearer = await rs.bearer();
+    expect((await introspect(c, tok, { bearer })).status).toBe(200);
+    expect((await c.admin('PATCH', '/api/health/auth/clients/rs-1', { status: 'disabled' })).status).toBe(200);
+    const r = await introspect(c, tok, { bearer });
+    expect([r.status, r.json.error]).toEqual([401, 'invalid_client']); // breaks if the caller's status is not re-read
+  });
+
+  it('an id_token, and an AS-signed token with typ JWT, are inactive; a missing token is 400', async () => {
+    const { c, rs } = await setup();
+    const bearer = await rs.bearer();
+    const tr = (await flow(c, 'openid user/*.rs')).token!;
+    expect((await introspect(c, tr.json.id_token, { bearer })).json).toStrictEqual(INACTIVE_BODY); // RS256, other key
+    // Same AS ES384 key and the full access-token claim set; only the JOSE typ differs. Only the typ pin refuses it.
+    const real = await claims(c, await mintAt(c));
+    const typJwt = await signJwt(c.signer, 'JWT', real);
+    expect((await introspect(c, typJwt, { bearer })).json).toStrictEqual(INACTIVE_BODY);
+    expect((await introspect(c, await signJwt(c.signer, 'at+jwt', real), { bearer })).json.active).toBe(true); // paired
+    const missing = await c.call('POST', INTROSPECT(), { token: bearer, form: { token_type_hint: 'access_token' } });
+    expect([missing.status, missing.json.error]).toEqual([400, 'invalid_request']);
+  });
+
+  it('a refresh token in a revoked family, or stored under another tenant, is inactive', async () => {
+    const { c, rs } = await setup();
+    const bearer = await rs.bearer();
+    const rt1 = (await flow(c, 'user/*.rs offline_access')).token!.json.refresh_token as string;
+    const refresh = (rt: string) => c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: rt } });
+    const rt2 = (await refresh(rt1)).json.refresh_token as string;
+    expect((await introspect(c, rt2, { bearer })).json.active).toBe(true); // paired: unused, family intact
+    expect((await refresh(rt1)).json.error).toBe('invalid_grant'); // reuse of rt1 revokes the family (#5134)
+    // rt2 itself is unused and unexpired: ONLY the revoked-family check refuses it.
+    expect((await introspect(c, rt2, { bearer })).json).toStrictEqual(INACTIVE_BODY);
+
+    const rt3 = (await flow(c, 'user/*.rs offline_access')).token!.json.refresh_token as string;
+    const id = createHash('sha256').update(rt3).digest('hex');
+    const doc = c.stores.grants.docs.get(id) as unknown as Record<string, unknown>;
+    expect(doc?.kind).toBe('refresh'); // the fixture reaches the stored refresh document
+    expect(typeof doc.issuedAt).toBe('string');
+    const live = await introspect(c, rt3, { bearer });
+    // DISCLOSED, not coverage: the derived fallback (exp - REFRESH_TTL_S) yields the same second, because issuedAt and
+    // expiresAt are stamped in the same request; the mutation to the fallback stays green (an equivalent mutant).
+    expect(live.json.iat).toBe(Math.floor(Date.parse(doc.issuedAt as string) / 1000));
+    // Stored under visn-03 while its client app-1 stays on visn-01: ONLY the stored-tenant check refuses it.
+    c.stores.grants.docs.set(id, { ...doc, tenant: 'visn-03' } as never);
+    expect((await introspect(c, rt3, { bearer })).json).toStrictEqual(INACTIVE_BODY);
+  });
+
+  it('one auth.introspect audit event per call: identifiers only, never the token, its hash, patient or fhirUser', async () => {
+    const logs: { event: string; f: Record<string, string | number> }[] = [];
+    const c = await boot({ log: (event, f) => logs.push({ event, f }) });
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const rs = await backendClient(c, 'rs-1', { introspect: true });
+    expect((await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' })).status).toBe(200);
+    const l = await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'pat-1' });
+    const at = (await flow(c, 'launch openid fhirUser patient/*.rs', { launch: l.json.data.launch })).token!.json.access_token as string;
+    const bearer = await rs.bearer();
+    logs.length = 0;
+    expect((await introspect(c, at, { bearer })).json.active).toBe(true);
+    await introspect(c, 'invalid_token_value', { bearer });
+    await introspect(c, at); // unauthenticated
+    const events = logs.filter((x) => x.event === 'auth.introspect').map((x) => x.f);
+    // Breaks if the event is dropped, or a field is renamed, or tokenClientId is logged for an inactive token.
+    expect(events).toEqual([
+      { tenant: 'visn-01', caller: 'rs-1', outcome: 'active', active: 1, tokenClientId: 'app-1' },
+      { tenant: 'visn-01', caller: 'rs-1', outcome: 'inactive', active: 0 },
+      { tenant: 'visn-01', caller: '-', outcome: 'refused', active: 0 },
+    ]);
+    const all = JSON.stringify(logs);
+    for (const secret of [at, at.split('.')[2]!, createHash('sha256').update(at).digest('hex'), bearer, 'pat-1', 'Practitioner/p1']) {
+      expect(all.includes(secret)).toBe(false);
+    }
   });
 });
