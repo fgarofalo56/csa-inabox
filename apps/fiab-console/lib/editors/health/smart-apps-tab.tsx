@@ -117,6 +117,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
   const [editing, setEditing] = useState<AppRow | null>(null);
   const [launching, setLaunching] = useState<AppRow | null>(null);
   const [registered, setRegistered] = useState<AppRow | null>(null);
+  const [canRegisterBackend, setCanRegisterBackend] = useState(false);
 
   const load = useCallback(async () => {
     setProblem(null);
@@ -130,6 +131,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
       const j = await r.json();
       setGate(null);
       setApps(Array.isArray(j?.apps) ? j.apps : []);
+      setCanRegisterBackend(j?.canRegisterBackend === true);
     } catch (e: any) {
       setProblem({ title: 'Could not list the apps', text: e?.message || String(e) });
       setApps([]);
@@ -248,7 +250,7 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
         </div>
       )}
       {registering && (
-        <RegisterDialog base={base} onClose={() => setRegistering(false)} onCreated={(a) => { setRegistering(false); setRegistered(a); setApps((cur) => [...(cur ?? []), a]); }} />
+        <RegisterDialog base={base} canRegisterBackend={canRegisterBackend} onClose={() => setRegistering(false)} onCreated={(a) => { setRegistering(false); setRegistered(a); setApps((cur) => [...(cur ?? []), a]); }} />
       )}
       {editing && (
         <EditLaunchDialog app={editing} onClose={() => setEditing(null)} save={async (launchUri) => {
@@ -296,7 +298,7 @@ function CheckGroup({ label, hint, required, children }: { label: string; hint: 
 type ClientKind = 'app' | 'backend';
 type KeySource = 'url' | 'inline';
 
-function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: () => void; onCreated: (a: AppRow) => void }) {
+function RegisterDialog({ base, canRegisterBackend, onClose, onCreated }: { base: string; canRegisterBackend: boolean; onClose: () => void; onCreated: (a: AppRow) => void }) {
   const s = useStyles();
   const [f, setF] = useState({ displayName: '', redirectUris: '', launchUri: '', kind: 'public' as 'public' | 'asymmetric', jwksUrl: '', jwksText: '' });
   const [clientType, setClientType] = useState<ClientKind>('app');
@@ -358,10 +360,12 @@ function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: (
               <Field label="Display name" required hint="Shown to users and in the audit trail.">
                 <Input value={f.displayName} onChange={set('displayName')} />
               </Field>
-              <Field label="Client kind" hint="An app is launched by a signed-in user. A backend service runs without a user (SMART Backend Services).">
+              <Field label="Client kind" hint={canRegisterBackend
+                ? 'An app is launched by a signed-in user. A backend service runs without a user (SMART Backend Services).'
+                : 'An app is launched by a signed-in user. Registering a backend service (system access, no user) needs the Admin role on Health Tenant Admin; ask a tenant administrator at /admin/permissions.'}>
                 <RadioGroup value={clientType} onChange={(_, d) => pickClientType(d.value as ClientKind)}>
                   <Radio value="app" label="App (user launch)" />
-                  <Radio value="backend" label="Backend service (system, no user)" />
+                  <Radio value="backend" label="Backend service (system, no user)" disabled={!canRegisterBackend} />
                 </RadioGroup>
               </Field>
               {!backend && (

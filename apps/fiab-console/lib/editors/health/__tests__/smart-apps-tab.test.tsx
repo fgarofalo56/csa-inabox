@@ -85,11 +85,11 @@ describe('SmartAppsTab register: client kind and key source (#5151)', () => {
   const RSA_KP = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const RSA_PUB = { ...(RSA_KP.publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'inferno-rsa', alg: 'RS384' };
   const RSA_PRIV = { ...(RSA_KP.privateKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'inferno-rsa', alg: 'RS384' };
-  const open = async () => {
+  const open = async (canRegisterBackend = true) => {
     const mock = installFetchMock({
       '/apps': (_u, init) => (init?.method === 'POST'
         ? { ok: true, app: { ...APP, clientId: 'inferno-bulk-aaaaaaaa', displayName: 'Inferno Bulk', clientType: 'backend', kind: 'asymmetric', keySource: 'inline', keyCount: 1, kids: ['inferno-rsa'], launchUri: null, redirectUris: [] } }
-        : { ok: true, apps: [] }),
+        : { ok: true, apps: [], canRegisterBackend }),
     });
     renderWithProviders(<SmartAppsTab id="item-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Register app' }));
@@ -97,6 +97,19 @@ describe('SmartAppsTab register: client kind and key source (#5151)', () => {
     return mock;
   };
   const registerBtn = () => screen.getByRole('button', { name: 'Register' }) as HTMLButtonElement;
+  const backendRadio = () => screen.getByRole('radio', { name: 'Backend service (system, no user)' }) as HTMLInputElement;
+
+  it('without the Admin grant the Backend kind is disabled with a hint naming the role; with it, enabled', async () => {
+    await open(false);
+    // Breaks if the dialog ignores canRegisterBackend (radio enabled) or drops the explanation.
+    expect(backendRadio().disabled).toBe(true);
+    expect(screen.getByText(/needs the Admin role on Health Tenant Admin/)).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: /introspection/i })).toBeNull();
+    cleanup();
+    await open(true);
+    expect(backendRadio().disabled).toBe(false); // positive control: the same query, the other answer
+    expect(screen.queryByText(/needs the Admin role on Health Tenant Admin/)).toBeNull();
+  });
 
   it('first open is the existing app form: redirect + launch shown, no roles, no JWKS box, no error', async () => {
     await open();

@@ -12,16 +12,18 @@
  *         The client id is generated here (OAuth dynamic registration: the
  *         server assigns client_id); a clientId in the body is ignored.
  *         The tenant is the item's binding, never the body. Needs Contributor
- *         on `health.tenant-admin` and write access to the item.
+ *         on `health.tenant-admin` and write access to the item; a backend
+ *         client or `introspect:true` needs Admin (operator decision 2026-11-28).
+ *         GET also answers `canRegisterBackend` so the dialog can say so.
  *
  * Envelope: `{ok:true, apps}` / `{ok:true, app}`; failures `{ok:false, error}`
  * with the CP's own 400/404/409, 503 gate envelope when the CP is not
  * configured, 502 when it is unreachable.
  */
-import { withHealthTenantAdmin } from '../../_lib/tenant-admin-gate';
+import { checkHealthTenantAdmin, enforceHealthTenantAdmin, withHealthTenantAdmin } from '../../_lib/tenant-admin-gate';
 import { apiError, apiOk } from '@/lib/api/respond';
 import { cp, CpError } from '../../_lib/cp-client';
-import { boundTenant, clientsOfTenant, cpFailure, generateClientId, parseRegister, toAppRow } from '../../_lib/smart-apps';
+import { boundTenant, clientsOfTenant, cpFailure, generateClientId, needsAdmin, parseRegister, toAppRow } from '../../_lib/smart-apps';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +34,9 @@ export const GET = withHealthTenantAdmin<{ id: string }>('Reader', async (_req, 
   if (typeof tenant !== 'string') return tenant;
   try {
     const clients = await cp.listClients();
-    return apiOk({ tenant, apps: clientsOfTenant(clients, tenant).map(toAppRow) });
+    // Tells the Register dialog whether to offer the Admin-only choices. Display only: POST re-checks.
+    const canRegisterBackend = (await checkHealthTenantAdmin(session, 'Admin')).allow;
+    return apiOk({ tenant, canRegisterBackend, apps: clientsOfTenant(clients, tenant).map(toAppRow) });
   } catch (e) {
     return cpFailure(e);
   }
@@ -46,6 +50,12 @@ export const POST = withHealthTenantAdmin<{ id: string }>('Contributor', async (
   const parsed = parseRegister(body);
   if ('error' in parsed) return apiError(parsed.error, 400);
   const a = parsed.app;
+  // Operator decision 2026-11-28 (#5151): a backend client (system access, no user) or one that may introspect is
+  // an Admin act on health.tenant-admin. App clients stay at Contributor (the wrapper above).
+  if (needsAdmin(a)) {
+    const denied = await enforceHealthTenantAdmin(session, 'Admin');
+    if (denied) return denied;
+  }
   // parseRegister guarantees at most one of jwksUrl / jwks; a backend client carries roleIds and no launch URI.
   const create = (clientId: string) => cp.createClient({
     clientId,

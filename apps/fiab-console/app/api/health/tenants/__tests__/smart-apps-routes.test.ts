@@ -212,6 +212,21 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
   const app = { displayName: 'Inferno', redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch', allowedScopes: ['patient/*.rs'], kind: 'asymmetric' };
   const backend = { displayName: 'Inferno Bulk', clientType: 'backend', kind: 'asymmetric', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'] };
   const created = () => vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+  // Backend clients need Admin (operator decision 2026-11-28); the Contributor/Admin split is pinned in its own block.
+  beforeEach(() => { grants.rows = grant('Admin'); });
+
+  it('the review probes (#5517) on a valid EC public key are each a 400 and NOTHING reaches the CP', async () => {
+    const create = created();
+    const ecJson = JSON.stringify(EC_PUB).slice(0, -1);
+    for (const extra of ['"__proto__":{"d":"AQAB"}', '"D":"AQAB"', '"x5c":["MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"]']) {
+      // Parsed from JSON text exactly as req.json() would: "__proto__" is then an OWN member.
+      const body = JSON.parse(`{"displayName":"Probe","clientType":"backend","kind":"asymmetric","allowedScopes":["system/*.rs"],"roleIds":["fhir-data-reader"],"jwks":{"keys":[${ecJson},${extra}}]}}`);
+      const res = await registerApp(req(body), ctx());
+      // Each was a 201 with the member forwarded before the allowlist + x5c parse (the CP stores unknown members).
+      expect([extra, res.status]).toEqual([extra, 400]);
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
 
   it('a JWKS carrying a private key (d) is a 400 and NOTHING reaches the CP', async () => {
     const create = created();
@@ -233,6 +248,7 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
     const sent = create.mock.calls[0]?.[0];
     // Breaks if the BFF drops, rebuilds or reorders key members, or sends a jwksUrl alongside.
     expect(sent?.jwks).toEqual(jwks);
+    expect(sent?.jwks).not.toBe(jwks); // the allowlist rebuild, never the request's object
     expect(sent && 'jwksUrl' in sent).toBe(false);
     expect(sent).toMatchObject({ clientType: 'app', launchUri: 'https://app.example/launch' });
   });
@@ -309,6 +325,55 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
       expect([bad, (await registerApp(req(bad), ctx())).status]).toEqual([bad, 400]);
     }
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('Admin for backend clients and introspection (operator decision 2026-11-28, #5151)', () => {
+  const backend = { displayName: 'Inferno Bulk', clientType: 'backend', kind: 'asymmetric', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-reader'], jwks: { keys: [EC_PUB] } };
+  const appBody = { displayName: 'Growth Chart', redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch', allowedScopes: ['patient/*.rs'], kind: 'public' };
+
+  it('a Contributor creating a backend client is 403 and the CP is never called; creating an app is 201', async () => {
+    grants.rows = grant('Contributor');
+    const create = vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+    const res = await registerApp(req(backend), ctx());
+    // Breaks if the Admin check is removed: the Contributor wrapper alone admits it (201).
+    expect(res.status).toBe(403);
+    expect((await res.json()).requiredRole).toBe('Admin');
+    expect(create).not.toHaveBeenCalled();
+    expect((await registerApp(req(appBody), ctx())).status).toBe(201); // breaks if Admin is required for every client
+  });
+
+  it('an Admin creating a backend client is 201', async () => {
+    grants.rows = grant('Admin');
+    vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+    expect((await registerApp(req(backend), ctx())).status).toBe(201);
+  });
+
+  it('GET reports canRegisterBackend from the caller\'s grant', async () => {
+    vi.spyOn(cp, 'listClients').mockResolvedValue([]);
+    grants.rows = grant('Contributor');
+    expect((await (await listApps(req(), ctx())).json()).canRegisterBackend).toBe(false);
+    grants.rows = grant('Admin');
+    expect((await (await listApps(req(), ctx())).json()).canRegisterBackend).toBe(true); // breaks if hard-coded false
+  });
+
+  it('PATCH introspect needs Admin, only on a backend client; status stays at Contributor', async () => {
+    const svc = client({ clientId: 'svc', clientType: 'backend', jwksUrl: 'https://k.example/s' });
+    vi.spyOn(cp, 'listClients').mockResolvedValue([svc, client()]);
+    const update = vi.spyOn(cp, 'updateClient').mockResolvedValue(svc);
+    grants.rows = grant('Contributor');
+    const denied = await patchApp(req({ introspect: true }), ctx({ clientId: 'svc' }));
+    expect(denied.status).toBe(403); // breaks if PATCH introspect skips the Admin check (200)
+    expect((await patchApp(req({ introspect: false }), ctx({ clientId: 'svc' }))).status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+    expect((await patchApp(req({ status: 'disabled' }), ctx({ clientId: 'svc' }))).status).toBe(200);
+    update.mockClear();
+    grants.rows = grant('Admin');
+    expect((await patchApp(req({ introspect: true }), ctx({ clientId: 'growth-chart' }))).status).toBe(400); // app client
+    expect(update).not.toHaveBeenCalled();
+    expect((await patchApp(req({ introspect: true }), ctx({ clientId: 'svc' }))).status).toBe(200);
+    expect(update).toHaveBeenCalledWith('svc', { introspect: true });
+    expect((await patchApp(req({ introspect: 'yes' }), ctx({ clientId: 'svc' }))).status).toBe(400);
   });
 });
 

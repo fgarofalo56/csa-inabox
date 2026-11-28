@@ -24,7 +24,20 @@ export const ALLOWED_JWK_ALGS: readonly string[] = ['RS384', 'ES384'];
 export const MIN_RSA_BITS = 2048;
 
 /** Console caps for a pasted JWKS: serialized size in bytes and key count (the CP allows 20 keys). */
-export const JWKS_LIMITS = { maxBytes: 16 * 1024, maxKeys: 10, maxKidLength: 200 } as const;
+export const JWKS_LIMITS = { maxBytes: 16 * 1024, maxKeys: 10, maxKidLength: 200, maxX5c: 5 } as const;
+
+/**
+ * The ONLY members a registered JWK may carry (an allowlist, not a denylist: the CP stores unknown members, so a
+ * denylist forwards anything it did not think of, e.g. `D`, `__proto__`, or a private-key DER smuggled in `x5c`).
+ * Anything else is refused, and the forwarded object is rebuilt from these members alone.
+ */
+export const JWK_COMMON_MEMBERS: readonly string[] = ['kty', 'kid', 'alg', 'use', 'key_ops', 'x5c', 'x5t', 'x5t#S256'];
+export const JWK_MEMBERS_BY_KTY: Readonly<Record<'RSA' | 'EC', readonly string[]>> = {
+  RSA: [...JWK_COMMON_MEMBERS, 'n', 'e'],
+  EC: [...JWK_COMMON_MEMBERS, 'crv', 'x', 'y'],
+};
+/** A verification key's only meaningful operation. `sign` (or anything else) means the key is not a public key's. */
+export const ALLOWED_KEY_OPS: readonly string[] = ['verify'];
 
 /**
  * Roles a backend (client_credentials) client may hold: every CP role whose `client_credentials` ceiling is
@@ -68,34 +81,64 @@ export function rsaModulusBits(n: unknown): number {
   return (buf.length - i - 1) * 8 + (32 - Math.clz32(buf[i] as number));
 }
 
+const B64_STD = /^[A-Za-z0-9+/]+={0,2}$/;
+const shown = (m: string) => JSON.stringify(m.slice(0, 40));
+
 /**
- * Validate a JWKS that may be registered inline. Accepts the parsed object or the pasted text. Returns the parsed
- * object UNCHANGED on success (it is forwarded exactly as given), or an error that names the key and the rule.
- * A private member anywhere is refused outright: a private key is never accepted or forwarded.
+ * Validate a JWKS that may be registered inline. Accepts the parsed object or the pasted text. On success returns a
+ * NEW object rebuilt from the allowlisted members only (never the input object); otherwise an error that names the
+ * key and the rule. A private member anywhere is refused outright: a private key is never accepted or forwarded.
+ *
+ * Structural only for `x5c`: the BFF additionally parses every certificate and matches it to the key
+ * (lib/health/x5c-verify.ts, node:crypto), which the browser cannot.
  */
 export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { error: string } {
-  let v: unknown = input;
+  let text: string;
   if (typeof input === 'string') {
-    if (new TextEncoder().encode(input).length > JWKS_LIMITS.maxBytes) return { error: `jwks: larger than ${JWKS_LIMITS.maxBytes / 1024} KB` };
-    try { v = JSON.parse(input); } catch { return { error: 'jwks: not valid JSON' }; }
+    text = input;
+  } else {
+    try { text = JSON.stringify(input) ?? ''; } catch { return { error: 'jwks: not serializable' }; }
   }
+  if (new TextEncoder().encode(text).length > JWKS_LIMITS.maxBytes) return { error: `jwks: larger than ${JWKS_LIMITS.maxBytes / 1024} KB` };
+  // A JSON round-trip is the working copy: plain data only, and every member (including a "__proto__" key, which
+  // JSON.parse makes an OWN property) is visible to Object.keys. Membership is never tested with `in`.
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { return { error: 'jwks: not valid JSON' }; }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'jwks: must be a JSON object with a "keys" array' };
-  let size: number;
-  try { size = new TextEncoder().encode(JSON.stringify(v)).length; } catch { return { error: 'jwks: not serializable' }; }
-  if (size > JWKS_LIMITS.maxBytes) return { error: `jwks: larger than ${JWKS_LIMITS.maxBytes / 1024} KB` };
   const o = v as Record<string, unknown>;
   const extra = Object.keys(o).filter((k) => k !== 'keys');
-  if (extra.length) return { error: `jwks: only "keys" is allowed at the top level (found ${extra.slice(0, 3).join(', ')})` };
+  if (extra.length) return { error: `jwks: only "keys" is allowed at the top level (found ${extra.slice(0, 3).map(shown).join(', ')})` };
   if (!Array.isArray(o.keys) || o.keys.length === 0) return { error: 'jwks: "keys" must be a non-empty array' };
   if (o.keys.length > JWKS_LIMITS.maxKeys) return { error: `jwks: at most ${JWKS_LIMITS.maxKeys} keys` };
   const kids = new Set<string>();
+  const clean: Array<Record<string, unknown>> = [];
   for (let i = 0; i < o.keys.length; i++) {
     const k = o.keys[i] as Record<string, unknown>;
     const at = `jwks: key ${i + 1}`;
     if (!k || typeof k !== 'object' || Array.isArray(k)) return { error: `${at} is not an object` };
-    const priv = PRIVATE_JWK_MEMBERS.filter((m) => m in k);
+    const own = Object.keys(k);
+    const priv = PRIVATE_JWK_MEMBERS.filter((m) => own.includes(m));
     if (priv.length) return { error: `${at} contains private key material (${priv.join(', ')}). Paste the PUBLIC keys only; nothing was sent.` };
     if (k.kty !== 'RSA' && k.kty !== 'EC') return { error: `${at}: kty must be RSA or EC` };
+    const allowed = JWK_MEMBERS_BY_KTY[k.kty];
+    const unknown = own.filter((m) => !allowed.includes(m));
+    if (unknown.length) {
+      return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${k.kty} public key (allowed: ${allowed.join(', ')}); nothing was sent.` };
+    }
+    if (k.key_ops !== undefined) {
+      if (!Array.isArray(k.key_ops) || k.key_ops.length === 0 || k.key_ops.some((op) => typeof op !== 'string' || !ALLOWED_KEY_OPS.includes(op))) {
+        return { error: `${at}: key_ops may only be ["verify"] (a key with "sign" is a private key's)` };
+      }
+    }
+    if (k.x5c !== undefined) {
+      if (!Array.isArray(k.x5c) || k.x5c.length === 0 || k.x5c.length > JWKS_LIMITS.maxX5c || k.x5c.some((c) => typeof c !== 'string' || !B64_STD.test(c))) {
+        return { error: `${at}: x5c must be 1 to ${JWKS_LIMITS.maxX5c} base64 DER certificates` };
+      }
+    }
+    if (k.x5t !== undefined && (typeof k.x5t !== 'string' || !/^[A-Za-z0-9_-]{27}$/.test(k.x5t))) return { error: `${at}: x5t must be a base64url SHA-1 thumbprint` };
+    if (k['x5t#S256'] !== undefined && (typeof k['x5t#S256'] !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k['x5t#S256'] as string))) {
+      return { error: `${at}: x5t#S256 must be a base64url SHA-256 thumbprint` };
+    }
     if (typeof k.kid !== 'string' || !k.kid || k.kid.length > JWKS_LIMITS.maxKidLength) return { error: `${at}: kid is required (1 to ${JWKS_LIMITS.maxKidLength} characters)` };
     if (kids.has(k.kid)) return { error: `${at}: kid ${k.kid} is used twice` };
     kids.add(k.kid);
@@ -110,8 +153,15 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
       if (typeof k.x !== 'string' || typeof k.y !== 'string' || !b64urlBytes(k.x) || !b64urlBytes(k.y)) return { error: `${at}: EC key needs x and y` };
       if (k.alg === 'RS384') return { error: `${at}: alg RS384 needs an RSA key` };
     }
+    // Rebuild from the allowlist, in a fixed order. Every value was type-checked above.
+    const out: Record<string, unknown> = {};
+    for (const m of allowed) {
+      if (k[m] === undefined) continue;
+      out[m] = Array.isArray(k[m]) ? [...(k[m] as string[])] : k[m];
+    }
+    clean.push(out);
   }
-  return { jwks: o as unknown as PublicJwks };
+  return { jwks: { keys: clean } };
 }
 
 /** What the apps table may show about an inline JWKS: the count and the kids. Never a modulus or a coordinate. */

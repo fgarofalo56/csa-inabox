@@ -179,7 +179,7 @@ export const cp = {
     /** Exactly one of these for a confidential client (CP `!!c.jwksUrl === !!c.jwks` rule); jwks is PUBLIC keys only. */
     jwksUrl?: string; jwks?: { keys: Array<Record<string, unknown>> };
   }) => cpRequest<CpSmartClient>('POST', '/api/health/auth/clients', b),
-  updateClient: (clientId: string, b: { status?: 'active' | 'disabled'; launchUri?: string | null }) =>
+  updateClient: (clientId: string, b: { status?: 'active' | 'disabled'; launchUri?: string | null; introspect?: boolean }) =>
     cpRequest<CpSmartClient>('PATCH', `/api/health/auth/clients/${encodeURIComponent(clientId)}`, b),
   /** `iss` is the tenant FHIR base the CP mints tokens for; absent only on a CP that predates #5454 A6. */
   mintLaunch: (b: { tenant: string; oid: string; clientId: string; patient?: string }) =>

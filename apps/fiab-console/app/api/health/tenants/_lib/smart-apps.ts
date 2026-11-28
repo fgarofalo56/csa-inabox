@@ -17,6 +17,7 @@ import type { SessionPayload } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { readBinding } from '@/lib/install/provisioners/health-tenant';
 import { BACKEND_ROLE_CHOICES, SYSTEM_SCOPE_CHOICES, jwksSummary, validatePublicJwks, type PublicJwks } from '@/lib/health/smart-registration';
+import { verifyX5c } from '@/lib/health/x5c-verify';
 import { CpError, CpNotConfiguredError, type CpSmartClient } from './cp-client';
 
 /** Same shape as the CP's client id. */
@@ -156,11 +157,22 @@ export function parseRegister(body: unknown): { app: RegisterInput } | { error: 
   if (present(b.jwks)) {
     const v = validatePublicJwks(b.jwks);
     if ('error' in v) return v;
+    const x = verifyX5c(v.jwks);
+    if ('error' in x) return x;
+    // v.jwks is the allowlist rebuild, never the request's object.
     return { app: { ...common, kind: 'asymmetric', jwks: v.jwks } };
   }
   const jwksUrl = httpsUrl(b.jwksUrl);
   if (!jwksUrl) return { error: 'jwksUrl: an asymmetric client needs an https JWKS URL' };
   return { app: { ...common, kind: 'asymmetric', jwksUrl } };
+}
+
+/**
+ * Operator decision 2026-11-28 (#5151): registering a backend client, or granting introspection, needs the Admin
+ * grant on health.tenant-admin. App clients need Contributor.
+ */
+export function needsAdmin(a: Pick<RegisterInput, 'clientType' | 'introspect'>): boolean {
+  return a.clientType === 'backend' || a.introspect === true;
 }
 
 /** True when `new URL(v)` would not throw. */
