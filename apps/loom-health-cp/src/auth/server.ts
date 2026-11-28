@@ -37,7 +37,7 @@ import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, G
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, formActionSource, pickerHeaders, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
-import { parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
+import { INTROSPECT_SCOPE, parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
 import type { IdTokenSigner, Signer } from './signer.js';
 import { ACCESS_TOKEN_TTL_S, mintAccessToken, mintIdToken } from './tokens.js';
 import {
@@ -374,7 +374,7 @@ export function createAuthServer(deps: AuthServerDeps) {
    */
   const oidcIssuerFor = (tenant: string): string => `${issuer}/${tenant}`;
   const TOKEN_AUTH_METHODS = ['private_key_jwt', 'none'];
-  const SCOPES_SUPPORTED = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'];
+  const SCOPES_SUPPORTED = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs', INTROSPECT_SCOPE];
 
   async function smartConfiguration(tenant: string): Promise<unknown> {
     const t = await activeTenant(tenant);
@@ -1054,10 +1054,12 @@ export function createAuthServer(deps: AuthServerDeps) {
       await authenticateClient(client, p, tokenUrl);
       const g = await inStep('grant', () => computeGrant({
         grant: 'client_credentials',
-        request: parseRequest(p.get('scope') ?? '', { v1: false }),
+        request: parseRequest(p.get('scope') ?? '', { v1: false, introspect: true }),
         roleIds: client.roleIds,
         clientAllowed: client.allowedScopes,
         fhirUserResolved: false,
+        // `introspect` only when requested AND the admin flagged this backend client (#5516).
+        introspectAllowed: client.introspect === true,
       }));
       if (g.scope.length === 0) throw new OAuthError('invalid_scope', 'no requested scope could be granted');
       const audience = await inStep('fhir_base', () => deps.fhirBaseFor(tenantSlug));
@@ -1199,9 +1201,10 @@ export function createAuthServer(deps: AuthServerDeps) {
 
   /**
    * Caller authentication. Never anonymous. The caller must be an ACTIVE BACKEND client registered on THIS tenant
-   * that an admin granted `introspect` (a client flag, not a scope, so no token request can earn it; an app
-   * client, public or confidential, can never hold it). It proves that identity by EXACTLY ONE of:
-   *  - `Authorization: Bearer <access token>` the AS issued that client by client_credentials. SMART STU2.2
+   * that an admin granted `introspect` (a client flag set only through the admin API; an app client, public or
+   * confidential, can never hold it). It proves that identity by EXACTLY ONE of:
+   *  - `Authorization: Bearer <access token>` the AS issued that client by client_credentials WITH the `introspect`
+   *    scope, which the token endpoint grants only to a flagged backend client that asks for it (#5516). SMART STU2.2
    *    token-introspection.html: an authorized client "SHALL be permitted to authenticate ... by providing an
    *    appropriately-scoped SMART App or SMART Backend Service bearer token in the Authorization header". It is
    *    also the only form Inferno's static `custom_authorization_header` input can carry (a client assertion is
@@ -1222,6 +1225,9 @@ export function createAuthServer(deps: AuthServerDeps) {
       const bearer = BEARER.exec(authz ?? '')?.[1];
       const at = bearer ? await verifyAccessToken(deps.signer, issuer, bearer, now()) : undefined;
       if (!at || at.sub_type !== 'system' || at.sub !== at.client_id || at.tenant !== tenantSlug) throw refuse();
+      // "Appropriately scoped" (STU2.2): the Bearer must carry the dedicated `introspect` scope, so the client's
+      // ordinary FHIR token (which a resource server or a proxy sees) is not an introspection credential (#5516).
+      if (!at.scope.split(' ').includes(INTROSPECT_SCOPE)) throw refuse();
       authenticatedClientId = at.client_id;
     } else {
       const named = assertionIss(assertion);

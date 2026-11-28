@@ -74,11 +74,24 @@ deployed).** `POST {issuer}/{tenant}/introspect` (RFC 7662) is advertised as
 `introspection_endpoint` in that tenant's `smart-configuration` and
 `openid-configuration`. It is never anonymous: the caller must be an active
 **backend** client of the same tenant that an admin granted `introspect: true`
-(client registration or `PATCH /api/health/auth/clients/{id}`; never a scope,
-never an app client). It authenticates with exactly one of a Bearer access
-token the AS issued it by `client_credentials` (the SMART STU2.2 form) or a
-`private_key_jwt` assertion whose `aud` is the introspection URL; anything else
-is `401 invalid_client`. An access token or refresh token that is not active
+(client registration or `PATCH /api/health/auth/clients/{id}`; never an app
+client). It authenticates with exactly one of a Bearer access token the AS
+issued it by `client_credentials` carrying the `introspect` scope (the SMART
+STU2.2 "appropriately-scoped" form, #5516) or a `private_key_jwt` assertion
+whose `aud` is the introspection URL; anything else is `401 invalid_client`.
+
+**The `introspect` scope (#5516; merged, not deployed).** An AS-specific
+context scope, advertised in `scopes_supported`. The token endpoint grants it
+only on `client_credentials`, only when the request names it, and only to a
+backend client flagged `introspect: true`; an unflagged backend client or an
+app client asking for it simply does not get it (an `introspect`-only request
+from them is `invalid_scope`), and it is never granted by default. A flagged
+client's ordinary `system/*.rs` token, the one it sends to the FHIR server, is
+therefore NOT an introspection credential: it answers `401 invalid_client`
+here. Request `system/*.rs introspect` (or `introspect` alone) to mint the
+introspection Bearer; the PDP ignores the extra scope string, so the same
+token still reads FHIR. The `private_key_jwt` caller form is unchanged. This
+replaces the accepted risk recorded by #5515. An access token or refresh token that is not active
 on the path tenant, for a client still active there, reads `{"active":false}`
 and nothing else. An active token returns `scope`, `client_id`, `exp`, `iat`,
 `sub`, `aud`, `iss` (the tenant OpenID issuer, equal to the id_token `iss`),
@@ -96,15 +109,6 @@ of it, or any `patient` / `fhirUser` value. The CORS preflight is not answered
 on this path, so a browser is never told it may send an `Authorization`
 header. The client id `lhds-patient-picker` is reserved at registration,
 because the picker's 60 s user tokens carry it.
-
-**Accepted risk (#5515 review).** ANY `client_credentials` access token of a
-flagged client is accepted as the caller credential, including one it also
-sends to the FHIR server. Whoever obtains that token (a FHIR-side log, a
-compromised proxy) can therefore introspect this tenant's tokens for up to the
-token's 300 s lifetime. Mitigations not taken yet: a dedicated introspection
-scope that the bearer must carry, or an introspection token whose `aud` is the
-introspection URL rather than the FHIR base. A follow-up issue tracks the
-choice.
 
 **Key rotation.** Introspection verifies against the AS's current ES384 key
 only. After a restart that picks up a rotated key, access tokens signed with

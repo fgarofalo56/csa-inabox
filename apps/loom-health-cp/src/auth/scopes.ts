@@ -35,6 +35,12 @@ export const FHIR_R4_TYPES: ReadonlySet<string> = new Set(
 );
 
 export const CONTEXT_SCOPES = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access'] as const;
+/**
+ * The AS-specific scope a Bearer caller of the introspection endpoint must hold (#5516). Parsed ONLY when the caller
+ * opts in (ParseOpts.introspect: the client_credentials token request); everywhere else it is an unknown scope and
+ * is rejected exactly as before. computeGrant grants it only to a backend client an admin flagged `introspect`.
+ */
+export const INTROSPECT_SCOPE = 'introspect';
 export const CONSTRAINED_TYPES: ReadonlySet<string> = new Set(['Observation', 'Condition', 'DocumentReference']);
 
 export interface DataScope {
@@ -68,6 +74,8 @@ export function isValidPerms(p: string): boolean {
 export interface ParseOpts {
   /** Tenant v1-compatibility flag (A2): accept .read/.write/.* and rewrite to v2. */
   v1: boolean;
+  /** Treat INTROSPECT_SCOPE as a context scope (the client_credentials token request only, #5516). */
+  introspect?: boolean;
 }
 
 /** Parse one data scope; undefined when the grammar rejects it (A2 "Rejected" column). */
@@ -154,7 +162,7 @@ export function parseRequest(scope: string, opts: ParseOpts): ParsedRequest {
   const out: ParsedRequest = { data: [], context: [], echo: new Map(), rejected: [] };
   const seen = new Set<string>();
   for (const raw of scope.split(/\s+/).filter((x) => x.length > 0)) {
-    if ((CONTEXT_SCOPES as readonly string[]).includes(raw)) {
+    if ((CONTEXT_SCOPES as readonly string[]).includes(raw) || (opts.introspect === true && raw === INTROSPECT_SCOPE)) {
       if (!out.context.includes(raw)) out.context.push(raw);
       continue;
     }

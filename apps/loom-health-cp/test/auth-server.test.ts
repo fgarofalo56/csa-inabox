@@ -1182,7 +1182,7 @@ describe('discovery documents (#5454 A1 + A2)', () => {
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'], // A7: breaks on ['ES384'] (the pre-A7 value) or an empty list
-      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'],
+      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs', 'introspect'],
       token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'],
       code_challenge_methods_supported: ['S256'],
     });
@@ -2152,14 +2152,16 @@ describe('token introspection (RFC 7662, #5151)', () => {
     const assertion = (aud: string) =>
       new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' }).setIssuer(id).setSubject(id).setAudience(aud)
         .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
-    const bearer = async (): Promise<string> => {
-      const t = await c.call('POST', `/auth/${tenant}/token`, {
-        form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: await assertion(`${ISSUER}/${tenant}/token`) },
-      });
+    /** The token response for `scope`; the Inferno header token asks `system/*.rs introspect` (#5516). */
+    const tokenResponse = async (scope: string) => c.call('POST', `/auth/${tenant}/token`, {
+      form: { grant_type: 'client_credentials', scope, client_assertion_type: ASSERTION_TYPE, client_assertion: await assertion(`${ISSUER}/${tenant}/token`) },
+    });
+    const bearer = async (scope = 'system/*.rs introspect'): Promise<string> => {
+      const t = await tokenResponse(scope);
       expect(t.status).toBe(200);
       return t.json.access_token as string;
     };
-    return { bearer, assertion };
+    return { bearer, assertion, tokenResponse };
   }
   const introspect = (c: Ctx, token: string, o: { bearer?: string; tenant?: string; extra?: Record<string, string> } = {}) =>
     c.call('POST', INTROSPECT(o.tenant), { ...(o.bearer ? { token: o.bearer } : {}), form: { token, ...(o.extra ?? {}) } });
@@ -2181,6 +2183,50 @@ describe('token introspection (RFC 7662, #5151)', () => {
     const rs = await backendClient(c, 'rs-1', { introspect: true });
     return { c, rs };
   }
+
+  describe('the Bearer credential must carry the introspect scope (#5516)', () => {
+    it('a flagged client token WITH introspect is a caller; the same client token WITHOUT it is 401', async () => {
+      const { c, rs } = await setup();
+      const tok = await mintAt(c);
+      const granted = await rs.tokenResponse('system/*.rs introspect');
+      // The grant itself: breaks (scope 'system/*.rs') if the flagged client is never granted introspect.
+      expect([granted.status, granted.json.scope]).toEqual([200, 'system/*.rs introspect']);
+      expect((await claims(c, granted.json.access_token)).scope).toBe('system/*.rs introspect');
+      const ok = await introspect(c, tok, { bearer: granted.json.access_token });
+      expect([ok.status, ok.json.active]).toEqual([200, true]);
+      // The FHIR token of the SAME client, minted the same way minus the scope. Breaks (200) with the scope check removed.
+      const fhirToken = await rs.bearer('system/*.rs');
+      const r = await introspect(c, tok, { bearer: fhirToken });
+      expect([r.status, r.json.error]).toEqual([401, 'invalid_client']);
+      // An introspect-only token is a credential too (no data scope needed), and the private_key_jwt path is unchanged.
+      expect((await introspect(c, tok, { bearer: await rs.bearer('introspect') })).json.active).toBe(true);
+      const viaJwt = await c.call('POST', INTROSPECT(), { form: { token: tok, client_assertion_type: ASSERTION_TYPE, client_assertion: await rs.assertion(`${ISSUER}/visn-01/introspect`) } });
+      expect([viaJwt.status, viaJwt.json.active]).toEqual([200, true]);
+    });
+
+    it('an unflagged backend client asking for introspect is not granted it', async () => {
+      const { c } = await setup();
+      const plain = await backendClient(c, 'rs-plain');
+      const t = await plain.tokenResponse('system/*.rs introspect');
+      expect([t.status, t.json.scope]).toEqual([200, 'system/*.rs']); // breaks ('system/*.rs introspect') if the flag is not consulted
+      const only = await plain.tokenResponse('introspect');
+      expect([only.status, only.json.error]).toEqual([400, 'invalid_scope']); // nothing grantable
+    });
+
+    it('an app client asking for introspect is not granted it, and authorize treats it as before (unknown)', async () => {
+      const { c } = await setup();
+      const tr = (await flow(c, 'user/*.rs introspect')).token!;
+      expect([tr.status, tr.json.scope]).toEqual([200, 'user/*.rs']); // breaks if an app client can earn it
+      // Alone it is still no acceptable scope at authorize (an error redirect, no Entra sign-in), as before #5516.
+      const { redirect } = await c.authorizeAndLogin({ scope: 'introspect' });
+      expect(redirect.searchParams.get('error')).toBe('invalid_scope');
+    });
+
+    it('introspect is advertised in scopes_supported', async () => {
+      const { c } = await setup();
+      expect((await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).json.scopes_supported).toContain('introspect');
+    });
+  });
 
   it('an active EHR-launch token: every field, compared exactly as the Inferno response group compares them', async () => {
     const { c, rs } = await setup();

@@ -92,6 +92,25 @@ describe('ceiling intersection (A4)', () => {
   });
 });
 
+describe('the introspect scope (#5516)', () => {
+  const OPTED = { v1: false, introspect: true };
+  const cc = (scope: string, introspectAllowed: boolean | undefined, opts = OPTED) =>
+    scopes(computeGrant({ grant: 'client_credentials', request: parseRequest(scope, opts), roleIds: ['fhir-data-exporter'], clientAllowed: ['system/*.rs'], fhirUserResolved: false, ...(introspectAllowed === undefined ? {} : { introspectAllowed }) }));
+  it('is granted to client_credentials only when requested AND the client is flagged', () => {
+    expect(cc('system/*.rs introspect', true)).toBe('system/*.rs introspect'); // breaks if it is never granted
+    expect(cc('system/*.rs introspect', false)).toBe('system/*.rs'); // breaks if the flag is not consulted
+    expect(cc('system/*.rs introspect', undefined)).toBe('system/*.rs'); // absent flag = not granted
+    expect(cc('system/*.rs', true)).toBe('system/*.rs'); // breaks if it is granted by default
+  });
+  it('is never granted on the code flow, and is an unknown (rejected) scope unless the caller opts in', () => {
+    const code = computeGrant({ grant: 'authorization_code', request: parseRequest('user/*.rs introspect', OPTED), roleIds: ['fhir-data-reader'], clientAllowed: ['user/*.rs'], fhirUserResolved: false, introspectAllowed: true });
+    expect(scopes(code)).toBe('user/*.rs'); // breaks if authorization_code may carry it
+    expect(parseRequest('introspect', V2).rejected).toEqual(['introspect']); // unchanged for every other caller
+    expect(parseRequest('introspect', OPTED).context).toEqual(['introspect']);
+    expect(cc('system/*.rs introspect', true, V2)).toBe('system/*.rs'); // not parsed without the opt-in
+  });
+});
+
 describe('role-scope map', () => {
   it('every role id is in the JSON and the loader returns the JSON ceilings, not a copy', () => {
     expect(ROLES.length).toBe(14); // breaks if a role row is added without a test pass
