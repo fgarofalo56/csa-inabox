@@ -1,10 +1,10 @@
 // CP-side JWK normalization (#5518). Every probe is built at test time from a real key pair, and each refusal
 // asserts WHICH rule refused it (the error text), so a probe cannot pass by tripping an unrelated check.
 
-import { X509Certificate, createHash, createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto';
+import { X509Certificate, createHash, createPublicKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { normalizeJwk, normalizeJwks } from '../src/auth/jwk-normalize.js';
-import { verificationKeys } from '../src/auth/backend-auth.js';
+import { MAX_JWKS_BYTES, httpsJwksFetcher, verificationKeys } from '../src/auth/backend-auth.js';
 import type { ClientDoc } from '../src/auth/types.js';
 import { selfSignedCertB64 } from './self-signed-cert.js';
 
@@ -150,5 +150,111 @@ describe('verificationKeys: stored docs fail closed, fetched keys are filtered (
   it('normalizeJwks names the failing key', () => {
     const good = { ...pubJwk(ec().publicKey), kid: 'k1' };
     expect(normalizeJwks([good, { ...good, x5t: 'AA' }])).toStrictEqual({ error: 'jwks: key 2: x5t (SHA-1) is not accepted; use x5t#S256 or omit it' });
+  });
+});
+
+// ---- #5521 review should-fixes ----
+describe('RSA e is exactly 65537 (#5521 review)', () => {
+  const j = pubJwk(rsa().publicKey);
+  it('e=1 and e=2 are refused; e=65537 is accepted (also with a leading zero byte)', () => {
+    // e = 1 means s^1 = m: anyone could forge this client's assertions. Breaks (ACCEPTED) with the e check removed.
+    expect(refused({ kty: 'RSA', kid: 'r', n: j.n, e: 'AQ' })).toMatch(/RSA e must be 65537/);
+    expect(refused({ kty: 'RSA', kid: 'r', n: j.n, e: 'Ag' })).toMatch(/RSA e must be 65537/); // even
+    expect(refused({ kty: 'RSA', kid: 'r', n: j.n, e: 'Aw' })).toMatch(/RSA e must be 65537/); // 3: odd, but not 65537
+    expect(j.e).toBe('AQAB');
+    expect(refused({ kty: 'RSA', kid: 'r', n: j.n, e: 'AQAB' })).toMatch(/^ACCEPTED/);
+    expect(refused({ kty: 'RSA', kid: 'r', n: j.n, e: 'AAEAAQ' })).toMatch(/^ACCEPTED/); // 0x00010001, same value
+  });
+});
+
+describe('kid is printable ASCII without < > " \' \\ (#5521 review)', () => {
+  const base = { ...pubJwk(ec().publicKey) };
+  it('refuses markup, quotes, backslash and control characters; accepts an ordinary kid', () => {
+    for (const kid of ['<script>\u0000', 'a\u0000b', 'a"b', "a'b", 'a\\b', 'a>b', 'a\nb', 'é', 'x'.repeat(201)]) {
+      expect([kid, refused({ ...base, kid })]).toEqual([kid, expect.stringMatching(/kid is required/)]);
+    }
+    expect(refused({ ...base, kid: 'inferno-es384_2024.1 k=v' })).toMatch(/^ACCEPTED/); // paired permit
+    expect(refused({ ...base, kid: 'x'.repeat(200) })).toMatch(/^ACCEPTED/); // the 200 boundary
+  });
+});
+
+/** An Entra-shaped published key (measured 2026-11-28: kty use kid x5t n e x5c cloud_instance_name issuer). */
+function entraShaped() {
+  const { publicKey, privateKey } = rsa();
+  const j = pubJwk(publicKey);
+  return {
+    privateKey,
+    key: {
+      kty: 'RSA', use: 'sig', kid: 'entra-k1', x5t: b64u(randomBytes(20)), n: j.n, e: j.e, x5c: [selfSignedCertB64(publicKey, privateKey)],
+      cloud_instance_name: 'microsoftonline.com', issuer: 'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0',
+    },
+  };
+}
+
+describe('fetched keys: IdP metadata is skipped, inline keys stay strict (#5521 review)', () => {
+  it('an Entra-shaped key is kept when FETCHED (x5t, issuer, cloud_instance_name skipped) and refused INLINE', () => {
+    const { key } = entraShaped();
+    const r = normalizeJwk(key, 'jwk', { fetched: true });
+    // Breaks (error) if fetched keys are held to the inline refusal; breaks (x5t/issuer present) if they are copied.
+    expect(r).toStrictEqual({ jwk: { kty: 'RSA', use: 'sig', kid: 'entra-k1', n: key.n, e: key.e, x5c: key.x5c } });
+    expect(refused(key)).toMatch(/x5t \(SHA-1\) is not accepted/); // inline: unchanged
+    const { x5t: _x5t, ...noX5t } = key;
+    void _x5t;
+    expect(refused(noX5t)).toMatch(/member "cloud_instance_name", "issuer" is not allowed/);
+    // Only the NAMED members are skipped: anything else on a fetched key is still refused.
+    expect(normalizeJwk({ ...key, d: 'x' }, 'jwk', { fetched: true })).toStrictEqual({ error: 'jwk: member "d" is not allowed on an RSA public key' });
+  });
+
+  it('only the key matching the assertion kid and alg is normalized (the rest is never read)', () => {
+    const good = { ...pubJwk(ec().publicKey), kid: 'k1' };
+    let touched = 0;
+    // ownKeys is what normalizeJwk calls first (Object.keys); the kid/kty filter reads only `get`.
+    const other = new Proxy({ ...pubJwk(ec().publicKey), kid: 'k2' }, { ownKeys(t) { touched++; return Reflect.ownKeys(t); } });
+    const sameKidOtherKty = new Proxy({ ...pubJwk(rsa().publicKey), kid: 'k1' }, { ownKeys(t) { touched++; return Reflect.ownKeys(t); } });
+    const doc = { clientId: 'svc' } as ClientDoc;
+    expect(verificationKeys(doc, [other, sameKidOtherKty, good], undefined, { kid: 'k1', alg: 'ES384' })).toStrictEqual([good]);
+    expect(touched).toBe(0); // breaks (2) if every fetched key is normalized before the kid/alg selection
+  });
+
+  it('more than 20 fetched keys yields no keys at verify', () => {
+    const good = { ...pubJwk(ec().publicKey), kid: 'k1' };
+    const pad = Array.from({ length: 20 }, (_, i) => ({ ...good, kid: `p${i}` }));
+    const doc = { clientId: 'svc' } as ClientDoc;
+    expect(verificationKeys(doc, [...pad, good], undefined, { kid: 'k1', alg: 'ES384' })).toEqual([]); // 21: breaks ([good]) without the cap
+    expect(verificationKeys(doc, [...pad.slice(1), good], undefined, { kid: 'k1', alg: 'ES384' })).toStrictEqual([good]); // 20: paired
+  });
+});
+
+describe('httpsJwksFetcher bounds (#5521 review)', () => {
+  const json = (body: unknown) => () => Promise.resolve(new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }));
+  it('refuses 21 keys and accepts 20', async () => {
+    const k = { kty: 'EC', kid: 'k' };
+    await expect(httpsJwksFetcher(json({ keys: Array(21).fill(k) }) as typeof fetch)('https://x.test/jwks')).rejects.toThrow('more than 20 keys');
+    await expect(httpsJwksFetcher(json({ keys: Array(20).fill(k) }) as typeof fetch)('https://x.test/jwks')).resolves.toMatchObject({ keys: Array(20).fill(k) });
+  });
+
+  it('counts BYTES, not UTF-16 units: 140000 two-byte characters (280 KB, 140 K units) are refused', async () => {
+    const body = JSON.stringify({ keys: [], pad: 'é'.repeat(140_000) });
+    expect([body.length < MAX_JWKS_BYTES, Buffer.byteLength(body) > MAX_JWKS_BYTES]).toEqual([true, true]); // the fixture straddles the cap
+    const f = (() => Promise.resolve(new Response(body))) as unknown as typeof fetch;
+    await expect(httpsJwksFetcher(f)('https://x.test/jwks')).rejects.toThrow('jwks document too large'); // breaks (resolves) on text.length
+  });
+
+  it('stops reading past the cap instead of buffering the whole body', async () => {
+    const CHUNK = 64 * 1024;
+    let produced = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctl) {
+        produced++;
+        ctl.enqueue(new Uint8Array(CHUNK).fill(0x20));
+        if (produced === 64) ctl.close(); // 4 MiB if read to the end
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const f = (() => Promise.resolve(new Response(stream))) as unknown as typeof fetch;
+    await expect(httpsJwksFetcher(f)('https://x.test/jwks')).rejects.toThrow('jwks document too large');
+    // 5 chunks (320 KiB) cross the 256 KiB cap. Breaks (64, cancelled false) with res.text().
+    expect([produced <= 6, cancelled]).toEqual([true, true]);
   });
 });

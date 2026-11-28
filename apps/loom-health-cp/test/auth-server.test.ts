@@ -21,6 +21,7 @@ import type { TenantDoc } from '../src/registry/types.js';
 import { graphMembershipAsApp } from '../src/auth/wire.js';
 import { mintAccessToken, signJwt } from '../src/auth/tokens.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
+import { selfSignedCertB64 } from './self-signed-cert.js';
 
 const ISSUER = 'https://cp.test/auth';
 const fhir = (t: string) => `https://${t}.health.test/fhir`;
@@ -899,6 +900,27 @@ describe('inline JWKS: the CP stores and verifies ONLY re-derived keys (#5518)',
     expect((await tokenFor(c, 'svc-i', privateKey)).status).toBe(200);
   });
 
+  it('an Entra-shaped key (x5t, issuer, cloud_instance_name) verifies when FETCHED and is 400 when registered INLINE (#5521 review)', async () => {
+    const c = await boot();
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const j = publicKey.export({ format: 'jwk' }) as Record<string, string>;
+    const key = {
+      kty: 'RSA', use: 'sig', kid: 'k1', x5t: randomBytes(20).toString('base64url'), n: j.n, e: j.e, x5c: [selfSignedCertB64(publicKey, privateKey)],
+      cloud_instance_name: 'microsoftonline.com', issuer: 'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0',
+    };
+    const jwksUrl = 'https://idp.client.test/keys';
+    c.jwksByUrl.set(jwksUrl, [key as unknown as JWK]);
+    expect((await c.admin('POST', '/api/health/auth/clients', {
+      clientId: 'svc-entra', tenant: 'visn-01', clientType: 'backend', displayName: 'e', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwksUrl,
+    })).status).toBe(201);
+    const a = await new SignJWT({}).setProtectedHeader({ alg: 'RS384', typ: 'JWT', kid: 'k1' }).setIssuer('svc-entra').setSubject('svc-entra')
+      .setAudience(`${ISSUER}/visn-01/token`).setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+    const t = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: a } });
+    expect(t.status).toBe(200); // breaks (401) if a fetched key carrying x5t / issuer is dropped
+    const inline = await reg(c, 'svc-entra-inline', [key]);
+    expect([inline.status, inline.json.error.message]).toEqual([400, 'jwks: key 1: x5t (SHA-1) is not accepted; use x5t#S256 or omit it']);
+  });
+
   it('a stored doc that no longer normalizes fails closed with auth.client_jwks_invalid (identifiers only)', async () => {
     const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
     const c = await boot({ log: (event, f) => logs.push({ event, f }) });
@@ -1470,7 +1492,9 @@ describe('redirect/launch URI host grammar (#5514)', () => {
     clientId: id, tenant: 'visn-01', clientType: 'app', displayName: id, allowedScopes: ['user/*.rs'], redirectUris: [uri], ...over,
   });
   // Each of these registered 201 before #5514 (the old validator checked only scheme, credentials and fragment).
-  const REFUSED = ['https://evil;script-src/cb', 'https://[::1]/cb', 'https://my_host.example/cb', 'https://a.com./cb', 'https://-a.com/cb'];
+  const REFUSED = ['https://evil;script-src/cb', 'https://[::1]/cb', 'https://my_host.example/cb', 'https://a.com./cb', 'https://-a.com/cb',
+    // Non-canonical IPv4 the parser rewrites (017.1.1.1 = 15.1.1.1, 0x7f.1 = 127.0.0.1, 1.2.3 = 1.2.0.3), and port 0.
+    'https://017.1.1.1/cb', 'https://0x7f.1/cb', 'https://1.2.3/cb', 'https://app.test:0/cb'];
   const ACCEPTED = ['https://192.168.2.252/custom/smart_stu2_2/redirect', 'http://localhost:3000/cb'];
 
   it('refuses each unsafe host on create (redirectUris AND launchUri) and accepts the paired safe ones', async () => {

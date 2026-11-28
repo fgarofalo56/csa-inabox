@@ -33,7 +33,22 @@ export function isSafeRedirectUri(v: string): boolean {
   }
   if (u.username || u.password || u.hash) return false;
   if (u.protocol !== 'https:' && !LOOPBACK_HTTP.test(v)) return false;
+  if (u.port === '0') return false;
+  // The host AS WRITTEN must already be the canonical host the URL parser produces (case aside). Otherwise the stored
+  // string names a different host than the browser goes to: `https://0x7f.1/` is 127.0.0.1, `https://017.1.1.1/` is
+  // 15.1.1.1, `https://1.2.3/` is 1.2.0.3, and an IDN or percent-encoded host is rewritten too. Comparing the host
+  // only (not `href === v`) keeps an uppercase host, a missing trailing `/` or a default `:443` acceptable.
+  const raw = rawHost(v);
+  if (raw === undefined || raw.toLowerCase() !== u.hostname) return false;
   return isSafeUriHost(u.hostname);
+}
+
+/** The host exactly as written in `scheme://[userinfo@]host[:port]...`, or undefined when that shape is absent. */
+function rawHost(v: string): string | undefined {
+  const authority = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(v)?.[1];
+  if (authority === undefined) return undefined;
+  const host = authority.slice(authority.lastIndexOf('@') + 1);
+  return host.replace(/:[0-9]*$/, '');
 }
 
 export const REDIRECT_URI_RULE = 'must be https (or loopback http) without credentials or fragment, with a DNS name, IPv4 address or localhost as its host';

@@ -34,13 +34,32 @@ function b64urlBytes(v: unknown): Buffer | undefined {
 
 export type JwkResult = { jwk: JWK } | { error: string };
 
+/**
+ * Members IGNORED (never read, stored or used) on a FETCHED key only, because real IdP JWKS publish them on their
+ * signing keys. Measured 2026-11-28 on https://login.microsoftonline.com/common/discovery/v2.0/keys: all 8 keys carry
+ * `x5t`, `issuer` and `cloud_instance_name`. `x5t` is the SHA-1 thumbprint (RFC 7517 4.8); it is not verified here
+ * (no SHA-1 is computed), only skipped. An INLINE key carrying any of these is still refused.
+ */
+export const FETCHED_IGNORED_MEMBERS: readonly string[] = ['x5t', 'issuer', 'cloud_instance_name'];
+
+/** A kid: printable ASCII without < > " ' \ (nothing that HTML, a header or a log line would treat specially). */
+const KID = /^[\x20-\x21\x23-\x26\x28-\x3b\x3d\x3f-\x5b\x5d-\x7e]{1,200}$/;
+/** The only RSA public exponent accepted: 65537 (see the e check below). */
+const RSA_E_65537 = 65537;
+
+export interface NormalizeOpts {
+  /** The key came from a client's jwksUrl document: FETCHED_IGNORED_MEMBERS are skipped instead of refused. */
+  fetched?: boolean;
+}
+
 /** Normalize one public JWK. `at` prefixes the error (e.g. "jwks: key 2"). */
-export function normalizeJwk(input: unknown, at = 'jwk'): JwkResult {
+export function normalizeJwk(input: unknown, at = 'jwk', opts: NormalizeOpts = {}): JwkResult {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: `${at} is not an object` };
   const proto = Object.getPrototypeOf(input);
   if (proto !== Object.prototype && proto !== null) return { error: `${at} is not a plain JSON object` };
   const k = input as Record<string, unknown>;
-  const own = Object.keys(k);
+  // Ignored members are removed from the member list and never read again; the output is built from the allowlist.
+  const own = Object.keys(k).filter((m) => !(opts.fetched === true && FETCHED_IGNORED_MEMBERS.includes(m)));
   if (k.kty !== 'EC' && k.kty !== 'RSA') return { error: `${at}: kty must be EC or RSA` };
   const kty = k.kty;
   // SHA-1 is accepted nowhere (CodeQL js/weak-cryptographic-algorithm); a true message rather than "not allowed".
@@ -49,8 +68,8 @@ export function normalizeJwk(input: unknown, at = 'jwk'): JwkResult {
   const unknown = own.filter((m) => !allowed.includes(m) && !JWK_DROPPED_MEMBERS.includes(m));
   if (unknown.length) return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${kty} public key` };
   if (k.ext !== undefined && typeof k.ext !== 'boolean') return { error: `${at}: ext must be a boolean` };
-  if (typeof k.kid !== 'string' || k.kid.length === 0 || k.kid.length > JWK_LIMITS.maxKidLength) {
-    return { error: `${at}: kid is required (1 to ${JWK_LIMITS.maxKidLength} characters)` };
+  if (typeof k.kid !== 'string' || !KID.test(k.kid)) {
+    return { error: `${at}: kid is required (1 to ${JWK_LIMITS.maxKidLength} printable ASCII characters, none of < > " ' \\)` };
   }
   if (k.alg !== undefined && k.alg !== JWK_ALGS[kty]) return { error: `${at}: alg must be ${JWK_ALGS[kty]} for an ${kty} key` };
   if (k.use !== undefined && k.use !== 'sig') return { error: `${at}: use must be sig` };
@@ -70,6 +89,11 @@ export function normalizeJwk(input: unknown, at = 'jwk'): JwkResult {
   } else {
     const e = b64urlBytes(k.e);
     if (!e || e.length === 0 || e.length > JWK_LIMITS.maxRsaExponentBytes) return { error: `${at}: RSA e must be 1 to ${JWK_LIMITS.maxRsaExponentBytes} bytes` };
+    // e = 1 makes every signature verify for anyone (s^1 = m), so a small or even e is a forgery vector. Only 65537
+    // is accepted: FIPS 186-5 already requires 2^16 < e for RSA keys, and every producer in scope (node, jose, the
+    // Inferno kit, Entra's published keys, measured: all AQAB) uses 65537. Compared as a value, so leading zero
+    // bytes cannot change the answer.
+    if (e.reduce((v, b) => v * 256 + b, 0) !== RSA_E_65537) return { error: `${at}: RSA e must be 65537 (AQAB)` };
     if (!b64urlBytes(k.n)) return { error: `${at}: RSA n must be base64url` };
     const bits = rsaModulusBits(k.n);
     if (bits < MIN_RSA_BITS || bits > JWK_LIMITS.maxRsaBits) return { error: `${at}: RSA keys must be ${MIN_RSA_BITS} to ${JWK_LIMITS.maxRsaBits} bits` };

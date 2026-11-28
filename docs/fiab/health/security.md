@@ -88,10 +88,15 @@ app client asking for it simply does not get it (an `introspect`-only request
 from them is `invalid_scope`), and it is never granted by default. A flagged
 client's ordinary `system/*.rs` token, the one it sends to the FHIR server, is
 therefore NOT an introspection credential: it answers `401 invalid_client`
-here. Request `system/*.rs introspect` (or `introspect` alone) to mint the
-introspection Bearer; the PDP ignores the extra scope string, so the same
-token still reads FHIR. The `private_key_jwt` caller form is unchanged. This
-replaces the accepted risk recorded by #5515. An access token or refresh token that is not active
+here. **Use an introspect-ONLY token for the introspection header**
+(`scope=introspect`, which needs no data scope). `system/*.rs introspect` also
+works, but it is then a FHIR access token as well (the PDP ignores the extra
+scope string), so it travels to the FHIR server and re-opens the exposure this
+scope exists to close. For Inferno's static `custom_authorization_header`,
+mint it with `scope=introspect`. The `private_key_jwt` caller form is
+unchanged. This replaces the accepted risk recorded by #5515.
+
+An access token or refresh token that is not active
 on the path tenant, for a client still active there, reads `{"active":false}`
 and nothing else. An active token returns `scope`, `client_id`, `exp`, `iat`,
 `sub`, `aud`, `iss` (the tenant OpenID issuer, equal to the id_token `iss`),
@@ -156,7 +161,7 @@ validated like a `redirect_uri` (https or loopback http, no credentials, no
 fragment) and refused on a backend client. Since #5514 (merged, not deployed)
 both also hold the parsed host to a strict grammar (`src/auth/redirect-uri.ts`):
 a DNS name of LDH labels with at least one dot, `localhost`, or an IPv4 dotted
-quad, compared lowercased. `; , * $ _`, quotes, whitespace, a trailing dot and
+quad, compared lowercased. The host as written must already be the host the URL parser produces, so `https://0x7f.1/`, `https://017.1.1.1/`, `https://1.2.3/` and an un-punycoded IDN are refused, as is port 0. `; , * $ _`, quotes, whitespace, a trailing dot and
 a bracketed IPv6 literal are `400` on create and PATCH (a CSP host-source
 cannot carry IPv6, so the picker could never redirect back to one). A stored
 value that fails the rule is refused at `authorize` (`400`, logged
@@ -447,8 +452,11 @@ verifies with ONLY key material it re-derived itself
 key may carry only `kty kid alg use key_ops x5c x5t#S256` plus `crv x y` (EC)
 or `n e` (RSA); a boolean `ext` is accepted and dropped; anything else,
 including `x5t` (SHA-1) and an own `__proto__`, is `400`. EC is P-384 with
-48-byte `x`/`y`; RSA has `e` of at most 4 bytes and `n` of 2048 to 8192 bits;
-`alg` is ES384 / RS384, `use` is `sig`, `key_ops` is exactly `["verify"]`. The
+48-byte `x`/`y`; RSA has `e` exactly 65537 (`e = 1` would let anyone forge
+the client's assertions; FIPS 186-5 already requires `e > 2^16`) and `n` of
+2048 to 8192 bits; `kid` is 1 to 200 printable ASCII characters with none of
+`< > " ' \`; `alg` is ES384 / RS384, `use` is `sig`, `key_ops` is exactly
+`["verify"]`. The
 key is round-tripped through `createPublicKey` (an off-curve point is refused)
 and only its export is kept. Each `x5c` entry (at most 5) must be exactly one
 certificate's DER, so a certificate with bytes appended is refused; only the
@@ -456,9 +464,19 @@ certificate is kept, `x5c[0]` must hold the JWK's key, and `x5t#S256` is
 recomputed. A stored by-value JWKS is re-normalized on every verification: if
 any key fails, the whole stored set is treated as absent and
 `auth.client_jwks_invalid {clientId}` is logged (fail closed). A fetched
-`jwksUrl` document is normalized per key: a key that fails is dropped and
-`auth.client_jwks_keys_dropped {clientId, dropped}` is logged. That includes a
-published key that carries `x5t`, so such a key is unusable here.
+`jwksUrl` document is read with a streaming 256 KiB BYTE cap (aborted past
+it) and at most 20 keys. On each verification it is first narrowed to the keys
+whose `kid` and `kty` fit the assertion header, and only those are normalized;
+a candidate that fails is dropped and `auth.client_jwks_keys_dropped
+{clientId, dropped}` is logged. On a fetched key only, three members that real
+IdPs publish are skipped (never read, stored or used, and no SHA-1 is
+computed): `x5t`, `issuer`, `cloud_instance_name`. All three were measured on
+every key of Entra's `common/discovery/v2.0/keys` on 2026-11-28. An inline key
+carrying any of them is still `400`.
+
+**Known gap (pre-existing).** `isPrivateHost` judges the `jwksUrl` host as
+written, at registration only. A public name that later resolves to a private
+or loopback address (DNS rebinding) is not caught at fetch time.
 
 Verification order on `POST token_endpoint` with
 `grant_type=client_credentials`,
