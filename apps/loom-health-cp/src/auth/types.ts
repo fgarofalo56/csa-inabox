@@ -51,6 +51,11 @@ export interface ClientDoc extends Doc {
   redirectUris: string[];
   /** App clients only: the SMART app's launch URL for an EHR launch (`launchUri?iss=...&launch=...`, #5454 A3). */
   launchUri?: string;
+  /**
+   * Backend clients only: may call POST {issuer}/{tenant}/introspect for THIS tenant (RFC 7662, #5151). Granted by
+   * an admin, never by a scope request, so no token request can earn it. Absent = false.
+   */
+  introspect?: boolean;
   pou: string;
   updatedAt: string;
   updatedBy: string;

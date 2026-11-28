@@ -18,6 +18,7 @@ import type { AuthStores, FhirUserDoc, FhirUserStore } from '../src/auth/types.j
 import { PatientSearchUnavailableError, type PatientQuery, type PatientSearch, type PatientSummary } from '../src/auth/patient-search.js';
 import type { TenantDoc } from '../src/registry/types.js';
 import { graphMembershipAsApp } from '../src/auth/wire.js';
+import { mintAccessToken } from '../src/auth/tokens.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
 
 const ISSUER = 'https://cp.test/auth';
@@ -1127,6 +1128,7 @@ describe('discovery documents (#5454 A1 + A2)', () => {
       issuer: `${ISSUER}/visn-01`,
       authorization_endpoint: `${ISSUER}/visn-01/authorize`,
       token_endpoint: `${ISSUER}/visn-01/token`,
+      introspection_endpoint: `${ISSUER}/visn-01/introspect`, // RFC 8414 / RFC 7662 (#5151): breaks if the endpoint is not advertised
       jwks_uri: `${ISSUER}/jwks.json`,
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
@@ -2019,5 +2021,191 @@ describe('RS256 id_tokens (#5454 A7)', () => {
     // Breaks (500 or no keys) if an id_token key failure takes the access-token key out of the JWKS.
     expect(keys.map((k) => k.kty)).toEqual(['EC']);
     expect(logs.some((l) => l.event === 'auth.idtoken_key_unavailable' && l.f.statusCode === 403)).toBe(true);
+  });
+});
+
+// ---- RFC 7662 token introspection (#5151): Inferno SMART STU2.2 Token Introspection group ----
+describe('token introspection (RFC 7662, #5151)', () => {
+  const INTROSPECT = (t = 'visn-01') => `/auth/${t}/introspect`;
+  const INACTIVE_BODY = { active: false };
+
+  /** A backend client; `introspect` is the admin-granted privilege. Returns a bearer minter and an assertion minter. */
+  async function backendClient(c: Ctx, id: string, o: { introspect?: boolean; tenant?: string } = {}) {
+    const tenant = o.tenant ?? 'visn-01';
+    const { publicKey, privateKey } = await generateKeyPair('ES384');
+    const jwksUrl = `https://${id}.client.test/jwks.json`;
+    c.jwksByUrl.set(jwksUrl, [{ ...(await exportJWK(publicKey)), kid: 'k1', alg: 'ES384' } as JWK]);
+    const r = await c.admin('POST', '/api/health/auth/clients', {
+      clientId: id, tenant, clientType: 'backend', displayName: id, allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwksUrl,
+      ...(o.introspect === undefined ? {} : { introspect: o.introspect }),
+    });
+    expect(r.status).toBe(201);
+    const assertion = (aud: string) =>
+      new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' }).setIssuer(id).setSubject(id).setAudience(aud)
+        .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+    const bearer = async (): Promise<string> => {
+      const t = await c.call('POST', `/auth/${tenant}/token`, {
+        form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: await assertion(`${ISSUER}/${tenant}/token`) },
+      });
+      expect(t.status).toBe(200);
+      return t.json.access_token as string;
+    };
+    return { bearer, assertion };
+  }
+  const introspect = (c: Ctx, token: string, o: { bearer?: string; tenant?: string; extra?: Record<string, string> } = {}) =>
+    c.call('POST', INTROSPECT(o.tenant), { ...(o.bearer ? { token: o.bearer } : {}), form: { token, ...(o.extra ?? {}) } });
+  /** An AS-signed access token with chosen claims (the AS's own signer, so only the claims differ from a real one). */
+  const mintAt = (c: Ctx, o: { tenant?: string; clientId?: string; ageS?: number } = {}) =>
+    mintAccessToken(c.signer, {
+      issuer: ISSUER, audience: fhir(o.tenant ?? 'visn-01'), tenant: o.tenant ?? 'visn-01', subType: 'user', sub: USER,
+      clientId: o.clientId ?? 'app-1', scope: ['user/*.rs'], roles: ['fhir-data-reader'], pou: ['TREAT'],
+      now: new Date(Date.now() - (o.ageS ?? 0) * 1000),
+    });
+  async function addTenant(c: Ctx, id: string) {
+    await c.tenants.create({ id, displayName: id, status: 'active', stampId: 'stamp-a', quotas: { maxRequestsPerMinute: 1, maxStorageGiB: 1 }, createdAt: 't', updatedAt: 't', updatedBy: 'x' });
+  }
+  async function setup() {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const rs = await backendClient(c, 'rs-1', { introspect: true });
+    return { c, rs };
+  }
+
+  it('an active EHR-launch token: every field, compared exactly as the Inferno response group compares them', async () => {
+    const { c, rs } = await setup();
+    expect((await c.admin('PUT', FU('visn-01', USER), { resource: 'Practitioner/p1' })).status).toBe(200);
+    const l = await c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-1', patient: 'pat-1' });
+    const tr = (await flow(c, 'launch openid fhirUser patient/*.rs user/*.rs', { launch: l.json.data.launch })).token!;
+    expect(tr.status).toBe(200);
+    const at = await claims(c, tr.json.access_token);
+    const idt = decodeJwt(tr.json.id_token);
+    const r = await introspect(c, tr.json.access_token, { bearer: await rs.bearer() });
+    expect(r.status).toBe(200);
+    // Exact body: breaks on a missing field, an extra field (lhds_roles, idp_tid, pou ... must not leak), or any value drift.
+    expect(r.json).toStrictEqual({
+      active: true, scope: at.scope, client_id: 'app-1', token_type: 'bearer', exp: at.exp, iat: at.iat, sub: USER,
+      aud: fhir('visn-01'), iss: `${ISSUER}/visn-01`, tenant: 'visn-01', patient: 'pat-1', fhirUser: `${fhir('visn-01')}/Practitioner/p1`,
+    });
+    // The kit's own comparisons (token_introspection_response_group.rb): scope SET equals the token response's,
+    // patient equals the token response's, iss/sub/fhirUser equal the id_token's. Breaks if iss is the
+    // tenant-independent access-token issuer (that differs from the id_token iss by the /visn-01 segment).
+    expect(r.json.scope.split(' ').sort()).toEqual(tr.json.scope.split(' ').sort());
+    expect(r.json.patient).toBe(tr.json.patient);
+    expect([r.json.iss, r.json.sub, r.json.fhirUser]).toEqual([idt.iss, idt.sub, idt.fhirUser]);
+    expect(r.json.exp).toBeGreaterThanOrEqual(Math.floor(Date.now() / 1000) - 600);
+    expect(r.headers.get('cache-control')).toBe('no-store');
+    expect(r.headers.get('access-control-allow-origin')).toBeNull(); // breaks if the introspection response is readable cross-origin
+  });
+
+  it('a private_key_jwt caller is accepted only with aud = the introspection URL; a token-endpoint assertion is refused', async () => {
+    const { c, rs } = await setup();
+    const tok = await mintAt(c);
+    const form = async (aud: string) => ({ token: tok, client_assertion_type: ASSERTION_TYPE, client_assertion: await rs.assertion(aud) });
+    const ok = await c.call('POST', INTROSPECT(), { form: await form(`${ISSUER}/visn-01/introspect`) });
+    expect([ok.status, ok.json.active, ok.json.client_id]).toEqual([200, true, 'app-1']);
+    const wrongAud = await c.call('POST', INTROSPECT(), { form: await form(`${ISSUER}/visn-01/token`) });
+    expect([wrongAud.status, wrongAud.json.error]).toEqual([401, 'invalid_client']); // breaks if the assertion aud is not pinned
+  });
+
+  it('expired -> {active:false} only; the same token one second younger than its TTL is active', async () => {
+    const { c, rs } = await setup();
+    const bearer = await rs.bearer();
+    // ageS 301 with ACCESS_TOKEN_TTL_S 300: exp is one second in the past. Breaks if exp is unchecked or tolerated.
+    const expired = await introspect(c, await mintAt(c, { ageS: 301 }), { bearer });
+    expect([expired.status, expired.json]).toStrictEqual([200, INACTIVE_BODY]);
+    const fresh = await introspect(c, await mintAt(c, { ageS: 299 }), { bearer }); // paired: differs only in age
+    expect([fresh.status, fresh.json.active]).toEqual([200, true]);
+  });
+
+  it('another tenant: a token whose tenant claim is not the path tenant, or whose client lives elsewhere, is {active:false} only', async () => {
+    const { c, rs } = await setup();
+    await addTenant(c, 'visn-03');
+    await c.registerApp('app-3', { tenant: 'visn-03' });
+    const bearer = await rs.bearer();
+    // tenant claim visn-03, client app-1 (registered on visn-01): only the token-tenant check can refuse this one.
+    const claimElsewhere = await introspect(c, await mintAt(c, { tenant: 'visn-03', clientId: 'app-1' }), { bearer });
+    expect([claimElsewhere.status, claimElsewhere.json]).toStrictEqual([200, INACTIVE_BODY]);
+    // tenant claim visn-01, client app-3 (registered on visn-03): only the client-tenant check can refuse this one.
+    const clientElsewhere = await introspect(c, await mintAt(c, { clientId: 'app-3' }), { bearer });
+    expect([clientElsewhere.status, clientElsewhere.json]).toStrictEqual([200, INACTIVE_BODY]);
+    // Paired permit: the same visn-03 token introspected AT visn-03 by visn-03's own introspector is active.
+    const rs3 = await backendClient(c, 'rs-3', { introspect: true, tenant: 'visn-03' });
+    const home = await introspect(c, await mintAt(c, { tenant: 'visn-03', clientId: 'app-3' }), { bearer: await rs3.bearer(), tenant: 'visn-03' });
+    expect([home.status, home.json.active, home.json.iss]).toEqual([200, true, `${ISSUER}/visn-03`]);
+  });
+
+  it('garbage, a forged signature and an unknown 43-character string are all exactly {active:false}', async () => {
+    const { c, rs } = await setup();
+    const bearer = await rs.bearer();
+    const { privateKey } = await generateKeyPair('ES384');
+    const real = await claims(c, await mintAt(c));
+    const forged = await new SignJWT(real).setProtectedHeader({ alg: 'ES384', typ: 'at+jwt', kid: 'k1' }).sign(privateKey);
+    for (const token of ['invalid_token_value', forged, randomBytes(32).toString('base64url')]) {
+      const r = await introspect(c, token, { bearer });
+      expect([r.status, JSON.stringify(r.json)]).toEqual([200, '{"active":false}']); // the raw body: no extra member, no reason
+    }
+    expect((await introspect(c, await mintAt(c), { bearer })).json.active).toBe(true); // paired: the genuine token
+  });
+
+  it('no caller authentication -> 401 invalid_client; the identical form with the bearer -> 200', async () => {
+    const { c, rs } = await setup();
+    const tok = await mintAt(c);
+    const anon = await introspect(c, tok);
+    expect([anon.status, anon.json.error]).toEqual([401, 'invalid_client']); // breaks if introspection is anonymous
+    expect(anon.json.active).toBeUndefined(); // nothing about the token leaks before authentication
+    expect(anon.headers.get('www-authenticate')).toBe('Bearer realm="lhds"');
+    expect((await introspect(c, tok, { bearer: await rs.bearer() })).json.active).toBe(true);
+  });
+
+  it('public clients, user tokens, backends without the privilege and other-tenant introspectors are all 401', async () => {
+    const { c, rs } = await setup();
+    const tok = await mintAt(c);
+    // A public app client can never hold the privilege, and its (user) token is not a caller credential.
+    const refuse = await c.admin('POST', '/api/health/auth/clients', {
+      clientId: 'app-pub', tenant: 'visn-01', clientType: 'app', displayName: 'p', allowedScopes: ['user/*.rs'], redirectUris: ['https://app.test/cb'], introspect: true,
+    });
+    expect([refuse.status, refuse.json.error.message]).toEqual([400, 'introspect: only a backend client may introspect']);
+    const user = await introspect(c, tok, { bearer: tok });
+    expect([user.status, user.json.error]).toEqual([401, 'invalid_client']);
+    const plain = await backendClient(c, 'svc-plain');
+    expect((await introspect(c, tok, { bearer: await plain.bearer() })).status).toBe(401); // breaks if any backend may introspect
+    await addTenant(c, 'visn-03');
+    const rs3 = await backendClient(c, 'rs-3', { introspect: true, tenant: 'visn-03' });
+    expect((await introspect(c, tok, { bearer: await rs3.bearer() })).status).toBe(401); // a visn-03 token at visn-01
+    const both = await c.call('POST', INTROSPECT(), {
+      token: await rs.bearer(), form: { token: tok, client_assertion_type: ASSERTION_TYPE, client_assertion: await rs.assertion(`${ISSUER}/visn-01/introspect`) },
+    });
+    expect(both.status).toBe(401); // two client authentication methods at once (RFC 6749 2.3)
+    // Paired permit, then revocation of the privilege by PATCH.
+    expect((await introspect(c, tok, { bearer: await rs.bearer() })).status).toBe(200);
+    const bearer = await rs.bearer();
+    expect((await c.admin('PATCH', '/api/health/auth/clients/rs-1', { introspect: false })).status).toBe(200);
+    expect((await introspect(c, tok, { bearer })).status).toBe(401); // breaks if the privilege is cached in the caller's token
+  });
+
+  it('a refresh token is active until used; a disabled client makes its tokens inactive', async () => {
+    const { c, rs } = await setup();
+    const bearer = await rs.bearer();
+    const tr = (await flow(c, 'user/*.rs offline_access')).token!;
+    const rt = tr.json.refresh_token as string;
+    const live = await introspect(c, rt, { bearer, extra: { token_type_hint: 'refresh_token' } });
+    expect(live.json).toMatchObject({ active: true, client_id: 'app-1', sub: USER, scope: tr.json.scope, iss: `${ISSUER}/visn-01` });
+    expect(live.json.token_type).toBeUndefined(); // a refresh token is not a bearer credential
+    const rotated = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: rt } });
+    expect(rotated.status).toBe(200);
+    expect((await introspect(c, rt, { bearer })).json).toStrictEqual(INACTIVE_BODY); // breaks if a used refresh token reads active
+    const at = rotated.json.access_token as string;
+    expect((await introspect(c, at, { bearer })).json.active).toBe(true);
+    expect((await c.admin('PATCH', '/api/health/auth/clients/app-1', { status: 'disabled' })).status).toBe(200);
+    expect((await introspect(c, at, { bearer })).json).toStrictEqual(INACTIVE_BODY); // breaks if the client status is not re-read
+  });
+
+  it('smart-configuration advertises the per-tenant introspection endpoint', async () => {
+    const c = await boot();
+    const j = (await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).json;
+    expect(j.introspection_endpoint).toBe(`${ISSUER}/visn-01/introspect`); // Inferno skips the whole group without it
+    expect((await c.call('OPTIONS', INTROSPECT())).status).toBe(204);
   });
 });
