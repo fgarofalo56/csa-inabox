@@ -148,9 +148,11 @@ export interface CpSmartClient {
   roleIds: string[];
   redirectUris: string[];
   jwksUrl?: string;
-  /** Present when the client registered an inline JWKS; the console never sends one. */
+  /** Present when the client registered an inline JWKS (public keys). toAppRow reduces it to a count + kids. */
   jwks?: unknown;
   launchUri?: string;
+  /** Backend only: may call the tenant's introspection endpoint (CP PR #5515). */
+  introspect?: boolean;
   pou?: string;
   updatedAt?: string;
 }
@@ -172,8 +174,10 @@ export const cp = {
   // ── SMART clients + EHR launch (Authorization Server admin API, #5454 A6) ──
   listClients: () => cpRequest<{ clients: CpSmartClient[] }>('GET', '/api/health/auth/clients').then((r) => r.clients),
   createClient: (b: {
-    clientId: string; tenant: string; clientType: 'app'; displayName: string; allowedScopes: string[];
-    redirectUris: string[]; launchUri?: string; jwksUrl?: string;
+    clientId: string; tenant: string; clientType: 'app' | 'backend'; displayName: string; allowedScopes: string[];
+    redirectUris: string[]; launchUri?: string; roleIds?: string[]; introspect?: true;
+    /** Exactly one of these for a confidential client (CP `!!c.jwksUrl === !!c.jwks` rule); jwks is PUBLIC keys only. */
+    jwksUrl?: string; jwks?: { keys: Array<Record<string, unknown>> };
   }) => cpRequest<CpSmartClient>('POST', '/api/health/auth/clients', b),
   updateClient: (clientId: string, b: { status?: 'active' | 'disabled'; launchUri?: string | null }) =>
     cpRequest<CpSmartClient>('PATCH', `/api/health/auth/clients/${encodeURIComponent(clientId)}`, b),

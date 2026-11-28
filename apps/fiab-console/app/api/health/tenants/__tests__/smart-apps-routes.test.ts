@@ -6,6 +6,7 @@
  * the value that breaks it. Mutation receipts for the oid test are in the PR.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
 
 const grants = vi.hoisted(() => ({ rows: [] as any[] }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -41,6 +42,12 @@ const BINDING = { tenantId: 'mercy-general', sourceName: 'Mercy General', tenant
 const req = (body?: unknown) => ({ nextUrl: { pathname: '/api/health/tenants/item-1/apps' }, json: async () => body ?? {} }) as any;
 const ctx = (p: Record<string, string> = {}) => ({ params: Promise.resolve({ id: 'item-1', ...p }) }) as any;
 const grant = (role: string) => [{ capabilityId: 'health.tenant-admin', principalId: SESSION_OID, role, tenantId: 'tid-1' }];
+
+// Keys generated at test time: no key material is committed. RSA_PRIV is a full private JWK (d, p, q, dp, dq, qi).
+const RSA_KP = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const RSA_PUB: Record<string, unknown> = { ...(RSA_KP.publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'rsa-1', alg: 'RS384' };
+const RSA_PRIV = { ...(RSA_KP.privateKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'rsa-1', alg: 'RS384' };
+const EC_PUB: Record<string, unknown> = { ...(generateKeyPairSync('ec', { namedCurve: 'P-384' }).publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'ec-1', alg: 'ES384' };
 
 const client = (over: Partial<CpSmartClient> = {}): CpSmartClient => ({
   clientId: 'growth-chart', tenant: 'mercy-general', clientType: 'app', displayName: 'Growth Chart', status: 'active',
@@ -78,7 +85,7 @@ describe('parseRegister', () => {
     expect(parseRegister({ ...ok, allowedScopes: ['system/*.cruds'] })).toEqual({ error: expect.stringMatching(/^allowedScopes/) });
     expect(parseRegister({ ...ok, kind: 'asymmetric' })).toEqual({ error: expect.stringMatching(/^jwksUrl/) });
     // Paired permits.
-    expect(parseRegister(ok)).toEqual({ app: { ...ok } });
+    expect(parseRegister(ok)).toEqual({ app: { ...ok, clientType: 'app', roleIds: [] } });
     expect(parseRegister({ ...ok, kind: 'asymmetric', jwksUrl: 'https://app.example/jwks' })).toMatchObject({ app: { kind: 'asymmetric', jwksUrl: 'https://app.example/jwks' } });
   });
   it('every offered scope is one the CP grammar accepts (patient|user / type / v2 perms)', () => {
@@ -201,6 +208,110 @@ describe('POST /apps (register)', () => {
   });
 });
 
+describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
+  const app = { displayName: 'Inferno', redirectUris: ['https://app.example/cb'], launchUri: 'https://app.example/launch', allowedScopes: ['patient/*.rs'], kind: 'asymmetric' };
+  const backend = { displayName: 'Inferno Bulk', clientType: 'backend', kind: 'asymmetric', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'] };
+  const created = () => vi.spyOn(cp, 'createClient').mockImplementation(async (b) => client({ clientId: b.clientId }));
+
+  it('a JWKS carrying a private key (d) is a 400 and NOTHING reaches the CP', async () => {
+    const create = created();
+    const res = await registerApp(req({ ...app, jwks: { keys: [RSA_PRIV] } }), ctx());
+    // Breaks if the private-member check is removed: the RSA private key is otherwise a valid 2048-bit RSA JWK (201).
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/private key material \(d, p, q, dp, dq, qi\)/);
+    expect(create).not.toHaveBeenCalled();
+    // Same for a backend client: one private EC member on an otherwise public key.
+    expect((await registerApp(req({ ...backend, jwks: { keys: [{ ...EC_PUB, d: 'AAAA' }] } }), ctx())).status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('public RSA + EC keys are forwarded EXACTLY, with no jwksUrl', async () => {
+    const create = created();
+    const jwks = { keys: [RSA_PUB, EC_PUB] };
+    const res = await registerApp(req({ ...app, jwks }), ctx());
+    expect(res.status).toBe(201);
+    const sent = create.mock.calls[0]?.[0];
+    // Breaks if the BFF drops, rebuilds or reorders key members, or sends a jwksUrl alongside.
+    expect(sent?.jwks).toEqual(jwks);
+    expect(sent && 'jwksUrl' in sent).toBe(false);
+    expect(sent).toMatchObject({ clientType: 'app', launchUri: 'https://app.example/launch' });
+  });
+
+  it('both jwks and jwksUrl is a 400 (exactly one key source); neither is a 400 too', async () => {
+    const create = created();
+    const both = await registerApp(req({ ...app, jwks: { keys: [RSA_PUB] }, jwksUrl: 'https://k.example/jwks' }), ctx());
+    // Breaks if exclusivity is removed: the jwks branch would accept it and forward a client with two key sources.
+    expect(both.status).toBe(400);
+    expect((await both.json()).error).toMatch(/supply exactly one/);
+    expect((await registerApp(req(app), ctx())).status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+    expect((await registerApp(req({ ...app, jwksUrl: 'https://k.example/jwks' }), ctx())).status).toBe(201); // paired permit
+  });
+
+  it('an oversize JWKS is a 400 before the CP', async () => {
+    const create = created();
+    // One valid public key padded past 16 KB with an inert member: only the size cap can refuse it.
+    const res = await registerApp(req({ ...backend, jwks: { keys: [{ ...EC_PUB, note: 'a'.repeat(16 * 1024) }] } }), ctx());
+    expect(res.status).toBe(400); // breaks if the size cap is removed (201)
+    expect((await res.json()).error).toBe('jwks: larger than 16 KB');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('a backend client without roles is a 400; with roles it is forwarded as backend with roleIds and no launch/redirect', async () => {
+    const create = created();
+    const none = await registerApp(req({ ...backend, roleIds: [], jwks: { keys: [EC_PUB] } }), ctx());
+    expect(none.status).toBe(400); // breaks if the roles rule is dropped (201)
+    expect((await none.json()).error).toMatch(/^roleIds: a backend client needs at least one role/);
+    expect((await registerApp(req({ ...backend, roleIds: undefined, jwks: { keys: [EC_PUB] } }), ctx())).status).toBe(400);
+    expect((await registerApp(req({ ...backend, roleIds: ['health-tenant-admin'], jwks: { keys: [EC_PUB] } }), ctx())).status).toBe(400); // not a system role
+    expect(create).not.toHaveBeenCalled();
+    const ok = await registerApp(req({ ...backend, jwks: { keys: [EC_PUB] }, tenant: 'someone-else' }), ctx());
+    expect(ok.status).toBe(201);
+    const sent = create.mock.calls[0]?.[0];
+    // Breaks if clientType is still hard-coded 'app', roleIds are not forwarded, or a launchUri key is sent.
+    expect(sent).toEqual({
+      clientId: sent?.clientId, tenant: 'mercy-general', clientType: 'backend', displayName: 'Inferno Bulk',
+      allowedScopes: ['system/*.rs'], redirectUris: [], roleIds: ['fhir-data-exporter'], jwks: { keys: [EC_PUB] },
+    });
+  });
+
+  it('introspect: an app client asking for it is a 400; a backend client forwards introspect:true; off sends no field', async () => {
+    const create = created();
+    const appRes = await registerApp(req({ ...app, jwksUrl: 'https://k.example/jwks', introspect: true }), ctx());
+    // Breaks if the BFF lets an app client ask for introspection (it would reach the CP: 201 here).
+    expect(appRes.status).toBe(400);
+    expect((await appRes.json()).error).toBe('introspect: only a backend client may introspect');
+    expect((await registerApp(req({ ...backend, jwks: { keys: [EC_PUB] }, introspect: 'yes' }), ctx())).status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+    expect((await registerApp(req({ ...backend, jwks: { keys: [EC_PUB] }, introspect: true }), ctx())).status).toBe(201);
+    // Breaks if the route drops the flag (undefined) or renames it (the CP field is exactly `introspect`).
+    expect(create.mock.calls[0]?.[0].introspect).toBe(true);
+    expect((await registerApp(req({ ...backend, jwks: { keys: [EC_PUB] }, introspect: false }), ctx())).status).toBe(201);
+    // Off is OMITTED, not sent as false, so a CP without the field (before #5515) still accepts the client.
+    expect(create.mock.calls[1]?.[0] && 'introspect' in create.mock.calls[1][0]).toBe(false);
+    // And the list reports it.
+    vi.spyOn(cp, 'listClients').mockResolvedValue([client({ clientId: 'svc', clientType: 'backend', jwksUrl: 'https://k.example/s', introspect: true }), client()]);
+    const rows = (await (await listApps(req(), ctx())).json()).apps;
+    expect(rows.map((r: any) => [r.clientId, r.introspect])).toEqual([['svc', true], ['growth-chart', false]]);
+  });
+
+  it('a backend client refuses patient/ scopes, a launch URI, redirect URIs and the public kind; an app refuses system/ scopes and roles', async () => {
+    const create = created();
+    const k = { jwks: { keys: [EC_PUB] } };
+    for (const bad of [
+      { ...backend, ...k, allowedScopes: ['patient/*.rs'] },
+      { ...backend, ...k, launchUri: 'https://app.example/launch' },
+      { ...backend, ...k, redirectUris: ['https://app.example/cb'] },
+      { ...backend, kind: 'public' },
+      { ...app, ...k, allowedScopes: ['system/*.rs'] },
+      { ...app, ...k, roleIds: ['fhir-data-reader'] },
+    ]) {
+      expect([bad, (await registerApp(req(bad), ctx())).status]).toEqual([bad, 400]);
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
 describe('generateClientId', () => {
   it('slugs the display name to 40, appends 8 base32 chars, and fits the CP grammar', () => {
     const zeros = (n: number) => new Uint8Array(n); // byte 0 -> 'a'
@@ -213,14 +324,34 @@ describe('generateClientId', () => {
 });
 
 describe('GET /apps and PATCH /apps/[clientId]', () => {
-  it('lists only this tenant\'s app clients, with the type derived from the key source', async () => {
+  it('lists only this tenant\'s clients (app AND backend), with the type derived from the key source', async () => {
     vi.spyOn(cp, 'listClients').mockResolvedValue([
       client(), client({ clientId: 'conf-app', jwksUrl: 'https://k.example/jwks' }),
-      client({ clientId: 'other', tenant: 'other-tenant' }), client({ clientId: 'svc', clientType: 'backend' }),
+      client({ clientId: 'other', tenant: 'other-tenant' }), client({ clientId: 'svc', clientType: 'backend', jwksUrl: 'https://k.example/svc' }),
     ]);
     const j = await (await listApps(req(), ctx())).json();
-    // Breaks if the tenant or clientType filter is removed (4 rows), or kind ignores jwksUrl.
-    expect(j.apps.map((a: any) => [a.clientId, a.kind])).toEqual([['growth-chart', 'public'], ['conf-app', 'asymmetric']]);
+    // Breaks if the tenant filter is removed (4 rows), backend clients are dropped (2 rows), or kind ignores jwksUrl.
+    expect(j.apps.map((a: any) => [a.clientId, a.clientType, a.kind, a.keySource])).toEqual([
+      ['growth-chart', 'app', 'public', 'none'], ['conf-app', 'app', 'asymmetric', 'url'], ['svc', 'backend', 'asymmetric', 'url'],
+    ]);
+  });
+  it('an inline-JWKS client is listed as a key count + kids; the key material never leaves the BFF', async () => {
+    const keys = [{ ...EC_PUB }, { ...RSA_PUB }];
+    vi.spyOn(cp, 'listClients').mockResolvedValue([client({ clientId: 'inferno', clientType: 'backend', jwks: { keys } })]);
+    const body = await (await listApps(req(), ctx())).text();
+    const row = JSON.parse(body).apps[0];
+    expect(row).toMatchObject({ keySource: 'inline', keyCount: 2, kids: ['ec-1', 'rsa-1'] });
+    // Breaks if toAppRow passes `jwks` through: the modulus and the EC x coordinate would be in the response.
+    expect(body.includes(String(RSA_PUB.n))).toBe(false);
+    expect(body.includes(String(EC_PUB.x))).toBe(false);
+    expect('jwks' in row).toBe(false);
+  });
+  it('a launch is refused for a backend client (no user launch)', async () => {
+    vi.spyOn(cp, 'listClients').mockResolvedValue([client({ clientType: 'backend', jwksUrl: 'https://k.example/svc' })]);
+    const mint = vi.spyOn(cp, 'mintLaunch').mockResolvedValue({ launch: 'h', expiresAt: 'x', iss: FHIR_BASE });
+    // Breaks if launch switches to clientsOfTenant: the backend client would be found and minted for (200).
+    expect((await launchApp(req({}), ctx({ clientId: 'growth-chart' }))).status).toBe(404);
+    expect(mint).not.toHaveBeenCalled();
   });
   it('with the CP unconfigured the list is the 503 gate envelope, not an empty list', async () => {
     const res = await listApps(req(), ctx());

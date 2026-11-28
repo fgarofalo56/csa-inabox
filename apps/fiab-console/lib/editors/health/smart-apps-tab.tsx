@@ -12,18 +12,28 @@
  * shows no rows, and "Launch without a patient" stays available.
  *
  * Scopes are picked from a fixed list; there is no free-text scope box.
+ *
+ * Register also covers SMART Backend Services clients (#5151): a backend
+ * service has no redirect or launch URL, picks system/ scopes and at least one
+ * role from a list. A confidential client's keys come from a JWKS URL or a
+ * pasted JWKS (public keys only, for a client Azure cannot reach); the paste is
+ * checked by the same validator the BFF re-runs, and a private member refuses
+ * it before anything is sent.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   Badge, Button, Caption1, Checkbox, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
-  Field, Input, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Radio, RadioGroup, Skeleton,
-  SkeletonItem, Spinner, Subtitle2, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Textarea,
-  makeStyles, tokens,
+  Field, Input, Label, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Radio, RadioGroup, Skeleton,
+  SkeletonItem, Spinner, Subtitle2, Switch, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Textarea,
+  makeStyles, tokens, useId,
 } from '@fluentui/react-components';
 import { AppsAddIn20Regular, Copy16Regular, Open16Regular, Rocket20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { EmptyState } from '@/lib/components/empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
+import {
+  BACKEND_ROLE_CHOICES, JWKS_LIMITS, SYSTEM_SCOPE_CHOICES, jwksSummary, validatePublicJwks,
+} from '@/lib/health/smart-registration';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
@@ -60,11 +70,30 @@ export interface AppRow {
   clientId: string;
   displayName: string;
   status: 'active' | 'disabled';
+  /** Absent from a BFF that predates backend clients; read as 'app'. */
+  clientType?: 'app' | 'backend';
   kind: 'public' | 'asymmetric';
+  /** url / inline (count + kids only; the BFF never sends key material) / none (public). */
+  keySource?: 'url' | 'inline' | 'none';
+  keyCount?: number;
+  kids?: string[];
   allowedScopes: string[];
+  roleIds?: string[];
+  /** Backend only: may call the tenant introspection endpoint. */
+  introspect?: boolean;
   redirectUris: string[];
   launchUri: string | null;
   jwksUrl: string | null;
+}
+
+/** The apps-table "Keys" cell: where the verifying keys come from. Inline keys are a count and kids, never a modulus. */
+export function keySourceText(a: AppRow): string {
+  if (a.keySource === 'inline') {
+    const n = a.keyCount ?? 0;
+    return `Inline: ${n} public ${n === 1 ? 'key' : 'keys'}${a.kids?.length ? ` (${a.kids.join(', ')})` : ''}`;
+  }
+  if (a.keySource === 'url' || a.jwksUrl) return `JWKS URL: ${a.jwksUrl ?? ''}`.trim();
+  return 'None (public client)';
 }
 interface PatientRow { id: string; name: string; birthDate?: string; gender?: string }
 type Problem = { title: string; text: string };
@@ -174,34 +203,45 @@ export function SmartAppsTab({ id, navigate = (url: string) => window.location.a
             <Table aria-label="SMART apps" size="small">
               <TableHeader><TableRow>
                 <TableHeaderCell>App</TableHeaderCell>
-                <TableHeaderCell>Type and status</TableHeaderCell>
+                <TableHeaderCell>Kind, type and status</TableHeaderCell>
+                <TableHeaderCell>Keys</TableHeaderCell>
                 <TableHeaderCell>Launch URL</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {apps.map((a) => (
-                  <TableRow key={a.clientId}>
-                    <TableCell>
-                      <div className={s.name}><span>{a.displayName}</span><CopyId value={a.clientId} /></div>
-                    </TableCell>
-                    <TableCell>
-                      <div className={s.badges}>
-                        <Badge appearance="tint" color="informative">{a.kind}</Badge>
-                        <Badge appearance="tint" color={a.status === 'active' ? 'success' : 'warning'}>{a.status}</Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell className={s.mono}>{a.launchUri ?? 'not set'}</TableCell>
-                    <TableCell>
-                      <div className={s.actions}>
-                        <Button size="small" appearance="primary" icon={<Rocket20Regular />} aria-label={`Launch ${a.displayName}`}
-                          disabled={a.status !== 'active' || !a.launchUri || busy === a.clientId} onClick={() => setLaunching(a)}>Launch</Button>
-                        <Button size="small" aria-label={`${a.status === 'active' ? 'Disable' : 'Enable'} ${a.displayName}`}
-                          disabled={busy === a.clientId} onClick={() => void toggle(a)}>{a.status === 'active' ? 'Disable' : 'Enable'}</Button>
-                        <Button size="small" aria-label={`Edit launch URL of ${a.displayName}`} disabled={busy === a.clientId} onClick={() => setEditing(a)}>Edit launch URL</Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {apps.map((a) => {
+                  const isBackend = a.clientType === 'backend';
+                  return (
+                    <TableRow key={a.clientId}>
+                      <TableCell>
+                        <div className={s.name}><span>{a.displayName}</span><CopyId value={a.clientId} /></div>
+                      </TableCell>
+                      <TableCell>
+                        <div className={s.badges}>
+                          <Badge appearance="tint" color="brand">{isBackend ? 'backend service' : 'app'}</Badge>
+                          {isBackend && a.introspect && <Badge appearance="tint" color="important">introspection</Badge>}
+                          <Badge appearance="tint" color="informative">{a.kind}</Badge>
+                          <Badge appearance="tint" color={a.status === 'active' ? 'success' : 'warning'}>{a.status}</Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className={s.mono}>{keySourceText(a)}</TableCell>
+                      <TableCell className={s.mono}>{isBackend ? 'not applicable (no user launch)' : (a.launchUri ?? 'not set')}</TableCell>
+                      <TableCell>
+                        <div className={s.actions}>
+                          {!isBackend && (
+                            <Button size="small" appearance="primary" icon={<Rocket20Regular />} aria-label={`Launch ${a.displayName}`}
+                              disabled={a.status !== 'active' || !a.launchUri || busy === a.clientId} onClick={() => setLaunching(a)}>Launch</Button>
+                          )}
+                          <Button size="small" aria-label={`${a.status === 'active' ? 'Disable' : 'Enable'} ${a.displayName}`}
+                            disabled={busy === a.clientId} onClick={() => void toggle(a)}>{a.status === 'active' ? 'Disable' : 'Enable'}</Button>
+                          {!isBackend && (
+                            <Button size="small" aria-label={`Edit launch URL of ${a.displayName}`} disabled={busy === a.clientId} onClick={() => setEditing(a)}>Edit launch URL</Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -237,13 +277,54 @@ function CopyId({ value }: { value: string }) {
   );
 }
 
+/**
+ * A labelled checkbox list. Not a `Field`: a Field hands its label to EVERY Checkbox inside it, which left each
+ * scope checkbox with an empty accessible name. Here the group carries the label and each box keeps its own.
+ */
+function CheckGroup({ label, hint, required, children }: { label: string; hint: string; required?: boolean; children: ReactNode }) {
+  const s = useStyles();
+  const id = useId('checkgroup');
+  return (
+    <div role="group" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} className={s.scopes}>
+      <Label id={`${id}-label`} required={required}>{label}</Label>
+      {children}
+      <Caption1 id={`${id}-hint`}>{hint}</Caption1>
+    </div>
+  );
+}
+
+type ClientKind = 'app' | 'backend';
+type KeySource = 'url' | 'inline';
+
 function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: () => void; onCreated: (a: AppRow) => void }) {
   const s = useStyles();
-  const [f, setF] = useState({ displayName: '', redirectUris: '', launchUri: '', kind: 'public' as 'public' | 'asymmetric', jwksUrl: '' });
+  const [f, setF] = useState({ displayName: '', redirectUris: '', launchUri: '', kind: 'public' as 'public' | 'asymmetric', jwksUrl: '', jwksText: '' });
+  const [clientType, setClientType] = useState<ClientKind>('app');
+  const [keySource, setKeySource] = useState<KeySource>('url');
   const [scopes, setScopes] = useState<string[]>(['patient/*.rs', 'user/*.rs']);
+  const [roles, setRoles] = useState<string[]>([]);
+  const [introspect, setIntrospect] = useState(false);
+  const [jwksTouched, setJwksTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<Problem | null>(null);
   const set = (k: keyof typeof f) => (_: unknown, d: { value: string }) => setF((v) => ({ ...v, [k]: d.value }));
+
+  const backend = clientType === 'backend';
+  const asymmetric = backend || f.kind === 'asymmetric';
+  const inline = asymmetric && keySource === 'inline';
+  // The same validator the BFF runs. Shown only after the textarea is touched (a fresh dialog opens clean).
+  const jwks = inline && f.jwksText.trim() ? validatePublicJwks(f.jwksText) : null;
+  const jwksError = jwks && 'error' in jwks ? jwks.error : null;
+  const jwksOk = jwks && 'jwks' in jwks ? jwksSummary(jwks.jwks) : null;
+  const scopeChoices = backend ? SYSTEM_SCOPE_CHOICES : SCOPE_CHOICES;
+  const blocked = busy || scopes.length === 0 || (backend && roles.length === 0) || (inline && !jwksOk);
+
+  const pickClientType = (next: ClientKind) => {
+    setClientType(next);
+    // Scopes are per kind (system/ for backend, patient/ user/ for an app), so the picks reset with the kind.
+    setScopes(next === 'backend' ? ['system/*.rs'] : ['patient/*.rs', 'user/*.rs']);
+    if (next === 'backend') setF((v) => ({ ...v, kind: 'asymmetric' }));
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -252,15 +333,18 @@ function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: (
       const r = await clientFetch(base, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          displayName: f.displayName, launchUri: f.launchUri, kind: f.kind, allowedScopes: scopes,
-          redirectUris: f.redirectUris.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
-          ...(f.kind === 'asymmetric' ? { jwksUrl: f.jwksUrl } : {}),
+          displayName: f.displayName, clientType, kind: asymmetric ? 'asymmetric' : 'public', allowedScopes: scopes,
+          ...(backend ? { roleIds: roles, ...(introspect ? { introspect: true } : {}) } : {
+            launchUri: f.launchUri, redirectUris: f.redirectUris.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+          }),
+          ...(asymmetric && !inline ? { jwksUrl: f.jwksUrl } : {}),
+          ...(inline && jwks && 'jwks' in jwks ? { jwks: jwks.jwks } : {}),
         }),
       });
-      if (!r.ok) { setErr(await problemOf(r, 'The app was not registered')); return; }
+      if (!r.ok) { setErr(await problemOf(r, 'The client was not registered')); return; }
       onCreated((await r.json()).app as AppRow);
     } catch (e: any) {
-      setErr({ title: 'The app was not registered', text: e?.message || String(e) });
+      setErr({ title: 'The client was not registered', text: e?.message || String(e) });
     } finally { setBusy(false); }
   };
 
@@ -268,41 +352,80 @@ function RegisterDialog({ base, onClose, onCreated }: { base: string; onClose: (
     <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Register a SMART app</DialogTitle>
+          <DialogTitle>Register a SMART client</DialogTitle>
           <DialogContent>
             <div className={s.form}>
-              <Field label="Display name" required hint="Shown to users who launch the app.">
+              <Field label="Display name" required hint="Shown to users and in the audit trail.">
                 <Input value={f.displayName} onChange={set('displayName')} />
               </Field>
-              <Field label="Redirect URIs" required hint="One per line. https, or http on localhost for development.">
-                <Textarea value={f.redirectUris} onChange={set('redirectUris')} resize="vertical" />
-              </Field>
-              <Field label="Launch URL" required hint="The app's SMART launch page. Must be https.">
-                <Input value={f.launchUri} onChange={set('launchUri')} />
-              </Field>
-              <Field label="Client type">
-                <RadioGroup value={f.kind} onChange={(_, d) => setF((v) => ({ ...v, kind: d.value as 'public' | 'asymmetric' }))}>
-                  <Radio value="public" label="Public (PKCE, no client secret: browser and native apps)" />
-                  <Radio value="asymmetric" label="Confidential asymmetric (private_key_jwt with a JWKS URL)" />
+              <Field label="Client kind" hint="An app is launched by a signed-in user. A backend service runs without a user (SMART Backend Services).">
+                <RadioGroup value={clientType} onChange={(_, d) => pickClientType(d.value as ClientKind)}>
+                  <Radio value="app" label="App (user launch)" />
+                  <Radio value="backend" label="Backend service (system, no user)" />
                 </RadioGroup>
               </Field>
-              {f.kind === 'asymmetric' && (
-                <Field label="JWKS URL" required hint="https URL of the app's public keys."><Input value={f.jwksUrl} onChange={set('jwksUrl')} /></Field>
+              {!backend && (
+                <>
+                  <Field label="Redirect URIs" required hint="One per line. https, or http on localhost for development.">
+                    <Textarea value={f.redirectUris} onChange={set('redirectUris')} resize="vertical" />
+                  </Field>
+                  <Field label="Launch URL" required hint="The app's SMART launch page. Must be https.">
+                    <Input value={f.launchUri} onChange={set('launchUri')} />
+                  </Field>
+                  <Field label="Client type">
+                    <RadioGroup value={f.kind} onChange={(_, d) => setF((v) => ({ ...v, kind: d.value as 'public' | 'asymmetric' }))}>
+                      <Radio value="public" label="Public (PKCE, no client secret: browser and native apps)" />
+                      <Radio value="asymmetric" label="Confidential asymmetric (private_key_jwt)" />
+                    </RadioGroup>
+                  </Field>
+                </>
               )}
-              <Field label="Allowed scopes" hint="The most this app can ever be granted; each user still gets only what their roles allow.">
-                <div className={s.scopes}>
-                  {SCOPE_CHOICES.map((c) => (
-                    <Checkbox key={c.scope} label={`${c.scope} - ${c.label}`} checked={scopes.includes(c.scope)}
-                      onChange={(_, d) => setScopes((cur) => (d.checked ? [...cur, c.scope] : cur.filter((x) => x !== c.scope)))} />
+              {asymmetric && (
+                <Field label="Key source" hint={backend ? 'A backend service signs its token request with private_key_jwt (RS384 or ES384).' : 'Where the authorization server reads the public keys that verify the client assertion.'}>
+                  <RadioGroup value={keySource} onChange={(_, d) => setKeySource(d.value as KeySource)}>
+                    <Radio value="url" label="JWKS URL" />
+                    <Radio value="inline" label="Paste JWKS (public keys)" />
+                  </RadioGroup>
+                </Field>
+              )}
+              {asymmetric && !inline && (
+                <Field label="JWKS URL" required hint="https URL of the client's public keys, reachable from Azure."><Input value={f.jwksUrl} onChange={set('jwksUrl')} /></Field>
+              )}
+              {inline && (
+                <Field label="Public JWKS" required
+                  validationState={jwksTouched && jwksError ? 'error' : jwksOk ? 'success' : 'none'}
+                  validationMessage={jwksTouched && jwksError ? jwksError
+                    : jwksOk ? `${jwksOk.keyCount} public ${jwksOk.keyCount === 1 ? 'key' : 'keys'}: ${jwksOk.kids.join(', ')}` : undefined}
+                  hint={`For a client Azure cannot reach. {"keys":[...]} with RSA (2048+ bits) or EC P-384 keys, each with a kid; alg RS384 or ES384. Public members only: a key with d, p, q, dp, dq, qi, k or oth is refused. At most ${JWKS_LIMITS.maxKeys} keys, ${JWKS_LIMITS.maxBytes / 1024} KB.`}>
+                  <Textarea className={s.mono} value={f.jwksText} resize="vertical" rows={6}
+                    onChange={(_, d) => { setF((v) => ({ ...v, jwksText: d.value })); setJwksTouched(true); }} />
+                </Field>
+              )}
+              {backend && (
+                <CheckGroup label="Roles" required hint="The roles whose system ceilings bound every token this service gets.">
+                  {BACKEND_ROLE_CHOICES.map((r) => (
+                    <Checkbox key={r.id} label={`${r.label} (${r.id})`} checked={roles.includes(r.id)}
+                      onChange={(_, d) => setRoles((cur) => (d.checked ? [...cur, r.id] : cur.filter((x) => x !== r.id)))} />
                   ))}
-                </div>
-              </Field>
+                </CheckGroup>
+              )}
+              {backend && (
+                <Field label="Token introspection" hint="Lets this service check other tokens issued on this tenant (RFC 7662 introspection endpoint). Off unless the service validates tokens it receives.">
+                  <Switch label="Allow token introspection" checked={introspect} onChange={(_, d) => setIntrospect(d.checked)} />
+                </Field>
+              )}
+              <CheckGroup label="Allowed scopes" hint={backend ? 'The most this service can ever be granted; its roles cap it further.' : 'The most this app can ever be granted; each user still gets only what their roles allow.'}>
+                {scopeChoices.map((c) => (
+                  <Checkbox key={c.scope} label={`${c.scope} - ${c.label}`} checked={scopes.includes(c.scope)}
+                    onChange={(_, d) => setScopes((cur) => (d.checked ? [...cur, c.scope] : cur.filter((x) => x !== c.scope)))} />
+                ))}
+              </CheckGroup>
               {err && <MessageBar intent="error" layout="multiline"><MessageBarBody><MessageBarTitle>{err.title}</MessageBarTitle>{err.text}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" disabled={busy || scopes.length === 0} onClick={() => void submit()}>{busy ? 'Registering...' : 'Register'}</Button>
+            <Button appearance="primary" disabled={blocked} onClick={() => void submit()}>{busy ? 'Registering...' : 'Register'}</Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
