@@ -1,16 +1,18 @@
 /**
  * /api/health/tenants/[id]/apps/[clientId]   (#5454 A6)
  *
- *   PATCH  `{status?: 'active'|'disabled', launchUri?: string|null}` on one app
- *          client of the item's tenant. The client must belong to THIS tenant:
+ *   PATCH  `{status?: 'active'|'disabled', launchUri?: string|null}` on one SMART
+ *          client (app or backend) of the item's tenant; a launch URI on a backend client is the CP's 400. It must belong to THIS tenant:
  *          the CP's PATCH is keyed by client id alone, so without the check an
  *          admin of one tenant could disable another tenant's app. A launch URI
  *          must be https. Needs Contributor on `health.tenant-admin`.
+ *          `introspect?: boolean` (backend clients only, CP #5515) needs Admin
+ *          (operator decision 2026-11-28, #5151).
  */
-import { withHealthTenantAdmin } from '../../../_lib/tenant-admin-gate';
+import { enforceHealthTenantAdmin, withHealthTenantAdmin } from '../../../_lib/tenant-admin-gate';
 import { apiError, apiOk } from '@/lib/api/respond';
 import { cp } from '../../../_lib/cp-client';
-import { CLIENT_ID, appsOfTenant, boundTenant, cpFailure, parseLaunchUri, toAppRow } from '../../../_lib/smart-apps';
+import { CLIENT_ID, boundTenant, clientsOfTenant, cpFailure, parseLaunchUri, toAppRow } from '../../../_lib/smart-apps';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +24,14 @@ export const PATCH = withHealthTenantAdmin<{ id: string; clientId: string }>('Co
   if (typeof tenant !== 'string') return tenant;
   let body: Record<string, unknown>;
   try { body = (await req.json()) ?? {}; } catch { return apiError('A JSON body is required', 400); }
-  const patch: { status?: 'active' | 'disabled'; launchUri?: string | null } = {};
+  const patch: { status?: 'active' | 'disabled'; launchUri?: string | null; introspect?: boolean } = {};
+  if (body.introspect !== undefined) {
+    if (typeof body.introspect !== 'boolean') return apiError('introspect: true or false', 400);
+    // Operator decision 2026-11-28 (#5151): changing the introspection privilege is an Admin act, in either direction.
+    const denied = await enforceHealthTenantAdmin(session, 'Admin');
+    if (denied) return denied;
+    patch.introspect = body.introspect;
+  }
   if (body.status !== undefined) {
     if (body.status !== 'active' && body.status !== 'disabled') return apiError('status: active or disabled', 400);
     patch.status = body.status;
@@ -35,10 +44,13 @@ export const PATCH = withHealthTenantAdmin<{ id: string; clientId: string }>('Co
       patch.launchUri = u;
     }
   }
-  if (patch.status === undefined && patch.launchUri === undefined) return apiError('Supply status and/or launchUri', 400);
+  if (patch.status === undefined && patch.launchUri === undefined && patch.introspect === undefined) {
+    return apiError('Supply status, launchUri and/or introspect', 400);
+  }
   try {
-    const mine = appsOfTenant(await cp.listClients(), tenant).some((c) => c.clientId === params.clientId);
+    const mine = clientsOfTenant(await cp.listClients(), tenant).find((c) => c.clientId === params.clientId);
     if (!mine) return apiError('Unknown app', 404);
+    if (patch.introspect === true && mine.clientType !== 'backend') return apiError('introspect: only a backend client may introspect', 400);
     return apiOk({ app: toAppRow(await cp.updateClient(params.clientId, patch)) });
   } catch (e) {
     return cpFailure(e);
