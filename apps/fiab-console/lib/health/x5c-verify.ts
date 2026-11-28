@@ -10,7 +10,8 @@
  *
  *  - The key: `createPublicKey({key: jwk, format: 'jwk'})` (rejects an off-curve
  *    point or a malformed modulus), then ONLY its `export({format:'jwk'})`.
- *  - Metadata: kid, alg, use, key_ops, already allowlisted and type-checked.
+ *  - Metadata: kid, alg, use, key_ops, already allowlisted and type-checked. `ext` (the WebCrypto boolean
+ *    the structural validator accepts) is never forwarded: only the members named here are copied.
  *  - x5c: every entry must parse AND be exactly the certificate's own DER
  *    (`der.equals(cert.raw)`), and what is forwarded is `cert.raw` re-encoded.
  *    The first certificate's key must equal the JWK's key (RFC 7517 4.7); the
