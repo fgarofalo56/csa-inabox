@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createAuthenticator } from '../src/middleware/auth.js';
 import { createAuthServer } from '../src/auth/server.js';
 import { ASSERTION_TYPE } from '../src/auth/backend-auth.js';
+import { REDIRECT_URI_RULE } from '../src/auth/redirect-uri.js';
 import { GraphConsentRequiredError, createEntraFederation, type Federation, type GraphMembership } from '../src/auth/federation.js';
 import { LocalRsaSigner, LocalSigner, type IdTokenSigner } from '../src/auth/signer.js';
 import { createFhirUserResolver } from '../src/auth/fhir-user.js';
@@ -1464,6 +1465,65 @@ describe('client launchUri (#5454 A3)', () => {
   });
 });
 
+describe('redirect/launch URI host grammar (#5514)', () => {
+  const app = (id: string, uri: string, over: Record<string, unknown> = {}) => ({
+    clientId: id, tenant: 'visn-01', clientType: 'app', displayName: id, allowedScopes: ['user/*.rs'], redirectUris: [uri], ...over,
+  });
+  // Each of these registered 201 before #5514 (the old validator checked only scheme, credentials and fragment).
+  const REFUSED = ['https://evil;script-src/cb', 'https://[::1]/cb', 'https://my_host.example/cb', 'https://a.com./cb', 'https://-a.com/cb'];
+  const ACCEPTED = ['https://192.168.2.252/custom/smart_stu2_2/redirect', 'http://localhost:3000/cb'];
+
+  it('refuses each unsafe host on create (redirectUris AND launchUri) and accepts the paired safe ones', async () => {
+    const c = await boot();
+    for (const [i, uri] of REFUSED.entries()) {
+      const r = await c.admin('POST', '/api/health/auth/clients', app(`app-r${i}`, uri));
+      expect([uri, r.status, r.json.error.message]).toEqual([uri, 400, `redirectUris.0: ${REDIRECT_URI_RULE}`]);
+      const l = await c.admin('POST', '/api/health/auth/clients', app(`app-l${i}`, 'https://app.test/cb', { launchUri: uri }));
+      expect([uri, l.status]).toEqual([uri, 400]);
+    }
+    expect(c.stores.clients.docs.size).toBe(0);
+    for (const [i, uri] of ACCEPTED.entries()) {
+      // The Inferno STU2.2 redirect on an IPv4 literal and loopback http: breaks (400) if the grammar over-refuses.
+      expect([uri, (await c.admin('POST', '/api/health/auth/clients', app(`app-a${i}`, uri, { launchUri: uri }))).status]).toEqual([uri, 201]);
+    }
+  });
+
+  it('PATCH applies the same rule to launchUri', async () => {
+    const c = await boot();
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-p', 'https://app.test/cb'))).status).toBe(201);
+    for (const uri of REFUSED) expect([uri, (await c.admin('PATCH', '/api/health/auth/clients/app-p', { launchUri: uri })).status]).toEqual([uri, 400]);
+    expect((await c.admin('PATCH', '/api/health/auth/clients/app-p', { launchUri: ACCEPTED[0] })).status).toBe(200); // paired permit
+  });
+
+  it('a STORED unsafe redirect_uri is refused at authorize with a true error and nothing is redirected', async () => {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await boot({ log: (event, f) => logs.push({ event, f }) });
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-old', 'https://app.test/cb'))).status).toBe(201);
+    const authorize = (ru: string) => c.call('GET', `/auth/visn-01/authorize?${new URLSearchParams({
+      response_type: 'code', client_id: 'app-old', redirect_uri: ru, scope: 'user/*.rs', state: 's', aud: fhir('visn-01'), code_challenge: 'x'.repeat(43), code_challenge_method: 'S256',
+    })}`);
+    expect((await authorize('https://app.test/cb')).status).toBe(302); // paired permit: the clean stored value
+    // A pre-#5514 doc: the old validator stored this shape.
+    (c.stores.clients.docs.get('client-app-old') as any).redirectUris = ['https://evil;script-src/cb'];
+    const r = await authorize('https://evil;script-src/cb');
+    // Breaks (302 to the stored URI, or a pick page) if stored values are not re-checked at authorize.
+    expect([r.status, r.headers.get('location'), r.json.error_description]).toEqual([400, null, 'the registered redirect_uri no longer meets the redirect URI rules; the client must be re-registered']);
+    expect(logs.filter((l) => l.event === 'auth.redirect_uri_unsafe').map((l) => l.f)).toStrictEqual([{ tenant: 'visn-01', clientId: 'app-old' }]);
+  });
+
+  it('a STORED unsafe launchUri refuses an EHR launch (409) before a handle is minted', async () => {
+    const c = await boot();
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-ehr', 'https://app.test/cb', { launchUri: 'https://app.test/launch' }))).status).toBe(201);
+    const launch = () => c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-ehr' });
+    expect((await launch()).status).toBe(201); // paired permit
+    const before = c.stores.grants.docs.size;
+    (c.stores.clients.docs.get('client-app-ehr') as any).launchUri = 'https://my_host.example/launch';
+    const r = await launch();
+    expect([r.status, r.json.error.message]).toEqual([409, "the client's registered launchUri no longer meets the redirect URI rules; PATCH a new launchUri"]);
+    expect(c.stores.grants.docs.size).toBe(before); // no launch handle was stored for it
+  });
+});
+
 describe('token CORS before the client is resolved (#5454 review)', () => {
   it('no client_assertion: an invalid_client for an unknown client carries ACAO *; with an assertion it does not', async () => {
     const c = await boot();
@@ -1795,11 +1855,12 @@ describe('standalone patient picker (#5454 A5)', () => {
       const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
       const { c } = await setup({ log: (event, f) => logs.push({ event, f }) });
       // new URL('https://evil;script-src/cb').origin is 'https://evil;script-src': written raw, the ';' would end
-      // form-action and open an attacker-named directive. The registration validator ACCEPTS this shape today.
+      // form-action and open an attacker-named directive. Registration REFUSES this shape since #5514 (it answered
+      // 201 before); the serializer check below stays as defence in depth for a value stored before that.
       const reg = await c.admin('POST', '/api/health/auth/clients', {
         clientId: 'app-semi', tenant: 'visn-01', clientType: 'app', displayName: 'semi', allowedScopes: ['patient/*.rs'], redirectUris: ['https://evil;script-src/cb'],
       });
-      expect(reg.status).toBe(201);
+      expect(reg.status).toBe(400); // breaks (201) if the host grammar is dropped from the registration validator
       const s = await signIn(c);
       const crafted = ['https://evil;script-src/cb', 'https://a,b.test/cb', "https://a'b.test/cb", 'https://a"b.test/cb', 'https://*.test/cb', 'https://[::1]:8443/cb'];
       for (const uri of crafted) {

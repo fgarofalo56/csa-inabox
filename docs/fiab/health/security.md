@@ -149,7 +149,15 @@ redirect with no code, and the CP logs `auth.fhir_user_error`. Dropping the
 scope silently would hand out a session that had lost `fhirUser` without
 saying so. An app client may carry a `launchUri`, its EHR-launch URL. It is
 validated like a `redirect_uri` (https or loopback http, no credentials, no
-fragment) and refused on a backend client. The token endpoint also sends
+fragment) and refused on a backend client. Since #5514 (merged, not deployed)
+both also hold the parsed host to a strict grammar (`src/auth/redirect-uri.ts`):
+a DNS name of LDH labels with at least one dot, `localhost`, or an IPv4 dotted
+quad, compared lowercased. `; , * $ _`, quotes, whitespace, a trailing dot and
+a bracketed IPv6 literal are `400` on create and PATCH (a CSP host-source
+cannot carry IPv6, so the picker could never redirect back to one). A stored
+value that fails the rule is refused at `authorize` (`400`, logged
+`auth.redirect_uri_unsafe`) and at `POST /api/health/auth/launch` (`409`),
+before anything is redirected or minted. The token endpoint also sends
 `Access-Control-Allow-Origin: *` on any response to a request with **no**
 `client_assertion`, so a browser app can read an `invalid_client` raised
 before its client resolves (an unknown `client_id`). Such a request can only

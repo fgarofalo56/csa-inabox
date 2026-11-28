@@ -32,6 +32,7 @@ import { INACTIVE, verifyAccessToken } from './introspect.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { normalizeJwks } from './jwk-normalize.js';
+import { REDIRECT_URI_RULE, isSafeRedirectUri } from './redirect-uri.js';
 import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, formActionSource, pickerHeaders, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
@@ -207,18 +208,8 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-const loopback = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/;
-const redirectUri = z
-  .string()
-  .max(2048)
-  .refine((v) => {
-    try {
-      const u = new URL(v);
-      return !u.username && !u.password && !u.hash && (u.protocol === 'https:' || loopback.test(v));
-    } catch {
-      return false;
-    }
-  }, 'must be https (or loopback http) without credentials or fragment');
+// The same rule for redirectUris, launchUri on create and PATCH, and stored values at authorize (#5514).
+const redirectUri = z.string().max(2048).refine(isSafeRedirectUri, REDIRECT_URI_RULE);
 
 const ClientCreateSchema = z.strictObject({
   // The picker's search tokens carry PICKER_CLIENT_ID; a registered client with that id would make them a
@@ -449,6 +440,12 @@ export function createAuthServer(deps: AuthServerDeps) {
     // Until client + redirect_uri are verified nothing may be redirected to.
     if (!client || client.status !== 'active' || client.clientType !== 'app' || client.tenant !== tenantSlug || !client.redirectUris.includes(ru)) {
       throw new OAuthError('invalid_request', 'unknown client or redirect_uri');
+    }
+    // A STORED value registered before #5514 may fail today's rule. Nothing is redirected to it (fail closed); the
+    // error says what is wrong and that the fix is re-registering the client, not something the app sent.
+    if (!isSafeRedirectUri(ru)) {
+      deps.log('auth.redirect_uri_unsafe', { tenant: tenantSlug, clientId: client.clientId });
+      throw new OAuthError('invalid_request', 'the registered redirect_uri no longer meets the redirect URI rules; the client must be re-registered');
     }
     const state = q.get('state') ?? undefined;
     const fail = (code: string, desc: string): void => {
@@ -1533,6 +1530,12 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (!p.success) throw badRequest(`${p.error.issues[0]?.path.join('.') || 'body'}: ${p.error.issues[0]?.message ?? 'invalid'}`);
       const l = p.data;
       if ((await deps.tenants.get(l.tenant)) === undefined) throw notFound('tenant');
+      // The console sends the browser to the client's STORED launchUri with this handle (#5514): one registered
+      // before the host grammar existed is refused here, before a handle is minted for it.
+      const launchClient = await getClient(l.clientId);
+      if (launchClient?.launchUri !== undefined && !isSafeRedirectUri(launchClient.launchUri)) {
+        throw conflict("the client's registered launchUri no longer meets the redirect URI rules; PATCH a new launchUri");
+      }
       const handle = rand(32);
       const expiresAt = expiry(LAUNCH_TTL_S);
       await stores.grants.create({
