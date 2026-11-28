@@ -12,7 +12,8 @@
 //   GET  {issuerPath}/{tenant}/pick                      (standalone patient picker page, #5454 A5)
 //   POST {issuerPath}/{tenant}/pick                      (the picker's choice or cancel)
 //   POST {issuerPath}/{tenant}/token
-//   OPTIONS on the discovery, jwks and token paths answers the CORS preflight.
+//   POST {issuerPath}/{tenant}/introspect                (RFC 7662; authenticated backend callers only, #5151)
+//   OPTIONS on the discovery, jwks and token paths answers the CORS preflight (never on introspect).
 //   admin (control-plane bearer auth): /api/health/auth/{clients,clients/{id},tenants/{t}/bindings,
 //     tenants/{t}/fhir-users[/{oid}],tenants/{t}/patient-search,launch,readiness}
 
@@ -27,6 +28,7 @@ import { authoredMessage, classifyError } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backend-auth.js';
 import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
+import { INACTIVE, verifyAccessToken } from './introspect.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
@@ -218,7 +220,9 @@ const redirectUri = z
   }, 'must be https (or loopback http) without credentials or fragment');
 
 const ClientCreateSchema = z.strictObject({
-  clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/),
+  // The picker's search tokens carry PICKER_CLIENT_ID; a registered client with that id would make them a
+  // credential of that client (e.g. an introspection Bearer, #5151). Reserved.
+  clientId: z.string().regex(/^[A-Za-z0-9._-]{3,64}$/).refine((v) => v !== PICKER_CLIENT_ID, 'is reserved'),
   tenant: z.string().regex(SLUG),
   clientType: z.enum(['backend', 'app']),
   displayName: z.string().trim().min(1).max(120),
@@ -246,6 +250,8 @@ const ClientCreateSchema = z.strictObject({
   roleIds: z.array(z.string()).max(20).default([]),
   redirectUris: z.array(redirectUri).max(10).default([]),
   launchUri: redirectUri.optional(),
+  /** Backend clients only: may introspect this tenant's tokens (#5151). */
+  introspect: z.boolean().optional(),
   pou: z.string().regex(/^[A-Z]{2,10}$/).default('TREAT'),
 });
 
@@ -270,10 +276,10 @@ const FhirContextEntry = z.union([
   FhirContextObject,
 ]);
 
-// PATCH /clients/{id}: status as before, and/or the launch URI (null clears it). At least one member.
+// PATCH /clients/{id}: status as before, the launch URI (null clears it), and/or the introspection privilege. At least one.
 const ClientPatchSchema = z
-  .strictObject({ status: z.enum(['active', 'disabled']).optional(), launchUri: redirectUri.nullable().optional() })
-  .refine((o) => o.status !== undefined || o.launchUri !== undefined, 'supply status and/or launchUri');
+  .strictObject({ status: z.enum(['active', 'disabled']).optional(), launchUri: redirectUri.nullable().optional(), introspect: z.boolean().optional() })
+  .refine((o) => o.status !== undefined || o.launchUri !== undefined || o.introspect !== undefined, 'supply status, launchUri and/or introspect');
 
 const FhirUserPutSchema = z.strictObject({
   resource: z.string().regex(FHIR_USER_RESOURCE, 'must be Practitioner|Patient|RelatedPerson|Person/<id>'),
@@ -390,6 +396,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       jwks_uri: `${issuer}/jwks.json`,
       authorization_endpoint: `${issuer}/${t.id}/authorize`,
       token_endpoint: `${issuer}/${t.id}/token`,
+      introspection_endpoint: `${issuer}/${t.id}/introspect`,
       grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
       token_endpoint_auth_methods_supported: TOKEN_AUTH_METHODS,
       token_endpoint_auth_signing_alg_values_supported: ['RS384', 'ES384'],
@@ -421,6 +428,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       issuer: oidcIssuerFor(t.id),
       authorization_endpoint: `${issuer}/${t.id}/authorize`,
       token_endpoint: `${issuer}/${t.id}/token`,
+      introspection_endpoint: `${issuer}/${t.id}/introspect`,
       jwks_uri: `${issuer}/jwks.json`,
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
@@ -970,6 +978,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         family: g.family ?? rand(16),
         ttl: REFRESH_TTL_S,
         expiresAt: expiry(REFRESH_TTL_S),
+        issuedAt: now().toISOString(),
         tenant: g.tenant,
         clientId: g.clientId,
         oid: g.oid,
@@ -1186,6 +1195,144 @@ export function createAuthServer(deps: AuthServerDeps) {
     throw new OAuthError('unsupported_grant_type', 'unsupported grant_type');
   }
 
+  // ---- introspection (RFC 7662, #5151) ----
+  /** Refresh tokens are rand(32): exactly 43 base64url characters. Nothing else is ever looked up in the grant store. */
+  const REFRESH_TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+  const BEARER = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/;
+
+  /**
+   * Caller authentication. Never anonymous. The caller must be an ACTIVE BACKEND client registered on THIS tenant
+   * that an admin granted `introspect` (a client flag, not a scope, so no token request can earn it; an app
+   * client, public or confidential, can never hold it). It proves that identity by EXACTLY ONE of:
+   *  - `Authorization: Bearer <access token>` the AS issued that client by client_credentials. SMART STU2.2
+   *    token-introspection.html: an authorized client "SHALL be permitted to authenticate ... by providing an
+   *    appropriately-scoped SMART App or SMART Backend Service bearer token in the Authorization header". It is
+   *    also the only form Inferno's static `custom_authorization_header` input can carry (a client assertion is
+   *    single-use, and Inferno sends two requests with the same parameters).
+   *  - a private_key_jwt client assertion (RFC 7523, the token endpoint's authenticateClient) whose aud is the
+   *    introspection URL, so an assertion minted for the token endpoint is not accepted here.
+   * Neither, both, a non-Bearer Authorization header, or any refusal: the same 401 invalid_client.
+   */
+  async function introspectionCaller(tenantSlug: string, authz: string | undefined, p: URLSearchParams): Promise<string> {
+    const refuse = (): OAuthError => new OAuthError('invalid_client', 'client authentication failed');
+    const hasAuthz = !!authz;
+    const assertion = p.get('client_assertion');
+    if (hasAuthz === !!assertion) throw refuse();
+    // Each branch authenticates COMPLETELY before it yields an identity; the shared checks below only ever see an
+    // already-authenticated client id (CodeQL js/user-controlled-bypass, #5515).
+    let authenticatedClientId = '';
+    if (hasAuthz) {
+      const bearer = BEARER.exec(authz ?? '')?.[1];
+      const at = bearer ? await verifyAccessToken(deps.signer, issuer, bearer, now()) : undefined;
+      if (!at || at.sub_type !== 'system' || at.sub !== at.client_id || at.tenant !== tenantSlug) throw refuse();
+      authenticatedClientId = at.client_id;
+    } else {
+      const named = assertionIss(assertion);
+      const candidate = named ? await getClient(named) : undefined;
+      // Only a client with registered keys can prove an assertion (authenticateClient passes a public app client
+      // through untested, since PKCE is its proof at the token endpoint); anything else is refused here.
+      if (!candidate || !(candidate.jwks || candidate.jwksUrl)) throw refuse();
+      await authenticateClient(candidate, p, `${issuer}/${tenantSlug}/introspect`);
+      authenticatedClientId = candidate.clientId;
+    }
+    const client = await getClient(authenticatedClientId);
+    if (!client || client.status !== 'active' || client.clientType !== 'backend' || client.tenant !== tenantSlug || client.introspect !== true) {
+      throw refuse();
+    }
+    return client.clientId;
+  }
+
+  /**
+   * RFC 7662 introspection of an access token or a refresh token, scoped to the path tenant. Anything that is not
+   * an active token of THIS tenant, issued to a client still active on it, is {active:false} and nothing else:
+   * an expired, forged, malformed, used, revoked or other-tenant token all read the same, so the response says
+   * nothing about tokens of another tenant or client beyond "not active here". token_type_hint is accepted and
+   * ignored (RFC 7662 2.1: a hint only); both kinds are tried, so it cannot change an answer.
+   *
+   * Timing: a string that is not a compact JWS is refused before any crypto, and a 43-character string costs one
+   * grant-store read whether or not a token exists, so the caller learns nothing about stored state from timing
+   * that the response does not already say. Malformed vs expired differs only in whether a signature check ran,
+   * which tells the caller only whether it sent a JWS: it already knows that.
+   *
+   * `iss` is the tenant's OpenID issuer (`{issuer}/{tenant}`), the `issuer` its smart-configuration advertises
+   * and the `iss` of every id_token it issues: SMART STU2.2 requires introspection `iss`/`sub` to match the
+   * id_token when one was issued. `scope` is the token's own (v2 form for an access token).
+   */
+  async function introspect(tenantSlug: string, authz: string | undefined, p: URLSearchParams): Promise<Record<string, unknown>> {
+    await activeTenant(tenantSlug);
+    let caller = '';
+    let out: Record<string, unknown> | undefined;
+    try {
+      caller = await introspectionCaller(tenantSlug, authz, p);
+      out = await introspectToken(tenantSlug, p);
+      return out;
+    } finally {
+      // One audit event per call. Identifiers only: never the token, its hash, or patient / fhirUser values.
+      // `caller` is set only once authentication succeeded, so an unverified assertion iss is never logged.
+      deps.log('auth.introspect', {
+        tenant: tenantSlug,
+        caller: caller || '-',
+        outcome: out ? (out.active === true ? 'active' : 'inactive') : caller ? 'error' : 'refused',
+        active: out?.active === true ? 1 : 0,
+        ...(out?.active === true ? { tokenClientId: String(out.client_id) } : {}),
+      });
+    }
+  }
+
+  async function introspectToken(tenantSlug: string, p: URLSearchParams): Promise<Record<string, unknown>> {
+    const tok = p.get('token') ?? '';
+    if (!tok) throw new OAuthError('invalid_request', 'token is required');
+    const clientActiveHere = async (clientId: string): Promise<boolean> => {
+      const c = await getClient(clientId);
+      return !!c && c.status === 'active' && c.tenant === tenantSlug;
+    };
+    const context = (d: { patient?: string | undefined; encounter?: string | undefined; fhirUser?: string | undefined }) => ({
+      ...(d.patient ? { patient: d.patient } : {}),
+      ...(d.encounter ? { encounter: d.encounter } : {}),
+      ...(d.fhirUser ? { fhirUser: d.fhirUser } : {}),
+    });
+
+    const at = await verifyAccessToken(deps.signer, issuer, tok, now());
+    if (at) {
+      if (at.tenant !== tenantSlug || !(await clientActiveHere(at.client_id))) return { ...INACTIVE };
+      return {
+        active: true,
+        scope: at.scope,
+        client_id: at.client_id,
+        token_type: 'bearer',
+        exp: at.exp,
+        iat: at.iat,
+        sub: at.sub,
+        aud: at.aud,
+        iss: oidcIssuerFor(tenantSlug),
+        tenant: at.tenant,
+        ...context(at),
+      };
+    }
+    if (REFRESH_TOKEN_SHAPE.test(tok)) {
+      const doc = await stores.grants.get(sha256hex(tok));
+      if (doc && doc.kind === 'refresh' && doc.tenant === tenantSlug && !doc.used && !expired(doc) && doc.oid && doc.aud &&
+        !(doc.family && (await stores.grants.get(`revoked-${doc.family}`))) && (await clientActiveHere(doc.clientId))) {
+        const exp = Math.floor(Date.parse(doc.expiresAt) / 1000);
+        return {
+          active: true,
+          // The scope as the refresh token's token response echoed it (the client's own syntax, A2).
+          scope: (doc.grantedScope ?? []).map((s) => doc.echo?.[s] ?? s).join(' '),
+          client_id: doc.clientId,
+          exp,
+          // Stored at issue; documents written before #5151 have none, and were minted with expiry(REFRESH_TTL_S).
+          iat: doc.issuedAt ? Math.floor(Date.parse(doc.issuedAt) / 1000) : exp - REFRESH_TTL_S,
+          sub: doc.oid,
+          aud: doc.aud,
+          iss: oidcIssuerFor(tenantSlug),
+          tenant: doc.tenant,
+          ...context(doc),
+        };
+      }
+    }
+    return { ...INACTIVE };
+  }
+
   // ---- admin (control-plane bearer auth) ----
   async function admin(req: IncomingMessage, method: string, path: string): Promise<{ status: number; data: unknown } | undefined> {
     const auth = req.headers.authorization;
@@ -1216,6 +1363,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (c.clientType === 'backend' && c.roleIds.length === 0) throw badRequest('a backend client needs at least one role');
       if (c.clientType === 'app' && c.redirectUris.length === 0) throw badRequest('an app client needs at least one redirectUri');
       if (c.clientType === 'backend' && c.launchUri) throw badRequest('launchUri: only an app client has a launch URI');
+      if (c.introspect && c.clientType !== 'backend') throw badRequest('introspect: only a backend client may introspect');
       if (c.pou === 'BTG') throw badRequest('BTG is not issued in this release');
       const doc: ClientDoc = {
         id: `client-${c.clientId}`,
@@ -1234,6 +1382,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         ...(c.jwksUrl ? { jwksUrl: c.jwksUrl } : {}),
         ...(c.jwks ? { jwks: c.jwks as ClientDoc['jwks'] } : {}),
         ...(c.launchUri ? { launchUri: c.launchUri } : {}),
+        ...(c.introspect ? { introspect: true } : {}),
       };
       try {
         return ok(publicClient(await stores.clients.create(doc)), 201);
@@ -1253,10 +1402,13 @@ export function createAuthServer(deps: AuthServerDeps) {
       const cur = await stores.clients.get(`client-${cm[1]}`);
       if (!cur || cur.kind !== 'client') throw notFound('client');
       if (p.data.launchUri && cur.clientType !== 'app') throw badRequest('launchUri: only an app client has a launch URI');
+      if (p.data.introspect && cur.clientType !== 'backend') throw badRequest('introspect: only a backend client may introspect');
       const next: ClientDoc = { ...cur, updatedAt: now().toISOString(), updatedBy: who.id };
       if (p.data.status) next.status = p.data.status;
       if (p.data.launchUri === null) delete next.launchUri;
       else if (p.data.launchUri) next.launchUri = p.data.launchUri;
+      if (p.data.introspect === false) delete next.introspect;
+      else if (p.data.introspect) next.introspect = true;
       try {
         return ok(publicClient(await stores.clients.replace(next)));
       } catch (e) {
@@ -1434,7 +1586,7 @@ export function createAuthServer(deps: AuthServerDeps) {
   });
 
   // Tenant-scoped routes under the issuer path, and the FHIR-base discovery path the edge forwards unchanged.
-  const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|pick|token)$/;
+  const TENANT_ROUTE = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|\.well-known\/openid-configuration|authorize|pick|token|introspect)$/;
   const FHIR_DISCOVERY = /^\/([a-z0-9-]{2,40})\/fhir\/\.well-known\/smart-configuration$/;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -1473,6 +1625,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         path === `${base}/jwks.json` || path === `${base}/.well-known/openid-configuration` ||
         leaf === '.well-known/smart-configuration' || leaf === '.well-known/openid-configuration';
       if (isDiscovery) cors = CORS_ANY;
+      // introspect is deliberately absent: no browser may call it, so it answers no preflight (#5151).
       if (method === 'OPTIONS' && (isDiscovery || leaf === 'token')) {
         status = 204;
         preflight(res, isDiscovery ? 'GET' : 'POST');
@@ -1521,6 +1674,13 @@ export function createAuthServer(deps: AuthServerDeps) {
         sendJson(res, 200, out, tokenCors.publicClient ? CORS_ANY : {});
         return true;
       }
+      if (leaf === 'introspect' && method === 'POST') {
+        // No CORS on any introspection response: only an authenticated backend client may call it, never a browser app.
+        const out = await introspect(tenant, req.headers.authorization, await readForm(req));
+        status = 200;
+        sendJson(res, 200, out);
+        return true;
+      }
       status = 405;
       sendJson(res, 405, { error: 'invalid_request', error_description: 'method not allowed' }, cors);
       return true;
@@ -1528,7 +1688,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (tokenCors.publicClient) cors = CORS_ANY;
       if (e instanceof OAuthError) {
         status = e.status;
-        sendJson(res, status, { error: e.code, error_description: e.description }, { ...cors, ...(status === 401 ? { 'www-authenticate': 'Basic realm="lhds"' } : {}) });
+        sendJson(res, status, { error: e.code, error_description: e.description }, { ...cors, ...(status === 401 ? { 'www-authenticate': tenantRoute?.[2] === 'introspect' ? 'Bearer realm="lhds"' : 'Basic realm="lhds"' } : {}) });
       } else if (e instanceof HttpError) {
         status = e.status;
         sendJson(res, status, { ok: false, error: { code: e.code, message: authoredMessage(e) } }, { ...cors, ...(status === 401 ? { 'www-authenticate': 'Bearer' } : {}) });

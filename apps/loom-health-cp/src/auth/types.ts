@@ -51,6 +51,11 @@ export interface ClientDoc extends Doc {
   redirectUris: string[];
   /** App clients only: the SMART app's launch URL for an EHR launch (`launchUri?iss=...&launch=...`, #5454 A3). */
   launchUri?: string;
+  /**
+   * Backend clients only: may call POST {issuer}/{tenant}/introspect for THIS tenant (RFC 7662, #5151). Granted by
+   * an admin, never by a scope request, so no token request can earn it. Absent = false.
+   */
+  introspect?: boolean;
   pou: string;
   updatedAt: string;
   updatedBy: string;
@@ -101,6 +106,8 @@ export interface GrantDoc extends Doc {
   /** code + refresh: id shared by every rotation of one sign-in; revoking it kills the chain (#5134). */
   family?: string;
   ttl: number;
+  /** refresh: ISO issue time, for introspection `iat` (#5151). Absent on documents written before it. */
+  issuedAt?: string;
   used?: boolean;
   tenant: string;
   clientId: string;

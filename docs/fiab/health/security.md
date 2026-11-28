@@ -65,9 +65,54 @@ not already require. SMART requires a `token_endpoint` and, for launch flows,
 an `authorization_endpoint`. It also requires the discovery document at
 `{fhirBase}/.well-known/smart-configuration`, which ADR-010:22 names. Their
 concrete paths are an implementation detail recorded in that discovery
-document. No introspection, revocation, management or dynamic-registration
-endpoint is designed or advertised. Client registration has no surface in the
-PRP yet; see open question Q4.
+document. No revocation, management or dynamic-registration endpoint is
+designed or advertised. Client registration has no surface in the PRP yet; see
+open question Q4.
+
+**Token introspection (#5151, operator decision 2026-11-28; merged, not
+deployed).** `POST {issuer}/{tenant}/introspect` (RFC 7662) is advertised as
+`introspection_endpoint` in that tenant's `smart-configuration` and
+`openid-configuration`. It is never anonymous: the caller must be an active
+**backend** client of the same tenant that an admin granted `introspect: true`
+(client registration or `PATCH /api/health/auth/clients/{id}`; never a scope,
+never an app client). It authenticates with exactly one of a Bearer access
+token the AS issued it by `client_credentials` (the SMART STU2.2 form) or a
+`private_key_jwt` assertion whose `aud` is the introspection URL; anything else
+is `401 invalid_client`. An access token or refresh token that is not active
+on the path tenant, for a client still active there, reads `{"active":false}`
+and nothing else. An active token returns `scope`, `client_id`, `exp`, `iat`,
+`sub`, `aud`, `iss` (the tenant OpenID issuer, equal to the id_token `iss`),
+`tenant`, `token_type` (access tokens), and `patient` / `encounter` /
+`fhirUser` when the token carries them. Known gaps: an access token's `scope`
+is its v2 form, so a client that asked in v1 syntax sees different strings
+from its token response; `need_patient_banner` and `fhirContext` are not in
+the access token, so they are not returned.
+
+Every introspection call emits one `auth.introspect` log event carrying
+`tenant`, `caller` (the authenticated client id, or `-` when refused),
+`outcome` (`active` / `inactive` / `refused` / `error`), `active` (1/0) and,
+only for an active token, `tokenClientId`. It never carries the token, a hash
+of it, or any `patient` / `fhirUser` value. The CORS preflight is not answered
+on this path, so a browser is never told it may send an `Authorization`
+header. The client id `lhds-patient-picker` is reserved at registration,
+because the picker's 60 s user tokens carry it.
+
+**Accepted risk (#5515 review).** ANY `client_credentials` access token of a
+flagged client is accepted as the caller credential, including one it also
+sends to the FHIR server. Whoever obtains that token (a FHIR-side log, a
+compromised proxy) can therefore introspect this tenant's tokens for up to the
+token's 300 s lifetime. Mitigations not taken yet: a dedicated introspection
+scope that the bearer must carry, or an introspection token whose `aud` is the
+introspection URL rather than the FHIR base. A follow-up issue tracks the
+choice.
+
+**Key rotation.** Introspection verifies against the AS's current ES384 key
+only. After a restart that picks up a rotated key, access tokens signed with
+the previous key read `{"active":false}` until they expire (at most 300 s).
+The PDP's view of the same tokens is governed separately. Refresh tokens are
+unaffected because they are looked up by hash. A refresh token's `iat` is its
+stored issue time; documents written before #5151 fall back to
+`exp - 30 days`.
 
 **Implemented discovery and protocol details (W1b-3a A1/A2, #5454; merged, not
 deployed).** The control plane serves `smart-configuration` both under the
