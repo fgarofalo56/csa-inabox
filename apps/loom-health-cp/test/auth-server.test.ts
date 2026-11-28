@@ -3,7 +3,7 @@
 // named after the negative-scope matrix in docs/fiab/health/security.md A9.
 // Every deny is paired with a permit control that differs by ONE variable.
 
-import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, createLocalJWKSet, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createAuthenticator } from '../src/middleware/auth.js';
 import { createAuthServer } from '../src/auth/server.js';
 import { ASSERTION_TYPE } from '../src/auth/backend-auth.js';
+import { REDIRECT_URI_RULE } from '../src/auth/redirect-uri.js';
 import { GraphConsentRequiredError, createEntraFederation, type Federation, type GraphMembership } from '../src/auth/federation.js';
 import { LocalRsaSigner, LocalSigner, type IdTokenSigner } from '../src/auth/signer.js';
 import { createFhirUserResolver } from '../src/auth/fhir-user.js';
@@ -20,6 +21,7 @@ import type { TenantDoc } from '../src/registry/types.js';
 import { graphMembershipAsApp } from '../src/auth/wire.js';
 import { mintAccessToken, signJwt } from '../src/auth/tokens.js';
 import { AUDIENCE, AUTHORITY, MemoryCollection, TENANT, adminToken, readerToken, testKeyResolver } from './helpers.js';
+import { selfSignedCertB64 } from './self-signed-cert.js';
 
 const ISSUER = 'https://cp.test/auth';
 const fhir = (t: string) => `https://${t}.health.test/fhir`;
@@ -866,6 +868,75 @@ describe('client registry, bindings and gate (admin API)', () => {
   });
 });
 
+describe('inline JWKS: the CP stores and verifies ONLY re-derived keys (#5518)', () => {
+  const reg = (c: Ctx, id: string, keys: unknown[]) => c.admin('POST', '/api/health/auth/clients', {
+    clientId: id, tenant: 'visn-01', clientType: 'backend', displayName: id, allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwks: { keys },
+  });
+  const assertFor = (id: string, privateKey: CryptoKey | import('node:crypto').KeyObject) =>
+    new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' }).setIssuer(id).setSubject(id).setAudience(`${ISSUER}/visn-01/token`)
+      .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+  const tokenFor = async (c: Ctx, id: string, privateKey: CryptoKey | import('node:crypto').KeyObject) =>
+    c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: await assertFor(id, privateKey) } });
+
+  it('a probe is 400 at the authority and nothing is stored; the Inferno shape registers with ext dropped and verifies', async () => {
+    const c = await boot();
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = publicKey.export({ format: 'jwk' }) as Record<string, string>;
+    // A raw JSON body, so "__proto__" reaches the server as an OWN member exactly as an attacker would send it.
+    const body = `{"clientId":"svc-p","tenant":"visn-01","clientType":"backend","displayName":"p","allowedScopes":["system/*.rs"],"roleIds":["fhir-data-exporter"],"jwks":{"keys":[{"__proto__":{"d":"x"},"kty":"EC","crv":"P-384","x":"${pub.x}","y":"${pub.y}","kid":"k1"}]}}`;
+    const res = await fetch(`${c.url}/api/health/auth/clients`, { method: 'POST', headers: { authorization: `Bearer ${await adminToken()}`, 'content-type': 'application/json' }, body });
+    // Breaks (201, stored without the member) if the schema goes back to z.looseObject, which DROPS "__proto__" silently.
+    expect([res.status, ((await res.json()) as any).error.message]).toEqual([400, 'jwks: key 1: member "__proto__" is not allowed on an EC public key']);
+    const probe = await reg(c, 'svc-d', [{ ...pub, kid: 'k1', D: 'x' }]);
+    expect([probe.status, probe.json.error.message]).toEqual([400, 'jwks: key 1: member "D" is not allowed on an EC public key']);
+    expect(c.stores.clients.docs.size).toBe(0);
+
+    const inferno = { ...pub, kid: 'k1', alg: 'ES384', key_ops: ['verify'], ext: true };
+    expect((await reg(c, 'svc-i', [inferno])).status).toBe(201);
+    // Exactly the createPublicKey re-export plus metadata. Breaks (ext present) if the input is stored as given.
+    expect((c.stores.clients.docs.get('client-svc-i') as any).jwks).toStrictEqual({
+      keys: [{ ...createPublicKey({ key: pub, format: 'jwk' }).export({ format: 'jwk' }), kid: 'k1', alg: 'ES384', key_ops: ['verify'] }],
+    });
+    expect((await tokenFor(c, 'svc-i', privateKey)).status).toBe(200);
+  });
+
+  it('an Entra-shaped key (x5t, issuer, cloud_instance_name) verifies when FETCHED and is 400 when registered INLINE (#5521 review)', async () => {
+    const c = await boot();
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const j = publicKey.export({ format: 'jwk' }) as Record<string, string>;
+    const key = {
+      kty: 'RSA', use: 'sig', kid: 'k1', x5t: randomBytes(20).toString('base64url'), n: j.n, e: j.e, x5c: [selfSignedCertB64(publicKey, privateKey)],
+      cloud_instance_name: 'microsoftonline.com', issuer: 'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0',
+    };
+    const jwksUrl = 'https://idp.client.test/keys';
+    c.jwksByUrl.set(jwksUrl, [key as unknown as JWK]);
+    expect((await c.admin('POST', '/api/health/auth/clients', {
+      clientId: 'svc-entra', tenant: 'visn-01', clientType: 'backend', displayName: 'e', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'], jwksUrl,
+    })).status).toBe(201);
+    const a = await new SignJWT({}).setProtectedHeader({ alg: 'RS384', typ: 'JWT', kid: 'k1' }).setIssuer('svc-entra').setSubject('svc-entra')
+      .setAudience(`${ISSUER}/visn-01/token`).setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
+    const t = await c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: a } });
+    expect(t.status).toBe(200); // breaks (401) if a fetched key carrying x5t / issuer is dropped
+    const inline = await reg(c, 'svc-entra-inline', [key]);
+    expect([inline.status, inline.json.error.message]).toEqual([400, 'jwks: key 1: x5t (SHA-1) is not accepted; use x5t#S256 or omit it']);
+  });
+
+  it('a stored doc that no longer normalizes fails closed with auth.client_jwks_invalid (identifiers only)', async () => {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await boot({ log: (event, f) => logs.push({ event, f }) });
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = { ...(publicKey.export({ format: 'jwk' }) as Record<string, string>), kid: 'k1' };
+    expect((await reg(c, 'svc-old', [pub])).status).toBe(201);
+    expect((await tokenFor(c, 'svc-old', privateKey)).status).toBe(200); // paired permit: the clean stored doc
+    // A pre-#5518 doc: written as given, carrying a member the allowlist refuses (out-of-band, as old docs were).
+    const doc = c.stores.clients.docs.get('client-svc-old') as any;
+    doc.jwks = { keys: [{ ...pub, x5t: 'AAAA' }] };
+    const r = await tokenFor(c, 'svc-old', privateKey);
+    expect([r.status, r.json.error]).toEqual([401, 'invalid_client']); // breaks (200) if stored keys are used as read
+    expect(logs.filter((l) => l.event === 'auth.client_jwks_invalid')).toStrictEqual([{ event: 'auth.client_jwks_invalid', f: { clientId: 'svc-old' } }]);
+  });
+});
+
 describe('Graph membership AS the AS app, through the callback (live consent:1, 2026-11-27)', () => {
   // The production graphMembershipAsApp at the seam; only Entra's token endpoint and Graph are faked.
   const AS_APP = 'cccccccc-0000-0000-0000-00000000000a';
@@ -1133,7 +1204,7 @@ describe('discovery documents (#5454 A1 + A2)', () => {
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'], // A7: breaks on ['ES384'] (the pre-A7 value) or an empty list
-      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'],
+      scopes_supported: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs', 'introspect'],
       token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'],
       code_challenge_methods_supported: ['S256'],
     });
@@ -1413,6 +1484,67 @@ describe('client launchUri (#5454 A3)', () => {
     expect([bad.status, bad.json.error.message]).toEqual([400, 'status: must be active or disabled']); // unchanged message
     expect((await patch('no-such', { status: 'active' })).status).toBe(404);
     expect((await c.call('PATCH', '/api/health/auth/clients/app-l', { token: await readerToken(), json: { launchUri: null } })).status).toBe(403);
+  });
+});
+
+describe('redirect/launch URI host grammar (#5514)', () => {
+  const app = (id: string, uri: string, over: Record<string, unknown> = {}) => ({
+    clientId: id, tenant: 'visn-01', clientType: 'app', displayName: id, allowedScopes: ['user/*.rs'], redirectUris: [uri], ...over,
+  });
+  // Each of these registered 201 before #5514 (the old validator checked only scheme, credentials and fragment).
+  const REFUSED = ['https://evil;script-src/cb', 'https://[::1]/cb', 'https://my_host.example/cb', 'https://a.com./cb', 'https://-a.com/cb',
+    // Non-canonical IPv4 the parser rewrites (017.1.1.1 = 15.1.1.1, 0x7f.1 = 127.0.0.1, 1.2.3 = 1.2.0.3), and port 0.
+    'https://017.1.1.1/cb', 'https://0x7f.1/cb', 'https://1.2.3/cb', 'https://app.test:0/cb'];
+  const ACCEPTED = ['https://192.168.2.252/custom/smart_stu2_2/redirect', 'http://localhost:3000/cb'];
+
+  it('refuses each unsafe host on create (redirectUris AND launchUri) and accepts the paired safe ones', async () => {
+    const c = await boot();
+    for (const [i, uri] of REFUSED.entries()) {
+      const r = await c.admin('POST', '/api/health/auth/clients', app(`app-r${i}`, uri));
+      expect([uri, r.status, r.json.error.message]).toEqual([uri, 400, `redirectUris.0: ${REDIRECT_URI_RULE}`]);
+      const l = await c.admin('POST', '/api/health/auth/clients', app(`app-l${i}`, 'https://app.test/cb', { launchUri: uri }));
+      expect([uri, l.status]).toEqual([uri, 400]);
+    }
+    expect(c.stores.clients.docs.size).toBe(0);
+    for (const [i, uri] of ACCEPTED.entries()) {
+      // The Inferno STU2.2 redirect on an IPv4 literal and loopback http: breaks (400) if the grammar over-refuses.
+      expect([uri, (await c.admin('POST', '/api/health/auth/clients', app(`app-a${i}`, uri, { launchUri: uri }))).status]).toEqual([uri, 201]);
+    }
+  });
+
+  it('PATCH applies the same rule to launchUri', async () => {
+    const c = await boot();
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-p', 'https://app.test/cb'))).status).toBe(201);
+    for (const uri of REFUSED) expect([uri, (await c.admin('PATCH', '/api/health/auth/clients/app-p', { launchUri: uri })).status]).toEqual([uri, 400]);
+    expect((await c.admin('PATCH', '/api/health/auth/clients/app-p', { launchUri: ACCEPTED[0] })).status).toBe(200); // paired permit
+  });
+
+  it('a STORED unsafe redirect_uri is refused at authorize with a true error and nothing is redirected', async () => {
+    const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
+    const c = await boot({ log: (event, f) => logs.push({ event, f }) });
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-old', 'https://app.test/cb'))).status).toBe(201);
+    const authorize = (ru: string) => c.call('GET', `/auth/visn-01/authorize?${new URLSearchParams({
+      response_type: 'code', client_id: 'app-old', redirect_uri: ru, scope: 'user/*.rs', state: 's', aud: fhir('visn-01'), code_challenge: 'x'.repeat(43), code_challenge_method: 'S256',
+    })}`);
+    expect((await authorize('https://app.test/cb')).status).toBe(302); // paired permit: the clean stored value
+    // A pre-#5514 doc: the old validator stored this shape.
+    (c.stores.clients.docs.get('client-app-old') as any).redirectUris = ['https://evil;script-src/cb'];
+    const r = await authorize('https://evil;script-src/cb');
+    // Breaks (302 to the stored URI, or a pick page) if stored values are not re-checked at authorize.
+    expect([r.status, r.headers.get('location'), r.json.error_description]).toEqual([400, null, 'the registered redirect_uri no longer meets the redirect URI rules; the client must be re-registered']);
+    expect(logs.filter((l) => l.event === 'auth.redirect_uri_unsafe').map((l) => l.f)).toStrictEqual([{ tenant: 'visn-01', clientId: 'app-old' }]);
+  });
+
+  it('a STORED unsafe launchUri refuses an EHR launch (409) before a handle is minted', async () => {
+    const c = await boot();
+    expect((await c.admin('POST', '/api/health/auth/clients', app('app-ehr', 'https://app.test/cb', { launchUri: 'https://app.test/launch' }))).status).toBe(201);
+    const launch = () => c.admin('POST', '/api/health/auth/launch', { tenant: 'visn-01', oid: USER, clientId: 'app-ehr' });
+    expect((await launch()).status).toBe(201); // paired permit
+    const before = c.stores.grants.docs.size;
+    (c.stores.clients.docs.get('client-app-ehr') as any).launchUri = 'https://my_host.example/launch';
+    const r = await launch();
+    expect([r.status, r.json.error.message]).toEqual([409, "the client's registered launchUri no longer meets the redirect URI rules; PATCH a new launchUri"]);
+    expect(c.stores.grants.docs.size).toBe(before); // no launch handle was stored for it
   });
 });
 
@@ -1747,11 +1879,12 @@ describe('standalone patient picker (#5454 A5)', () => {
       const logs: Array<{ event: string; f: Record<string, string | number> }> = [];
       const { c } = await setup({ log: (event, f) => logs.push({ event, f }) });
       // new URL('https://evil;script-src/cb').origin is 'https://evil;script-src': written raw, the ';' would end
-      // form-action and open an attacker-named directive. The registration validator ACCEPTS this shape today.
+      // form-action and open an attacker-named directive. Registration REFUSES this shape since #5514 (it answered
+      // 201 before); the serializer check below stays as defence in depth for a value stored before that.
       const reg = await c.admin('POST', '/api/health/auth/clients', {
         clientId: 'app-semi', tenant: 'visn-01', clientType: 'app', displayName: 'semi', allowedScopes: ['patient/*.rs'], redirectUris: ['https://evil;script-src/cb'],
       });
-      expect(reg.status).toBe(201);
+      expect(reg.status).toBe(400); // breaks (201) if the host grammar is dropped from the registration validator
       const s = await signIn(c);
       const crafted = ['https://evil;script-src/cb', 'https://a,b.test/cb', "https://a'b.test/cb", 'https://a"b.test/cb', 'https://*.test/cb', 'https://[::1]:8443/cb'];
       for (const uri of crafted) {
@@ -2043,14 +2176,16 @@ describe('token introspection (RFC 7662, #5151)', () => {
     const assertion = (aud: string) =>
       new SignJWT({}).setProtectedHeader({ alg: 'ES384', typ: 'JWT', kid: 'k1' }).setIssuer(id).setSubject(id).setAudience(aud)
         .setJti(randomBytes(8).toString('hex')).setExpirationTime(Math.floor(Date.now() / 1000) + 120).sign(privateKey);
-    const bearer = async (): Promise<string> => {
-      const t = await c.call('POST', `/auth/${tenant}/token`, {
-        form: { grant_type: 'client_credentials', scope: 'system/*.rs', client_assertion_type: ASSERTION_TYPE, client_assertion: await assertion(`${ISSUER}/${tenant}/token`) },
-      });
+    /** The token response for `scope`; the Inferno header token asks `system/*.rs introspect` (#5516). */
+    const tokenResponse = async (scope: string) => c.call('POST', `/auth/${tenant}/token`, {
+      form: { grant_type: 'client_credentials', scope, client_assertion_type: ASSERTION_TYPE, client_assertion: await assertion(`${ISSUER}/${tenant}/token`) },
+    });
+    const bearer = async (scope = 'system/*.rs introspect'): Promise<string> => {
+      const t = await tokenResponse(scope);
       expect(t.status).toBe(200);
       return t.json.access_token as string;
     };
-    return { bearer, assertion };
+    return { bearer, assertion, tokenResponse };
   }
   const introspect = (c: Ctx, token: string, o: { bearer?: string; tenant?: string; extra?: Record<string, string> } = {}) =>
     c.call('POST', INTROSPECT(o.tenant), { ...(o.bearer ? { token: o.bearer } : {}), form: { token, ...(o.extra ?? {}) } });
@@ -2072,6 +2207,50 @@ describe('token introspection (RFC 7662, #5151)', () => {
     const rs = await backendClient(c, 'rs-1', { introspect: true });
     return { c, rs };
   }
+
+  describe('the Bearer credential must carry the introspect scope (#5516)', () => {
+    it('a flagged client token WITH introspect is a caller; the same client token WITHOUT it is 401', async () => {
+      const { c, rs } = await setup();
+      const tok = await mintAt(c);
+      const granted = await rs.tokenResponse('system/*.rs introspect');
+      // The grant itself: breaks (scope 'system/*.rs') if the flagged client is never granted introspect.
+      expect([granted.status, granted.json.scope]).toEqual([200, 'system/*.rs introspect']);
+      expect((await claims(c, granted.json.access_token)).scope).toBe('system/*.rs introspect');
+      const ok = await introspect(c, tok, { bearer: granted.json.access_token });
+      expect([ok.status, ok.json.active]).toEqual([200, true]);
+      // The FHIR token of the SAME client, minted the same way minus the scope. Breaks (200) with the scope check removed.
+      const fhirToken = await rs.bearer('system/*.rs');
+      const r = await introspect(c, tok, { bearer: fhirToken });
+      expect([r.status, r.json.error]).toEqual([401, 'invalid_client']);
+      // An introspect-only token is a credential too (no data scope needed), and the private_key_jwt path is unchanged.
+      expect((await introspect(c, tok, { bearer: await rs.bearer('introspect') })).json.active).toBe(true);
+      const viaJwt = await c.call('POST', INTROSPECT(), { form: { token: tok, client_assertion_type: ASSERTION_TYPE, client_assertion: await rs.assertion(`${ISSUER}/visn-01/introspect`) } });
+      expect([viaJwt.status, viaJwt.json.active]).toEqual([200, true]);
+    });
+
+    it('an unflagged backend client asking for introspect is not granted it', async () => {
+      const { c } = await setup();
+      const plain = await backendClient(c, 'rs-plain');
+      const t = await plain.tokenResponse('system/*.rs introspect');
+      expect([t.status, t.json.scope]).toEqual([200, 'system/*.rs']); // breaks ('system/*.rs introspect') if the flag is not consulted
+      const only = await plain.tokenResponse('introspect');
+      expect([only.status, only.json.error]).toEqual([400, 'invalid_scope']); // nothing grantable
+    });
+
+    it('an app client asking for introspect is not granted it, and authorize treats it as before (unknown)', async () => {
+      const { c } = await setup();
+      const tr = (await flow(c, 'user/*.rs introspect')).token!;
+      expect([tr.status, tr.json.scope]).toEqual([200, 'user/*.rs']); // breaks if an app client can earn it
+      // Alone it is still no acceptable scope at authorize (an error redirect, no Entra sign-in), as before #5516.
+      const { redirect } = await c.authorizeAndLogin({ scope: 'introspect' });
+      expect(redirect.searchParams.get('error')).toBe('invalid_scope');
+    });
+
+    it('introspect is advertised in scopes_supported', async () => {
+      const { c } = await setup();
+      expect((await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).json.scopes_supported).toContain('introspect');
+    });
+  });
 
   it('an active EHR-launch token: every field, compared exactly as the Inferno response group compares them', async () => {
     const { c, rs } = await setup();

@@ -74,11 +74,29 @@ deployed).** `POST {issuer}/{tenant}/introspect` (RFC 7662) is advertised as
 `introspection_endpoint` in that tenant's `smart-configuration` and
 `openid-configuration`. It is never anonymous: the caller must be an active
 **backend** client of the same tenant that an admin granted `introspect: true`
-(client registration or `PATCH /api/health/auth/clients/{id}`; never a scope,
-never an app client). It authenticates with exactly one of a Bearer access
-token the AS issued it by `client_credentials` (the SMART STU2.2 form) or a
-`private_key_jwt` assertion whose `aud` is the introspection URL; anything else
-is `401 invalid_client`. An access token or refresh token that is not active
+(client registration or `PATCH /api/health/auth/clients/{id}`; never an app
+client). It authenticates with exactly one of a Bearer access token the AS
+issued it by `client_credentials` carrying the `introspect` scope (the SMART
+STU2.2 "appropriately-scoped" form, #5516) or a `private_key_jwt` assertion
+whose `aud` is the introspection URL; anything else is `401 invalid_client`.
+
+**The `introspect` scope (#5516; merged, not deployed).** An AS-specific
+context scope, advertised in `scopes_supported`. The token endpoint grants it
+only on `client_credentials`, only when the request names it, and only to a
+backend client flagged `introspect: true`; an unflagged backend client or an
+app client asking for it simply does not get it (an `introspect`-only request
+from them is `invalid_scope`), and it is never granted by default. A flagged
+client's ordinary `system/*.rs` token, the one it sends to the FHIR server, is
+therefore NOT an introspection credential: it answers `401 invalid_client`
+here. **Use an introspect-ONLY token for the introspection header**
+(`scope=introspect`, which needs no data scope). `system/*.rs introspect` also
+works, but it is then a FHIR access token as well (the PDP ignores the extra
+scope string), so it travels to the FHIR server and re-opens the exposure this
+scope exists to close. For Inferno's static `custom_authorization_header`,
+mint it with `scope=introspect`. The `private_key_jwt` caller form is
+unchanged. This replaces the accepted risk recorded by #5515.
+
+An access token or refresh token that is not active
 on the path tenant, for a client still active there, reads `{"active":false}`
 and nothing else. An active token returns `scope`, `client_id`, `exp`, `iat`,
 `sub`, `aud`, `iss` (the tenant OpenID issuer, equal to the id_token `iss`),
@@ -96,15 +114,6 @@ of it, or any `patient` / `fhirUser` value. The CORS preflight is not answered
 on this path, so a browser is never told it may send an `Authorization`
 header. The client id `lhds-patient-picker` is reserved at registration,
 because the picker's 60 s user tokens carry it.
-
-**Accepted risk (#5515 review).** ANY `client_credentials` access token of a
-flagged client is accepted as the caller credential, including one it also
-sends to the FHIR server. Whoever obtains that token (a FHIR-side log, a
-compromised proxy) can therefore introspect this tenant's tokens for up to the
-token's 300 s lifetime. Mitigations not taken yet: a dedicated introspection
-scope that the bearer must carry, or an introspection token whose `aud` is the
-introspection URL rather than the FHIR base. A follow-up issue tracks the
-choice.
 
 **Key rotation.** Introspection verifies against the AS's current ES384 key
 only. After a restart that picks up a rotated key, access tokens signed with
@@ -149,7 +158,15 @@ redirect with no code, and the CP logs `auth.fhir_user_error`. Dropping the
 scope silently would hand out a session that had lost `fhirUser` without
 saying so. An app client may carry a `launchUri`, its EHR-launch URL. It is
 validated like a `redirect_uri` (https or loopback http, no credentials, no
-fragment) and refused on a backend client. The token endpoint also sends
+fragment) and refused on a backend client. Since #5514 (merged, not deployed)
+both also hold the parsed host to a strict grammar (`src/auth/redirect-uri.ts`):
+a DNS name of LDH labels with at least one dot, `localhost`, or an IPv4 dotted
+quad, compared lowercased. The host as written must already be the host the URL parser produces, so `https://0x7f.1/`, `https://017.1.1.1/`, `https://1.2.3/` and an un-punycoded IDN are refused, as is port 0. `; , * $ _`, quotes, whitespace, a trailing dot and
+a bracketed IPv6 literal are `400` on create and PATCH (a CSP host-source
+cannot carry IPv6, so the picker could never redirect back to one). A stored
+value that fails the rule is refused at `authorize` (`400`, logged
+`auth.redirect_uri_unsafe`) and at `POST /api/health/auth/launch` (`409`),
+before anything is redirected or minted. The token endpoint also sends
 `Access-Control-Allow-Origin: *` on any response to a request with **no**
 `client_assertion`, so a browser app can read an `invalid_client` raised
 before its client resolves (an unknown `client_id`). Such a request can only
@@ -428,6 +445,38 @@ Registration record, owned by `src/auth/`: `client_id`, LHDS `tenant`, either
 `jwksUrl` (TLS, unauthenticated; strongly preferred by the spec) **or** a JWKS
 held by value (the spec requires servers to support both), allowed `system/`
 scopes, role ids, and status.
+
+**Key normalization (#5518; merged, not deployed).** The CP stores and
+verifies with ONLY key material it re-derived itself
+(`src/auth/jwk-normalize.ts`), whichever admin-API caller registered it. A
+key may carry only `kty kid alg use key_ops x5c x5t#S256` plus `crv x y` (EC)
+or `n e` (RSA); a boolean `ext` is accepted and dropped; anything else,
+including `x5t` (SHA-1) and an own `__proto__`, is `400`. EC is P-384 with
+48-byte `x`/`y`; RSA has `e` exactly 65537 (`e = 1` would let anyone forge
+the client's assertions; FIPS 186-5 already requires `e > 2^16`) and `n` of
+2048 to 8192 bits; `kid` is 1 to 200 printable ASCII characters with none of
+`< > " ' \`; `alg` is ES384 / RS384, `use` is `sig`, `key_ops` is exactly
+`["verify"]`. The
+key is round-tripped through `createPublicKey` (an off-curve point is refused)
+and only its export is kept. Each `x5c` entry (at most 5) must be exactly one
+certificate's DER, so a certificate with bytes appended is refused; only the
+certificate is kept, `x5c[0]` must hold the JWK's key, and `x5t#S256` is
+recomputed. A stored by-value JWKS is re-normalized on every verification: if
+any key fails, the whole stored set is treated as absent and
+`auth.client_jwks_invalid {clientId}` is logged (fail closed). A fetched
+`jwksUrl` document is read with a streaming 256 KiB BYTE cap (aborted past
+it) and at most 20 keys. On each verification it is first narrowed to the keys
+whose `kid` and `kty` fit the assertion header, and only those are normalized;
+a candidate that fails is dropped and `auth.client_jwks_keys_dropped
+{clientId, dropped}` is logged. On a fetched key only, three members that real
+IdPs publish are skipped (never read, stored or used, and no SHA-1 is
+computed): `x5t`, `issuer`, `cloud_instance_name`. All three were measured on
+every key of Entra's `common/discovery/v2.0/keys` on 2026-11-28. An inline key
+carrying any of them is still `400`.
+
+**Known gap (pre-existing).** `isPrivateHost` judges the `jwksUrl` host as
+written, at registration only. A public name that later resolves to a private
+or loopback address (DNS rebinding) is not caught at fetch time.
 
 Verification order on `POST token_endpoint` with
 `grant_type=client_credentials`,

@@ -4,6 +4,7 @@
 
 import { ceilingsFor } from './role-map.js';
 import {
+  INTROSPECT_SCOPE,
   compartmentAllowed,
   intersectWithCeilings,
   parseDataScope,
@@ -15,7 +16,7 @@ import {
 
 const CONTEXT_ALLOWED: Record<GrantType, readonly string[]> = {
   authorization_code: ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access'],
-  client_credentials: [],
+  client_credentials: [INTROSPECT_SCOPE],
 };
 
 export interface GrantInput {
@@ -26,6 +27,8 @@ export interface GrantInput {
   clientAllowed: readonly string[];
   patient?: string;
   fhirUserResolved: boolean;
+  /** The client is a backend client an admin flagged `introspect: true` (#5516). Absent => never granted. */
+  introspectAllowed?: boolean;
 }
 
 export interface GrantResult {
@@ -47,6 +50,7 @@ export function computeGrant(i: GrantInput): GrantResult {
     if (c === 'fhirUser') return i.fhirUserResolved;
     if (c === 'launch/patient') return !!i.patient;
     if (c === 'offline_access') return data.length > 0;
+    if (c === INTROSPECT_SCOPE) return i.introspectAllowed === true;
     return true;
   });
   return { data, scope: [...data.map(serializeScope), ...ctx] };

@@ -5,6 +5,7 @@
 import { decodeProtectedHeader, importJWK, jwtVerify, type JWK } from 'jose';
 import type { Collection } from '../store/types.js';
 import { StoreConflictError } from '../http/errors.js';
+import { normalizeJwk, normalizeJwks } from './jwk-normalize.js';
 import { OAuthError, sha256hex, type ClientDoc, type ReplayDoc } from './types.js';
 
 export const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
@@ -19,6 +20,33 @@ export interface FetchedJwks {
 }
 export type JwksFetcher = (url: string) => Promise<FetchedJwks>;
 
+/** A fetched JWKS document is at most this many BYTES (UTF-8 on the wire, not UTF-16 string units). */
+export const MAX_JWKS_BYTES = 256 * 1024;
+/** The same key-count ceiling as an inline JWKS (ClientCreateSchema keys.max(20)). */
+export const MAX_FETCHED_KEYS = 20;
+
+/**
+ * The body as UTF-8 text, read chunk by chunk and ABORTED as soon as it passes `cap` bytes, so an oversize document
+ * is never buffered beyond the cap plus one chunk.
+ */
+export async function readCapped(res: Response, cap: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > cap) {
+      await reader.cancel();
+      throw new Error('jwks document too large');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** Default fetcher: https only, no redirects, bounded time and size. */
 export function httpsJwksFetcher(fetchImpl: typeof fetch = fetch): JwksFetcher {
   return async (url) => {
@@ -26,10 +54,10 @@ export function httpsJwksFetcher(fetchImpl: typeof fetch = fetch): JwksFetcher {
     if (u.protocol !== 'https:') throw new Error('jwks url must be https');
     const res = await fetchImpl(u, { redirect: 'error', signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } });
     if (!res.ok) throw new Error(`jwks fetch returned ${res.status}`);
-    const text = await res.text();
-    if (text.length > 256 * 1024) throw new Error('jwks document too large');
+    const text = await readCapped(res, MAX_JWKS_BYTES);
     const body = JSON.parse(text) as { keys?: unknown };
     if (!Array.isArray(body.keys)) throw new Error('jwks document has no keys array');
+    if (body.keys.length > MAX_FETCHED_KEYS) throw new Error(`jwks document has more than ${MAX_FETCHED_KEYS} keys`);
     const cc = /max-age=(\d+)/i.exec(res.headers.get('cache-control') ?? '');
     return { keys: body.keys as JWK[], maxAgeS: cc ? Number(cc[1]) : 0 };
   };
@@ -52,9 +80,47 @@ export interface AssertionDeps {
   replay: Collection<ReplayDoc>;
   fetchJwks: JwksFetcher;
   now: () => Date;
+  /** Identifiers only (#5518): never key material. */
+  log?: (event: string, fields: Record<string, string | number>) => void;
+}
+
+/**
+ * The keys an assertion may be verified with: ONLY re-derived key material (#5518), never the stored or fetched
+ * members as given. A stored inline JWKS is re-normalized on every read: one key that fails (a doc written before
+ * the CP normalized, or edited out of band) makes the WHOLE stored set absent, logged as auth.client_jwks_invalid,
+ * so the client fails closed. A fetched JWKS is a third party's document that may carry keys for other uses: it is
+ * first narrowed to the keys whose `kid` and `kty` fit the assertion header (`pick`), and ONLY those are normalized
+ * (with FETCHED_IGNORED_MEMBERS skipped), so the rest of the document is never parsed, on a cache hit or not. A
+ * candidate that fails is dropped (logged as a count). More than MAX_FETCHED_KEYS keys yields none.
+ */
+export function verificationKeys(
+  client: ClientDoc,
+  fetched: readonly unknown[] | undefined,
+  log?: AssertionDeps['log'],
+  pick?: { kid: string; alg: string },
+): JWK[] {
+  if (fetched) {
+    if (fetched.length > MAX_FETCHED_KEYS) {
+      log?.('auth.client_jwks_too_many_keys', { clientId: client.clientId, keys: fetched.length });
+      return [];
+    }
+    const candidates = pick ? fetched.filter((k) => isObject(k) && k.kid === pick.kid && keyMatchesAlg(k as JWK, pick.alg)) : fetched;
+    const keys = candidates.map((k) => normalizeJwk(k, 'jwk', { fetched: true })).flatMap((r) => ('jwk' in r ? [r.jwk] : []));
+    if (keys.length < candidates.length) log?.('auth.client_jwks_keys_dropped', { clientId: client.clientId, dropped: candidates.length - keys.length });
+    return keys;
+  }
+  if (!client.jwks) return [];
+  const r = normalizeJwks(Array.isArray(client.jwks.keys) ? client.jwks.keys : []);
+  if ('error' in r || r.keys.length === 0) {
+    log?.('auth.client_jwks_invalid', { clientId: client.clientId });
+    return [];
+  }
+  return r.keys;
 }
 
 const refuse = (): OAuthError => new OAuthError('invalid_client', 'client authentication failed');
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 function keyMatchesAlg(k: JWK, alg: string): boolean {
   return alg === 'RS384' ? k.kty === 'RSA' : k.kty === 'EC' && k.crv === 'P-384';
@@ -81,8 +147,8 @@ export async function verifyClientAssertion(
     if (header.jku !== undefined && header.jku !== client.jwksUrl) throw refuse();
     // 3/4. key source, then exactly one key with this kid and a kty consistent with alg
     let keys: JWK[];
-    if (client.jwksUrl) keys = (await deps.fetchJwks(client.jwksUrl)).keys;
-    else if (client.jwks) keys = client.jwks.keys;
+    if (client.jwksUrl) keys = verificationKeys(client, (await deps.fetchJwks(client.jwksUrl)).keys, deps.log, { kid: header.kid, alg: header.alg });
+    else if (client.jwks) keys = verificationKeys(client, undefined, deps.log);
     else throw refuse();
     const matches = keys.filter((k) => k.kid === header.kid && keyMatchesAlg(k, header.alg as string));
     if (matches.length !== 1) throw refuse();

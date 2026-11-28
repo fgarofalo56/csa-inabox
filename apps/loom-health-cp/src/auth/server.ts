@@ -31,11 +31,13 @@ import { FHIR_ID, FHIR_USER_RESOURCE, fhirUserDocId } from './fhir-user.js';
 import { INACTIVE, verifyAccessToken } from './introspect.js';
 import { computeGrant } from './grant.js';
 import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
+import { normalizeJwks } from './jwk-normalize.js';
+import { REDIRECT_URI_RULE, isSafeRedirectUri } from './redirect-uri.js';
 import { FederationError, GraphConsentRequiredError, GraphObjectNotFoundError, GraphTokenError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { FHIR_DATE, PatientSearchUnavailableError, createFhirPatientSearch, type PatientSearch } from './patient-search.js';
 import { PICKER_HEADERS, formActionSource, pickerHeaders, renderPicker, renderPickerError, type PickerState } from './picker-page.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION, ceilingsFor } from './role-map.js';
-import { parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
+import { INTROSPECT_SCOPE, parseDataScope, parseRequest, intersectWithCeilings, serializeScope, type DataScope } from './scopes.js';
 import type { IdTokenSigner, Signer } from './signer.js';
 import { ACCESS_TOKEN_TTL_S, mintAccessToken, mintIdToken } from './tokens.js';
 import {
@@ -206,18 +208,8 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-const loopback = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/;
-const redirectUri = z
-  .string()
-  .max(2048)
-  .refine((v) => {
-    try {
-      const u = new URL(v);
-      return !u.username && !u.password && !u.hash && (u.protocol === 'https:' || loopback.test(v));
-    } catch {
-      return false;
-    }
-  }, 'must be https (or loopback http) without credentials or fragment');
+// The same rule for redirectUris, launchUri on create and PATCH, and stored values at authorize (#5514).
+const redirectUri = z.string().max(2048).refine(isSafeRedirectUri, REDIRECT_URI_RULE);
 
 const ClientCreateSchema = z.strictObject({
   // The picker's search tokens carry PICKER_CLIENT_ID; a registered client with that id would make them a
@@ -238,12 +230,11 @@ const ClientCreateSchema = z.strictObject({
       }
     }, 'must be an https URL without credentials')
     .optional(),
+  // Each key is read AS PARSED (z.unknown keeps the JSON.parse object, own "__proto__" member included; a zod
+  // object schema would silently drop it) and then normalized by normalizeJwks in the handler (#5518).
   jwks: z
     .strictObject({
-      keys: z
-        .array(z.looseObject({ kty: z.string(), kid: z.string() }))
-        .min(1)
-        .max(20),
+      keys: z.array(z.unknown()).min(1).max(20),
     })
     .optional(),
   allowedScopes: z.array(z.string()).min(1).max(100),
@@ -373,7 +364,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     if (!assertion || p.get('client_assertion_type') !== ASSERTION_TYPE) {
       throw new OAuthError('invalid_client', 'client authentication failed');
     }
-    await verifyClientAssertion(assertion, client, tokenUrl, { replay: stores.replay, fetchJwks: deps.fetchJwks, now });
+    await verifyClientAssertion(assertion, client, tokenUrl, { replay: stores.replay, fetchJwks: deps.fetchJwks, now, log: deps.log });
   }
 
   // ---- discovery / jwks ----
@@ -383,7 +374,7 @@ export function createAuthServer(deps: AuthServerDeps) {
    */
   const oidcIssuerFor = (tenant: string): string => `${issuer}/${tenant}`;
   const TOKEN_AUTH_METHODS = ['private_key_jwt', 'none'];
-  const SCOPES_SUPPORTED = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs'];
+  const SCOPES_SUPPORTED = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access', 'patient/*.rs', 'user/*.rs', 'system/*.rs', INTROSPECT_SCOPE];
 
   async function smartConfiguration(tenant: string): Promise<unknown> {
     const t = await activeTenant(tenant);
@@ -449,6 +440,12 @@ export function createAuthServer(deps: AuthServerDeps) {
     // Until client + redirect_uri are verified nothing may be redirected to.
     if (!client || client.status !== 'active' || client.clientType !== 'app' || client.tenant !== tenantSlug || !client.redirectUris.includes(ru)) {
       throw new OAuthError('invalid_request', 'unknown client or redirect_uri');
+    }
+    // A STORED value registered before #5514 may fail today's rule. Nothing is redirected to it (fail closed); the
+    // error says what is wrong and that the fix is re-registering the client, not something the app sent.
+    if (!isSafeRedirectUri(ru)) {
+      deps.log('auth.redirect_uri_unsafe', { tenant: tenantSlug, clientId: client.clientId });
+      throw new OAuthError('invalid_request', 'the registered redirect_uri no longer meets the redirect URI rules; the client must be re-registered');
     }
     const state = q.get('state') ?? undefined;
     const fail = (code: string, desc: string): void => {
@@ -1057,10 +1054,12 @@ export function createAuthServer(deps: AuthServerDeps) {
       await authenticateClient(client, p, tokenUrl);
       const g = await inStep('grant', () => computeGrant({
         grant: 'client_credentials',
-        request: parseRequest(p.get('scope') ?? '', { v1: false }),
+        request: parseRequest(p.get('scope') ?? '', { v1: false, introspect: true }),
         roleIds: client.roleIds,
         clientAllowed: client.allowedScopes,
         fhirUserResolved: false,
+        // `introspect` only when requested AND the admin flagged this backend client (#5516).
+        introspectAllowed: client.introspect === true,
       }));
       if (g.scope.length === 0) throw new OAuthError('invalid_scope', 'no requested scope could be granted');
       const audience = await inStep('fhir_base', () => deps.fhirBaseFor(tenantSlug));
@@ -1202,9 +1201,10 @@ export function createAuthServer(deps: AuthServerDeps) {
 
   /**
    * Caller authentication. Never anonymous. The caller must be an ACTIVE BACKEND client registered on THIS tenant
-   * that an admin granted `introspect` (a client flag, not a scope, so no token request can earn it; an app
-   * client, public or confidential, can never hold it). It proves that identity by EXACTLY ONE of:
-   *  - `Authorization: Bearer <access token>` the AS issued that client by client_credentials. SMART STU2.2
+   * that an admin granted `introspect` (a client flag set only through the admin API; an app client, public or
+   * confidential, can never hold it). It proves that identity by EXACTLY ONE of:
+   *  - `Authorization: Bearer <access token>` the AS issued that client by client_credentials WITH the `introspect`
+   *    scope, which the token endpoint grants only to a flagged backend client that asks for it (#5516). SMART STU2.2
    *    token-introspection.html: an authorized client "SHALL be permitted to authenticate ... by providing an
    *    appropriately-scoped SMART App or SMART Backend Service bearer token in the Authorization header". It is
    *    also the only form Inferno's static `custom_authorization_header` input can carry (a client assertion is
@@ -1225,6 +1225,9 @@ export function createAuthServer(deps: AuthServerDeps) {
       const bearer = BEARER.exec(authz ?? '')?.[1];
       const at = bearer ? await verifyAccessToken(deps.signer, issuer, bearer, now()) : undefined;
       if (!at || at.sub_type !== 'system' || at.sub !== at.client_id || at.tenant !== tenantSlug) throw refuse();
+      // "Appropriately scoped" (STU2.2): the Bearer must carry the dedicated `introspect` scope, so the client's
+      // ordinary FHIR token (which a resource server or a proxy sees) is not an introspection credential (#5516).
+      if (!at.scope.split(' ').includes(INTROSPECT_SCOPE)) throw refuse();
       authenticatedClientId = at.client_id;
     } else {
       const named = assertionIss(assertion);
@@ -1351,9 +1354,17 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (!!c.jwksUrl === !!c.jwks && (c.clientType === 'backend' || c.jwksUrl || c.jwks)) {
         throw badRequest('supply exactly one of jwksUrl or jwks (a backend client must have one)');
       }
-      for (const k of c.jwks?.keys ?? []) {
+      for (const raw of c.jwks?.keys ?? []) {
+        const k = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
         if (PRIVATE_JWK_MEMBERS.some((m) => m in k)) throw badRequest('jwks must contain public keys only');
         if (k.kty === 'RSA' && rsaModulusBits(k.n) < MIN_RSA_BITS) throw badRequest(`jwks: RSA keys must be at least ${MIN_RSA_BITS} bits`);
+      }
+      // Store ONLY re-derived key material (#5518): never the caller's members or bytes.
+      let jwks: ClientDoc['jwks'];
+      if (c.jwks) {
+        const n = normalizeJwks(c.jwks.keys);
+        if ('error' in n) throw badRequest(n.error);
+        jwks = { keys: n.keys };
       }
       if (c.jwksUrl && isPrivateHost(new URL(c.jwksUrl).hostname)) {
         throw badRequest('jwksUrl must point to a public host (loopback, private, link-local and internal names are refused)');
@@ -1380,7 +1391,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         updatedAt: now().toISOString(),
         updatedBy: who.id,
         ...(c.jwksUrl ? { jwksUrl: c.jwksUrl } : {}),
-        ...(c.jwks ? { jwks: c.jwks as ClientDoc['jwks'] } : {}),
+        ...(jwks ? { jwks } : {}),
         ...(c.launchUri ? { launchUri: c.launchUri } : {}),
         ...(c.introspect ? { introspect: true } : {}),
       };
@@ -1525,6 +1536,12 @@ export function createAuthServer(deps: AuthServerDeps) {
       if (!p.success) throw badRequest(`${p.error.issues[0]?.path.join('.') || 'body'}: ${p.error.issues[0]?.message ?? 'invalid'}`);
       const l = p.data;
       if ((await deps.tenants.get(l.tenant)) === undefined) throw notFound('tenant');
+      // The console sends the browser to the client's STORED launchUri with this handle (#5514): one registered
+      // before the host grammar existed is refused here, before a handle is minted for it.
+      const launchClient = await getClient(l.clientId);
+      if (launchClient?.launchUri !== undefined && !isSafeRedirectUri(launchClient.launchUri)) {
+        throw conflict("the client's registered launchUri no longer meets the redirect URI rules; PATCH a new launchUri");
+      }
       const handle = rand(32);
       const expiresAt = expiry(LAUNCH_TTL_S);
       await stores.grants.create({
