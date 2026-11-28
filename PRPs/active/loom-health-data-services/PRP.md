@@ -208,7 +208,8 @@ W2-2b holds the bicep slot (jumped apim-WA 2026-11-21, #5422). Its B1, the stamp
 - #5496 `c056bdf7f`: the bare tenant FHIR base serves the DEFAULT partition (#5489 closed; ADR-003 amended).
 - #5498 `73b2eeb68`: the engine image is digest-pinned and cosign-verified at deploy, and a new build re-applies every engine.
 - Receipts: deploy-health 45826171054; CRUD probe 45831245533 PASS (engine_image matches the pin; g 201, h 200, i 404).
-- Follow-ups: #5497, #5499. | 2026-11-26 |
+- Follow-ups: #5497, #5499.
+2026-11-28, W1b-3 DEPLOYED and VERIFIED on Commercial dev01: the Inferno SMART STU2.2 suite passes 80/80 (#5151). It needed the PDP fhirUser self-read (#5506, partition-aware), CP Graph as the AS app (#5509), the picker stamp-TLS pin (#5511/#5512), the picker CSP (#5513), introspection (#5515) and console backend/inline-JWKS clients (#5517/#5519). GCC-High is not exercised. | 2026-11-28 |
 | W02b-fhir-core-ops | todo | | sonnet | | 2026-11-14 |
 | W03a-dicom-core-a | in-progress | | sonnet | W3-1 #5313 + hardening #5335, W3-3 gateway #5336 merged, not deployed; W3-2 waits on the bicep slot; the gateway workload must set the pod label the #5335 NetworkPolicy admits (#5340); #5350 (`a5ce8e9df`) pins the NetworkPolicy port sets exactly (initContainer uid still unconfirmed, #5340) | 2026-11-17 |
 | W03b-dicom-core-b | todo | | sonnet | | 2026-11-14 |
