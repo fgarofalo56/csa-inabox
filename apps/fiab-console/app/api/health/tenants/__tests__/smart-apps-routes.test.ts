@@ -284,6 +284,19 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
     expect(sent).toMatchObject({ clientType: 'app', launchUri: 'https://app.example/launch' });
   });
 
+  it('a boolean WebCrypto ext (as on the Inferno kit keys) is a 201 and is NOT forwarded; a string ext is a 400', async () => {
+    const create = created();
+    const res = await registerApp(req({ ...app, jwks: { keys: [{ ...RSA_PUB, ext: true }, { ...EC_PUB, ext: true }] } }), ctx());
+    expect(res.status).toBe(201); // was 400 ("member \"ext\" is not allowed")
+    // Breaks if ext reaches the CP: the forwarded keys equal the input keys WITHOUT it.
+    expect(create.mock.calls[0]?.[0].jwks).toEqual({ keys: [RSA_PUB, EC_PUB] });
+    create.mockClear();
+    const bad = await registerApp(req({ ...app, jwks: { keys: [{ ...EC_PUB, ext: 'true' }] } }), ctx());
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toBe('jwks: key 1: ext must be true or false (it is accepted and not forwarded)');
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('both jwks and jwksUrl is a 400 (exactly one key source); neither is a 400 too', async () => {
     const create = created();
     const both = await registerApp(req({ ...app, jwks: { keys: [RSA_PUB] }, jwksUrl: 'https://k.example/jwks' }), ctx());

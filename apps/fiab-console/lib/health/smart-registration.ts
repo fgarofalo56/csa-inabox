@@ -29,9 +29,17 @@ export const JWKS_LIMITS = { maxBytes: 16 * 1024, maxKeys: 10, maxKidLength: 200
 /**
  * The ONLY members a registered JWK may carry (an allowlist, not a denylist: the CP stores unknown members, so a
  * denylist forwards anything it did not think of, e.g. `D`, `__proto__`, or a private-key DER smuggled in `x5c`).
- * Anything else is refused, and the forwarded object is rebuilt from these members alone.
+ * Anything else is refused (except a boolean `ext`, accepted and dropped: JWK_DROPPED_MEMBERS), and the forwarded
+ * object is rebuilt from these members alone.
  */
 export const JWK_COMMON_MEMBERS: readonly string[] = ['kty', 'kid', 'alg', 'use', 'key_ops', 'x5c', 'x5t#S256'];
+/**
+ * Members ACCEPTED on input but NEVER forwarded (they are not in JWK_MEMBERS_BY_KTY, which the rebuild iterates).
+ * `ext` is the WebCrypto "extractable" flag (IANA JWK Parameters registry, W3C WebCrypto); `exportKey('jwk')` emits
+ * it, e.g. on both keys of the Inferno SMART test kit's public JWKS. Only a boolean is accepted: any other type is
+ * refused, so it cannot carry bytes, and it is dropped either way. Nothing else is accepted this way.
+ */
+export const JWK_DROPPED_MEMBERS: readonly string[] = ['ext'];
 export const JWK_MEMBERS_BY_KTY: Readonly<Record<'RSA' | 'EC', readonly string[]>> = {
   RSA: [...JWK_COMMON_MEMBERS, 'n', 'e'],
   EC: [...JWK_COMMON_MEMBERS, 'crv', 'x', 'y'],
@@ -128,10 +136,11 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
     // SHA-1 is not accepted anywhere (CodeQL js/weak-cryptographic-algorithm). Refused with a true message rather
     // than the allowlist's "not allowed" so the caller knows what to do instead.
     if (own.includes('x5t')) return { error: `${at}: x5t (SHA-1) is not accepted; use x5t#S256 or omit it` };
-    const unknown = own.filter((m) => !allowed.includes(m));
+    const unknown = own.filter((m) => !allowed.includes(m) && !JWK_DROPPED_MEMBERS.includes(m));
     if (unknown.length) {
-      return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${k.kty} public key (allowed: ${allowed.join(', ')}); nothing was sent.` };
+      return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${k.kty} public key (allowed: ${[...allowed, ...JWK_DROPPED_MEMBERS].join(', ')}); nothing was sent.` };
     }
+    if (k.ext !== undefined && typeof k.ext !== 'boolean') return { error: `${at}: ext must be true or false (it is accepted and not forwarded)` };
     if (k.key_ops !== undefined) {
       // Exactly ["verify"]: one element, so a repeated or padded array is not a place to carry bytes either.
       if (!Array.isArray(k.key_ops) || k.key_ops.length !== 1 || !ALLOWED_KEY_OPS.includes(k.key_ops[0] as string)) {
@@ -168,7 +177,8 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
       }
       if (k.alg === 'RS384') return { error: `${at}: alg RS384 needs an RSA key` };
     }
-    // Rebuild from the allowlist, in a fixed order. Every value was type-checked above.
+    // Rebuild from the allowlist, in a fixed order. Every value was type-checked above. JWK_DROPPED_MEMBERS (`ext`)
+    // are not in `allowed`, so they are dropped here.
     const out: Record<string, unknown> = {};
     for (const m of allowed) {
       if (k[m] === undefined) continue;

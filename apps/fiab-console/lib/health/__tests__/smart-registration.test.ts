@@ -274,6 +274,64 @@ describe('key parameters cannot carry arbitrary bytes (review of 68d573903)', ()
   });
 });
 
+describe('the WebCrypto ext member: accepted only as a boolean, never forwarded', () => {
+  // Validate then normalize, exactly as the BFF route does.
+  const both = (keys: Array<Record<string, unknown>>) => {
+    const v = validatePublicJwks({ keys });
+    return 'error' in v ? v : normalizePublicJwks(v.jwks);
+  };
+  // The exact member set of the Inferno SMART kit's public keys (measured), with key values generated here. Members are
+  // listed in the kit's (sorted) order; the literal arrays below are the shape, asserted so a typo cannot weaken it.
+  const inferno = (kp: ReturnType<typeof rsa> | ReturnType<typeof ec>, kid: string, alg: string) => {
+    const j = kp.publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+    const all: Record<string, unknown> = { ...j, alg, ext: true, key_ops: ['verify'], kid, use: 'sig' };
+    return Object.fromEntries(Object.keys(all).sort().map((m) => [m, all[m]]));
+  };
+  const INF_EC = inferno(EC_KP, 'inferno-ec', 'ES384');
+  const INF_RSA = inferno(RSA_KP, 'inferno-rsa', 'RS384');
+
+  it('ext: true on an EC P-384 and an RSA key is accepted and DROPPED from both the validated and the forwarded keys', () => {
+    // Breaks (400 "member \"ext\" is not allowed") on the original allowlist, the defect this fixes.
+    const v = validatePublicJwks({ keys: [{ ...EC_PUB, ext: true }, { ...RSA_PUB, ext: true }] });
+    expect(v).toEqual({ jwks: { keys: [EC_PUB, RSA_PUB] } }); // breaks if ext is forwarded by the rebuild
+    const r = both([{ ...EC_PUB, ext: true }, { ...RSA_PUB, ext: false }]);
+    if (!('jwks' in r)) throw new Error(`expected accepted, got ${r.error}`);
+    // Paired positive: the keys themselves are still forwarded.
+    expect(r.jwks.keys.map((k) => k.kid)).toEqual(['ec-1', 'rsa-1']);
+    // Through the route the validator has already dropped ext, so a normalize that copied it would be invisible above
+    // (measured: that sandbox mutation stayed green). Fed ext DIRECTLY, normalize must still not forward it; breaks if
+    // x5c-verify.ts copies ext into its output.
+    const direct = normalizePublicJwks({ keys: [{ ...EC_PUB, ext: true }, { ...RSA_PUB, ext: false }] });
+    if (!('jwks' in direct)) throw new Error(`expected accepted, got ${direct.error}`);
+    expect(direct.jwks.keys.map((k) => ['ext' in k, k.kid])).toEqual([[false, 'ec-1'], [false, 'rsa-1']]);
+  });
+
+  it('a non-boolean ext is refused with a true message: "true" (string), {} and 1', () => {
+    for (const ext of ['true', {}, 1, null]) {
+      // Breaks if ext is accepted with any type (it would be dropped, but a non-boolean is not WebCrypto's member).
+      expect([ext, validatePublicJwks({ keys: [{ ...EC_PUB, ext }] })]).toEqual([ext, { error: 'jwks: key 1: ext must be true or false (it is accepted and not forwarded)' }]);
+    }
+  });
+
+  it('accepts a JWKS in the exact shape of the Inferno kit keys, and forwards it without ext', () => {
+    expect(Object.keys(INF_EC)).toEqual(['alg', 'crv', 'ext', 'key_ops', 'kid', 'kty', 'use', 'x', 'y']);
+    expect(Object.keys(INF_RSA)).toEqual(['alg', 'e', 'ext', 'key_ops', 'kid', 'kty', 'n', 'use']);
+    const r = both([INF_EC, INF_RSA]);
+    // Was a 400 ("member \"ext\" is not allowed") before this change.
+    if (!('jwks' in r)) throw new Error(`expected accepted, got ${r.error}`);
+    const { ext: _e1, ...ecNoExt } = INF_EC;
+    const { ext: _e2, ...rsaNoExt } = INF_RSA;
+    // Every other member survives; only ext is dropped.
+    expect(r.jwks.keys).toEqual([ecNoExt, rsaNoExt]);
+  });
+
+  it('nothing else is newly accepted: ext-like and prefixed members are still refused', () => {
+    for (const m of ['EXT', 'ext_', 'extractable', 'x-ext']) {
+      expect([m, validatePublicJwks({ keys: [{ ...EC_PUB, [m]: true }] })]).toEqual([m, { error: expect.stringContaining(`member ${JSON.stringify(m)} is not allowed`) }]);
+    }
+  });
+});
+
 describe('jwksSummary', () => {
   it('is the count and kids only, never a modulus or coordinate', () => {
     const s = jwksSummary({ keys: [RSA_PUB, EC_PUB] });
