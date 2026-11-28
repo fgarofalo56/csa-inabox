@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
+import { selfSignedCertB64 } from '@/lib/health/__tests__/self-signed-cert';
 
 const grants = vi.hoisted(() => ({ rows: [] as any[] }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -238,6 +239,21 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
     // Same for a backend client: one private EC member on an otherwise public key.
     expect((await registerApp(req({ ...backend, jwks: { keys: [{ ...EC_PUB, d: 'AAAA' }] } }), ctx())).status).toBe(400);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('a certificate with a PKCS#8 PRIVATE key appended in x5c is a 400 and NOTHING reaches the CP (review of 68d573903)', async () => {
+    const create = created();
+    const kp = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = { ...(kp.publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'smuggle', alg: 'ES384' };
+    const cert = Buffer.from(selfSignedCertB64(kp.publicKey, kp.privateKey), 'base64');
+    const smuggled = Buffer.concat([cert, kp.privateKey.export({ type: 'pkcs8', format: 'der' }) as Buffer]).toString('base64');
+    // On 68d573903 this was a 201 whose forwarded jwks carried the whole private key (X509Certificate ignores the tail).
+    const res = await registerApp(req({ ...backend, jwks: { keys: [{ ...pub, x5c: [smuggled] }] } }), ctx());
+    expect(res.status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+    // Paired permit: the bare certificate registers, and what is forwarded is the certificate's own DER.
+    expect((await registerApp(req({ ...backend, jwks: { keys: [{ ...pub, x5c: [cert.toString('base64')] }] } }), ctx())).status).toBe(201);
+    expect((create.mock.calls[0]?.[0].jwks?.keys[0] as any)?.x5c).toEqual([cert.toString('base64')]);
   });
 
   it('public RSA + EC keys are forwarded EXACTLY, with no jwksUrl', async () => {

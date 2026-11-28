@@ -8,8 +8,8 @@
  * assertion names the value that breaks it.
  */
 import { describe, expect, it } from 'vitest';
-import { createHash, generateKeyPairSync } from 'node:crypto';
-import { verifyX5c } from '../x5c-verify';
+import { X509Certificate, createHash, generateKeyPairSync } from 'node:crypto';
+import { normalizePublicJwks } from '../x5c-verify';
 import { selfSignedCertB64 } from './self-signed-cert';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -70,10 +70,12 @@ describe('validatePublicJwks', () => {
   it('accepts public RSA 2048 and EC P-384 keys and returns a NEW object with the same content', () => {
     const input = { keys: [RSA_PUB, EC_PUB] };
     const r = validatePublicJwks(input);
-    // Same content (breaks if an allowlisted member is dropped) but never the input object or its keys
+    // Same content (breaks if an allowlisted member is dropped) but never the input object
     // (breaks if the validator returns the parsed input, which is what forwarded unknown members to the CP).
     expect(r).toEqual({ jwks: input });
     expect('jwks' in r && r.jwks).not.toBe(input);
+    // DISCLOSED, NOT COUNTED: a mutant that rebuilds each key as a plain `{...k}` spread is EQUIVALENT here, because
+    // the allowlist has already refused any member a spread would carry. This line only pins object identity.
     expect('jwks' in r && r.jwks.keys[0]).not.toBe(RSA_PUB);
     expect(validatePublicJwks(JSON.stringify(input))).toEqual({ jwks: input });
   });
@@ -165,11 +167,11 @@ describe('validatePublicJwks', () => {
   });
 });
 
-describe('verifyX5c (BFF only, node:crypto)', () => {
+describe('normalizePublicJwks (BFF only, node:crypto)', () => {
   const checked = (key: Record<string, unknown>) => {
     const v = validatePublicJwks({ keys: [key] });
     if ('error' in v) return v;
-    return verifyX5c(v.jwks);
+    return normalizePublicJwks(v.jwks);
   };
   it('accepts an x5c whose first certificate carries the JWK key, with matching thumbprints', () => {
     const cert = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
@@ -177,10 +179,10 @@ describe('verifyX5c (BFF only, node:crypto)', () => {
     const x5t = createHash('sha1').update(der).digest('base64url');
     const s256 = createHash('sha256').update(der).digest('base64url');
     // Positive control: the builder makes a certificate node:crypto parses, so the refusals below are not vacuous.
-    expect(checked({ ...EC_PUB, x5c: [cert], x5t, 'x5t#S256': s256 })).toEqual({ ok: true });
-    expect(checked({ ...RSA_PUB, x5c: [selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toEqual({ ok: true });
+    expect(checked({ ...EC_PUB, x5c: [cert], x5t, 'x5t#S256': s256 })).toMatchObject({ jwks: {} });
+    expect(checked({ ...RSA_PUB, x5c: [selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toMatchObject({ jwks: {} });
     // A chain: the second entry must parse but carries another key.
-    expect(checked({ ...EC_PUB, x5c: [cert, selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toEqual({ ok: true });
+    expect(checked({ ...EC_PUB, x5c: [cert, selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toMatchObject({ jwks: {} });
   });
   it('refuses a PKCS#8 private-key DER prefix smuggled in x5c (the review probe)', () => {
     // Structurally valid base64, so the browser-safe validator passes it; only the certificate parse refuses it.
@@ -197,6 +199,68 @@ describe('verifyX5c (BFF only, node:crypto)', () => {
     const cert = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
     expect(checked({ ...EC_PUB, x5c: [cert], x5t: 'A'.repeat(27) })).toEqual({ error: expect.stringMatching(/x5t does not match/) });
     expect(checked({ ...EC_PUB, x5t: 'A'.repeat(27) })).toEqual({ error: expect.stringMatching(/need the x5c/) });
+  });
+
+  it('refuses a valid certificate with a PKCS#8 PRIVATE key appended (review of 68d573903), as first or chain entry', () => {
+    const cert = Buffer.from(selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey), 'base64');
+    const pkcs8 = EC_KP.privateKey.export({ type: 'pkcs8', format: 'der' }) as Buffer;
+    const smuggled = Buffer.concat([cert, pkcs8]);
+    // The fixture is what it claims: node:crypto parses it as the certificate and ignores the tail.
+    expect(Buffer.from(new X509Certificate(smuggled).raw).equals(cert)).toBe(true);
+    const x5t = createHash('sha1').update(smuggled).digest('base64url');
+    // Breaks if der.equals(cert.raw) is dropped: the entry parses, its key matches, and the tail would be forwarded.
+    expect(checked({ ...EC_PUB, x5c: [smuggled.toString('base64')] })).toEqual({ error: expect.stringMatching(/entry 1 carries bytes beyond the certificate/) });
+    expect(checked({ ...EC_PUB, x5c: [smuggled.toString('base64')], x5t })).toEqual({ error: expect.stringMatching(/beyond the certificate/) });
+    expect(checked({ ...EC_PUB, x5c: [cert.toString('base64'), smuggled.toString('base64')] })).toEqual({ error: expect.stringMatching(/entry 2 carries bytes/) });
+  });
+
+  it('forwards only re-derived data: key params from createPublicKey, x5c from cert.raw, thumbprints recomputed', () => {
+    const certB64 = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
+    const der = Buffer.from(certB64, 'base64');
+    const r = checked({ ...EC_PUB, use: 'sig', key_ops: ['verify'], x5c: [certB64], 'x5t#S256': createHash('sha256').update(der).digest('base64url') });
+    const derived = EC_KP.publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+    // Exactly these members and values; breaks if any caller member or value other than the allowlisted metadata
+    // survives, or if x5c / the thumbprint are copied rather than recomputed.
+    expect(r).toEqual({ jwks: { keys: [{
+      kty: 'EC', kid: 'ec-1', alg: 'ES384', use: 'sig', key_ops: ['verify'], crv: 'P-384', x: derived.x, y: derived.y,
+      x5c: [der.toString('base64')], 'x5t#S256': createHash('sha256').update(der).digest('base64url'),
+    }] } });
+  });
+
+  it('refuses an EC point that is not on P-384 (createPublicKey re-derivation)', () => {
+    // Right lengths (48 bytes each), so ONLY the curve check can refuse it.
+    const offCurve = { ...EC_PUB, x: Buffer.alloc(48, 1).toString('base64url'), y: Buffer.alloc(48, 2).toString('base64url') };
+    expect(validatePublicJwks({ keys: [offCurve] })).toMatchObject({ jwks: {} });
+    expect(checked(offCurve)).toEqual({ error: expect.stringMatching(/not a valid EC public key/) }); // breaks if createPublicKey is skipped
+  });
+});
+
+describe('key parameters cannot carry arbitrary bytes (review of 68d573903)', () => {
+  it('EC x and y must be exactly 48 bytes', () => {
+    const priv = EC_KP.privateKey.export({ format: 'jwk' }) as Record<string, unknown>;
+    expect(Buffer.from(String(priv.d), 'base64url').length).toBe(48); // the scalar d IS 48 bytes: only the curve check catches x=d
+    const pkcs8 = (EC_KP.privateKey.export({ type: 'pkcs8', format: 'der' }) as Buffer).toString('base64url');
+    // Breaks if the 48-byte rule is dropped: a PKCS#8 DER in y is structurally base64url.
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, y: pkcs8 }] })).toEqual({ error: expect.stringMatching(/must each be 48 bytes/) });
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, x: Buffer.alloc(47, 1).toString('base64url') }] })).toEqual({ error: expect.stringMatching(/48 bytes/) });
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, x: Buffer.alloc(49, 1).toString('base64url') }] })).toEqual({ error: expect.stringMatching(/48 bytes/) });
+  });
+  it('RSA e is at most 4 bytes and n at most 8192 bits (MIN_RSA_BITS kept)', () => {
+    expect(validatePublicJwks({ keys: [{ ...RSA_PUB, e: Buffer.alloc(5, 1).toString('base64url') }] })).toEqual({ error: expect.stringMatching(/e is at most 4 bytes/) });
+    expect(validatePublicJwks({ keys: [{ ...RSA_PUB, e: Buffer.alloc(4, 1).toString('base64url') }] })).toMatchObject({ jwks: {} }); // 4 is fine
+    const big = Buffer.alloc(1025, 0xff).toString('base64url'); // 8200 bits
+    expect(rsaModulusBits(big)).toBe(8200);
+    expect(validatePublicJwks({ keys: [{ ...RSA_PUB, n: big }] })).toEqual({ error: expect.stringMatching(/at most 8192 bits/) });
+  });
+  it('key_ops must be exactly ["verify"]', () => {
+    // Breaks if the length-1 rule is relaxed to "every element is verify".
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, key_ops: ['verify', 'verify'] }] })).toEqual({ error: expect.stringMatching(/key_ops/) });
+  });
+  it('a member whose name STARTS with an allowed name is still refused', () => {
+    // Breaks under a prefix allowlist (`allowed.some((a) => m.startsWith(a))`): nd ~ n, xd ~ x, x5c_priv ~ x5c.
+    expect(validatePublicJwks({ keys: [{ ...RSA_PUB, nd: 'AQAB' }] })).toEqual({ error: expect.stringContaining('member "nd" is not allowed') });
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, xd: 'AQAB' }] })).toEqual({ error: expect.stringContaining('member "xd" is not allowed') });
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, x5c_priv: 'AQAB' }] })).toEqual({ error: expect.stringContaining('member "x5c_priv" is not allowed') });
   });
 });
 

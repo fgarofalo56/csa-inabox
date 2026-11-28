@@ -17,7 +17,7 @@ import type { SessionPayload } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { readBinding } from '@/lib/install/provisioners/health-tenant';
 import { BACKEND_ROLE_CHOICES, SYSTEM_SCOPE_CHOICES, jwksSummary, validatePublicJwks, type PublicJwks } from '@/lib/health/smart-registration';
-import { verifyX5c } from '@/lib/health/x5c-verify';
+import { normalizePublicJwks } from '@/lib/health/x5c-verify';
 import { CpError, CpNotConfiguredError, type CpSmartClient } from './cp-client';
 
 /** Same shape as the CP's client id. */
@@ -93,7 +93,7 @@ export interface RegisterInput {
   /** public = PKCE only, no client authentication; asymmetric = private_key_jwt against `jwksUrl` XOR `jwks`. */
   kind: 'public' | 'asymmetric';
   jwksUrl?: string;
-  /** Inline PUBLIC keys: passed validatePublicJwks, forwarded exactly as received. */
+  /** Inline PUBLIC keys: the BFF's normalized rebuild (validatePublicJwks, then normalizePublicJwks), never the caller's bytes. */
   jwks?: PublicJwks;
   /** Backend only: the roles whose client_credentials ceilings bound the grant. Empty for an app client. */
   roleIds: string[];
@@ -157,10 +157,10 @@ export function parseRegister(body: unknown): { app: RegisterInput } | { error: 
   if (present(b.jwks)) {
     const v = validatePublicJwks(b.jwks);
     if ('error' in v) return v;
-    const x = verifyX5c(v.jwks);
-    if ('error' in x) return x;
-    // v.jwks is the allowlist rebuild, never the request's object.
-    return { app: { ...common, kind: 'asymmetric', jwks: v.jwks } };
+    const n = normalizePublicJwks(v.jwks);
+    if ('error' in n) return n;
+    // Only data the BFF re-derived (createPublicKey export, cert.raw, recomputed thumbprints) is forwarded.
+    return { app: { ...common, kind: 'asymmetric', jwks: n.jwks } };
   }
   const jwksUrl = httpsUrl(b.jwksUrl);
   if (!jwksUrl) return { error: 'jwksUrl: an asymmetric client needs an https JWKS URL' };

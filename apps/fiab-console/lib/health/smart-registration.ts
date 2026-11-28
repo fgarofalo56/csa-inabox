@@ -36,6 +36,9 @@ export const JWK_MEMBERS_BY_KTY: Readonly<Record<'RSA' | 'EC', readonly string[]
   RSA: [...JWK_COMMON_MEMBERS, 'n', 'e'],
   EC: [...JWK_COMMON_MEMBERS, 'crv', 'x', 'y'],
 };
+/** Size limits on the key parameters themselves, so no parameter can carry arbitrary bytes. */
+export const JWK_PARAM_LIMITS = { p384CoordinateBytes: 48, maxRsaExponentBytes: 4, maxRsaBits: 8192 } as const;
+
 /** A verification key's only meaningful operation. `sign` (or anything else) means the key is not a public key's. */
 export const ALLOWED_KEY_OPS: readonly string[] = ['verify'];
 
@@ -89,8 +92,9 @@ const shown = (m: string) => JSON.stringify(m.slice(0, 40));
  * NEW object rebuilt from the allowlisted members only (never the input object); otherwise an error that names the
  * key and the rule. A private member anywhere is refused outright: a private key is never accepted or forwarded.
  *
- * Structural only for `x5c`: the BFF additionally parses every certificate and matches it to the key
- * (lib/health/x5c-verify.ts, node:crypto), which the browser cannot.
+ * This is the structural check the browser can run. The BFF then NORMALIZES the result with node:crypto
+ * (lib/health/x5c-verify.ts normalizePublicJwks): the key is re-derived with createPublicKey, each x5c entry must be
+ * exactly a certificate's DER, and only re-derived data is forwarded to the CP.
  */
 export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { error: string } {
   let text: string;
@@ -126,7 +130,8 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
       return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${k.kty} public key (allowed: ${allowed.join(', ')}); nothing was sent.` };
     }
     if (k.key_ops !== undefined) {
-      if (!Array.isArray(k.key_ops) || k.key_ops.length === 0 || k.key_ops.some((op) => typeof op !== 'string' || !ALLOWED_KEY_OPS.includes(op))) {
+      // Exactly ["verify"]: one element, so a repeated or padded array is not a place to carry bytes either.
+      if (!Array.isArray(k.key_ops) || k.key_ops.length !== 1 || !ALLOWED_KEY_OPS.includes(k.key_ops[0] as string)) {
         return { error: `${at}: key_ops may only be ["verify"] (a key with "sign" is a private key's)` };
       }
     }
@@ -145,12 +150,20 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
     if (k.alg !== undefined && !ALLOWED_JWK_ALGS.includes(k.alg as string)) return { error: `${at}: alg must be ${ALLOWED_JWK_ALGS.join(' or ')}` };
     if (k.use !== undefined && k.use !== 'sig') return { error: `${at}: use must be sig` };
     if (k.kty === 'RSA') {
-      if (typeof k.e !== 'string' || !b64urlBytes(k.e)) return { error: `${at}: RSA key needs e` };
-      if (rsaModulusBits(k.n) < MIN_RSA_BITS) return { error: `${at}: RSA keys must be at least ${MIN_RSA_BITS} bits` };
+      const e = typeof k.e === 'string' ? b64urlBytes(k.e) : null;
+      if (!e || e.length === 0) return { error: `${at}: RSA key needs e` };
+      if (e.length > JWK_PARAM_LIMITS.maxRsaExponentBytes) return { error: `${at}: RSA e is at most ${JWK_PARAM_LIMITS.maxRsaExponentBytes} bytes` };
+      const bits = rsaModulusBits(k.n);
+      if (bits < MIN_RSA_BITS) return { error: `${at}: RSA keys must be at least ${MIN_RSA_BITS} bits` };
+      if (bits > JWK_PARAM_LIMITS.maxRsaBits) return { error: `${at}: RSA keys are at most ${JWK_PARAM_LIMITS.maxRsaBits} bits` };
       if (k.alg === 'ES384') return { error: `${at}: alg ES384 needs an EC key` };
     } else {
       if (k.crv !== 'P-384') return { error: `${at}: EC key must use crv P-384 (ES384)` };
       if (typeof k.x !== 'string' || typeof k.y !== 'string' || !b64urlBytes(k.x) || !b64urlBytes(k.y)) return { error: `${at}: EC key needs x and y` };
+      // A P-384 coordinate is exactly 48 bytes (RFC 7518 6.2.1.2), so neither can carry a DER blob or anything else.
+      if (b64urlBytes(k.x)?.length !== JWK_PARAM_LIMITS.p384CoordinateBytes || b64urlBytes(k.y)?.length !== JWK_PARAM_LIMITS.p384CoordinateBytes) {
+        return { error: `${at}: EC P-384 x and y must each be ${JWK_PARAM_LIMITS.p384CoordinateBytes} bytes` };
+      }
       if (k.alg === 'RS384') return { error: `${at}: alg RS384 needs an RSA key` };
     }
     // Rebuild from the allowlist, in a fixed order. Every value was type-checked above.
