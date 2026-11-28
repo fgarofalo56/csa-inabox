@@ -1218,20 +1218,27 @@ export function createAuthServer(deps: AuthServerDeps) {
     const hasAuthz = !!authz;
     const assertion = p.get('client_assertion');
     if (hasAuthz === !!assertion) throw refuse();
-    let clientId = '';
+    // Each branch authenticates COMPLETELY before it yields an identity; the shared checks below only ever see an
+    // already-authenticated client id (CodeQL js/user-controlled-bypass, #5515).
+    let authenticatedClientId = '';
     if (hasAuthz) {
       const bearer = BEARER.exec(authz ?? '')?.[1];
       const at = bearer ? await verifyAccessToken(deps.signer, issuer, bearer, now()) : undefined;
       if (!at || at.sub_type !== 'system' || at.sub !== at.client_id || at.tenant !== tenantSlug) throw refuse();
-      clientId = at.client_id;
+      authenticatedClientId = at.client_id;
     } else {
-      clientId = assertionIss(assertion);
+      const named = assertionIss(assertion);
+      const candidate = named ? await getClient(named) : undefined;
+      // Only a client with registered keys can prove an assertion (authenticateClient passes a public app client
+      // through untested, since PKCE is its proof at the token endpoint); anything else is refused here.
+      if (!candidate || !(candidate.jwks || candidate.jwksUrl)) throw refuse();
+      await authenticateClient(candidate, p, `${issuer}/${tenantSlug}/introspect`);
+      authenticatedClientId = candidate.clientId;
     }
-    const client = clientId ? await getClient(clientId) : undefined;
+    const client = await getClient(authenticatedClientId);
     if (!client || client.status !== 'active' || client.clientType !== 'backend' || client.tenant !== tenantSlug || client.introspect !== true) {
       throw refuse();
     }
-    if (!hasAuthz) await authenticateClient(client, p, `${issuer}/${tenantSlug}/introspect`);
     return client.clientId;
   }
 
