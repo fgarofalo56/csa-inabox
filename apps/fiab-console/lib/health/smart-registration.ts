@@ -31,7 +31,7 @@ export const JWKS_LIMITS = { maxBytes: 16 * 1024, maxKeys: 10, maxKidLength: 200
  * denylist forwards anything it did not think of, e.g. `D`, `__proto__`, or a private-key DER smuggled in `x5c`).
  * Anything else is refused, and the forwarded object is rebuilt from these members alone.
  */
-export const JWK_COMMON_MEMBERS: readonly string[] = ['kty', 'kid', 'alg', 'use', 'key_ops', 'x5c', 'x5t', 'x5t#S256'];
+export const JWK_COMMON_MEMBERS: readonly string[] = ['kty', 'kid', 'alg', 'use', 'key_ops', 'x5c', 'x5t#S256'];
 export const JWK_MEMBERS_BY_KTY: Readonly<Record<'RSA' | 'EC', readonly string[]>> = {
   RSA: [...JWK_COMMON_MEMBERS, 'n', 'e'],
   EC: [...JWK_COMMON_MEMBERS, 'crv', 'x', 'y'],
@@ -125,6 +125,9 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
     if (priv.length) return { error: `${at} contains private key material (${priv.join(', ')}). Paste the PUBLIC keys only; nothing was sent.` };
     if (k.kty !== 'RSA' && k.kty !== 'EC') return { error: `${at}: kty must be RSA or EC` };
     const allowed = JWK_MEMBERS_BY_KTY[k.kty];
+    // SHA-1 is not accepted anywhere (CodeQL js/weak-cryptographic-algorithm). Refused with a true message rather
+    // than the allowlist's "not allowed" so the caller knows what to do instead.
+    if (own.includes('x5t')) return { error: `${at}: x5t (SHA-1) is not accepted; use x5t#S256 or omit it` };
     const unknown = own.filter((m) => !allowed.includes(m));
     if (unknown.length) {
       return { error: `${at}: member ${unknown.slice(0, 3).map(shown).join(', ')} is not allowed on an ${k.kty} public key (allowed: ${allowed.join(', ')}); nothing was sent.` };
@@ -140,7 +143,6 @@ export function validatePublicJwks(input: unknown): { jwks: PublicJwks } | { err
         return { error: `${at}: x5c must be 1 to ${JWKS_LIMITS.maxX5c} base64 DER certificates` };
       }
     }
-    if (k.x5t !== undefined && (typeof k.x5t !== 'string' || !/^[A-Za-z0-9_-]{27}$/.test(k.x5t))) return { error: `${at}: x5t must be a base64url SHA-1 thumbprint` };
     if (k['x5t#S256'] !== undefined && (typeof k['x5t#S256'] !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k['x5t#S256'] as string))) {
       return { error: `${at}: x5t#S256 must be a base64url SHA-256 thumbprint` };
     }

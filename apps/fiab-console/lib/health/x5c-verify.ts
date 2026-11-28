@@ -15,8 +15,9 @@
  *    (`der.equals(cert.raw)`), and what is forwarded is `cert.raw` re-encoded.
  *    The first certificate's key must equal the JWK's key (RFC 7517 4.7); the
  *    rest are the chain and must parse cleanly.
- *  - x5t / x5t#S256: if supplied they must match x5c[0], and the forwarded
- *    value is recomputed from `cert.raw`.
+ *  - x5t#S256: if supplied it must match x5c[0], and the forwarded value is
+ *    recomputed from `cert.raw` with SHA-256. The SHA-1 `x5t` is refused by the
+ *    structural validator and never emitted.
  */
 import { X509Certificate, createHash, createPublicKey, type JsonWebKey } from 'node:crypto';
 import type { PublicJwks } from './smart-registration';
@@ -47,7 +48,7 @@ export function normalizePublicJwks(jwks: PublicJwks): { jwks: PublicJwks } | { 
     for (const p of KEY_PARAMS[kty]) out[p] = key[p];
 
     if (k.x5c === undefined) {
-      if (k.x5t !== undefined || k['x5t#S256'] !== undefined) return { error: `${at}: x5t / x5t#S256 need the x5c they are a thumbprint of` };
+      if (k['x5t#S256'] !== undefined) return { error: `${at}: x5t#S256 needs the x5c it is a thumbprint of` };
     } else {
       const raws: Buffer[] = [];
       for (let j = 0; j < (k.x5c as string[]).length; j++) {
@@ -69,12 +70,9 @@ export function normalizePublicJwks(jwks: PublicJwks): { jwks: PublicJwks } | { 
         raws.push(raw);
       }
       const first = raws[0] as Buffer;
-      const x5t = b64url(createHash('sha1').update(first).digest());
       const s256 = b64url(createHash('sha256').update(first).digest());
-      if (k.x5t !== undefined && k.x5t !== x5t) return { error: `${at}: x5t does not match x5c[0]` };
       if (k['x5t#S256'] !== undefined && k['x5t#S256'] !== s256) return { error: `${at}: x5t#S256 does not match x5c[0]` };
       out.x5c = raws.map((r) => r.toString('base64'));
-      if (k.x5t !== undefined) out.x5t = x5t;
       if (k['x5t#S256'] !== undefined) out['x5t#S256'] = s256;
     }
     keys.push(out);

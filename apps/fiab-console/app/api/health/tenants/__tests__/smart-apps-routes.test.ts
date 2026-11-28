@@ -256,6 +256,21 @@ describe('POST /apps (inline JWKS and backend clients, #5151)', () => {
     expect((create.mock.calls[0]?.[0].jwks?.keys[0] as any)?.x5c).toEqual([cert.toString('base64')]);
   });
 
+  it('a caller-supplied x5t (SHA-1) is a 400 with a true message and NOTHING reaches the CP', async () => {
+    const create = created();
+    const kp = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const pub = { ...(kp.publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'thumb', alg: 'ES384' };
+    const cert = selfSignedCertB64(kp.publicKey, kp.privateKey);
+    const res = await registerApp(req({ ...backend, jwks: { keys: [{ ...pub, x5c: [cert], x5t: 'A'.repeat(27) }] } }), ctx());
+    // Breaks if x5t is accepted again (201 with an x5t forwarded).
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('jwks: key 1: x5t (SHA-1) is not accepted; use x5t#S256 or omit it');
+    expect(create).not.toHaveBeenCalled();
+    // Paired permit: without x5t the same key and certificate register, and no x5t is emitted.
+    expect((await registerApp(req({ ...backend, jwks: { keys: [{ ...pub, x5c: [cert] }] } }), ctx())).status).toBe(201);
+    expect('x5t' in (create.mock.calls[0]?.[0].jwks?.keys[0] ?? {})).toBe(false);
+  });
+
   it('public RSA + EC keys are forwarded EXACTLY, with no jwksUrl', async () => {
     const create = created();
     const jwks = { keys: [RSA_PUB, EC_PUB] };

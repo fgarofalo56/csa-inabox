@@ -173,13 +173,12 @@ describe('normalizePublicJwks (BFF only, node:crypto)', () => {
     if ('error' in v) return v;
     return normalizePublicJwks(v.jwks);
   };
-  it('accepts an x5c whose first certificate carries the JWK key, with matching thumbprints', () => {
+  it('accepts an x5c whose first certificate carries the JWK key, with a matching x5t#S256', () => {
     const cert = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
     const der = Buffer.from(cert, 'base64');
-    const x5t = createHash('sha1').update(der).digest('base64url');
     const s256 = createHash('sha256').update(der).digest('base64url');
     // Positive control: the builder makes a certificate node:crypto parses, so the refusals below are not vacuous.
-    expect(checked({ ...EC_PUB, x5c: [cert], x5t, 'x5t#S256': s256 })).toMatchObject({ jwks: {} });
+    expect(checked({ ...EC_PUB, x5c: [cert], 'x5t#S256': s256 })).toMatchObject({ jwks: {} });
     expect(checked({ ...RSA_PUB, x5c: [selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toMatchObject({ jwks: {} });
     // A chain: the second entry must parse but carries another key.
     expect(checked({ ...EC_PUB, x5c: [cert, selfSignedCertB64(RSA_KP.publicKey, RSA_KP.privateKey)] })).toMatchObject({ jwks: {} });
@@ -197,8 +196,18 @@ describe('normalizePublicJwks (BFF only, node:crypto)', () => {
     expect(checked({ ...EC_PUB, x5c: [selfSignedCertB64(other.publicKey, other.privateKey)] })).toEqual({ error: expect.stringMatching(/not this JWK's key/) });
     expect(checked({ ...RSA_PUB, x5c: [selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey)] })).toEqual({ error: expect.stringMatching(/not this JWK's key/) });
     const cert = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
-    expect(checked({ ...EC_PUB, x5c: [cert], x5t: 'A'.repeat(27) })).toEqual({ error: expect.stringMatching(/x5t does not match/) });
-    expect(checked({ ...EC_PUB, x5t: 'A'.repeat(27) })).toEqual({ error: expect.stringMatching(/need the x5c/) });
+    // Breaks if the x5t#S256 comparison is dropped (a 43-char value of the right shape but the wrong hash).
+    expect(checked({ ...EC_PUB, x5c: [cert], 'x5t#S256': 'A'.repeat(43) })).toEqual({ error: expect.stringMatching(/x5t#S256 does not match/) });
+    expect(checked({ ...EC_PUB, 'x5t#S256': 'A'.repeat(43) })).toEqual({ error: expect.stringMatching(/needs the x5c/) });
+  });
+
+  it('refuses the SHA-1 x5t with a true message, even alongside a valid x5c (CodeQL js/weak-cryptographic-algorithm)', () => {
+    const cert = selfSignedCertB64(EC_KP.publicKey, EC_KP.privateKey);
+    // Any 27-char base64url value: x5t is refused for being SHA-1, not for its value, so no SHA-1 is computed here.
+    // Breaks if x5t is accepted again (allowlisted and passed through, or recomputed).
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, x5c: [cert], x5t: 'A'.repeat(27) }] }))
+      .toEqual({ error: 'jwks: key 1: x5t (SHA-1) is not accepted; use x5t#S256 or omit it' });
+    expect(validatePublicJwks({ keys: [{ ...EC_PUB, x5t: 'A'.repeat(27) }] })).toEqual({ error: expect.stringContaining('x5t (SHA-1) is not accepted') });
   });
 
   it('refuses a valid certificate with a PKCS#8 PRIVATE key appended (review of 68d573903), as first or chain entry', () => {
@@ -207,10 +216,11 @@ describe('normalizePublicJwks (BFF only, node:crypto)', () => {
     const smuggled = Buffer.concat([cert, pkcs8]);
     // The fixture is what it claims: node:crypto parses it as the certificate and ignores the tail.
     expect(Buffer.from(new X509Certificate(smuggled).raw).equals(cert)).toBe(true);
-    const x5t = createHash('sha1').update(smuggled).digest('base64url');
+    const s256 = createHash('sha256').update(smuggled).digest('base64url');
     // Breaks if der.equals(cert.raw) is dropped: the entry parses, its key matches, and the tail would be forwarded.
     expect(checked({ ...EC_PUB, x5c: [smuggled.toString('base64')] })).toEqual({ error: expect.stringMatching(/entry 1 carries bytes beyond the certificate/) });
-    expect(checked({ ...EC_PUB, x5c: [smuggled.toString('base64')], x5t })).toEqual({ error: expect.stringMatching(/beyond the certificate/) });
+    // A thumbprint over the padded bytes does not make the padding acceptable.
+    expect(checked({ ...EC_PUB, x5c: [smuggled.toString('base64')], 'x5t#S256': s256 })).toEqual({ error: expect.stringMatching(/beyond the certificate/) });
     expect(checked({ ...EC_PUB, x5c: [cert.toString('base64'), smuggled.toString('base64')] })).toEqual({ error: expect.stringMatching(/entry 2 carries bytes/) });
   });
 
